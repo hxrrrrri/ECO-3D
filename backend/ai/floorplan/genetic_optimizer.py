@@ -22,6 +22,7 @@ HOUSE_ROOM_TEMPLATES = {
         {"type": "bedroom", "label": "Master Bedroom", "min_area": 20, "max_area": 35},
         {"type": "bedroom", "label": "Bedroom 02", "min_area": 15, "max_area": 25},
         {"type": "bathroom", "label": "Bathroom", "min_area": 6, "max_area": 12},
+        {"type": "garage", "label": "Automated Garage", "min_area": 18, "max_area": 25},
         {"type": "utility", "label": "Utility Room", "min_area": 5, "max_area": 10},
     ],
     "Modern Duplex": [
@@ -30,6 +31,7 @@ HOUSE_ROOM_TEMPLATES = {
         {"type": "bedroom", "label": "Bedroom (F2)", "min_area": 20, "max_area": 30},
         {"type": "bedroom", "label": "Bedroom 2 (F2)", "min_area": 15, "max_area": 25},
         {"type": "bathroom", "label": "Bathroom x2", "min_area": 10, "max_area": 18},
+        {"type": "garage", "label": "Garage", "min_area": 15, "max_area": 20},
     ],
     "Compact Studio": [
         {"type": "living", "label": "Open Plan", "min_area": 30, "max_area": 50},
@@ -214,6 +216,37 @@ class GeneticFloorPlanOptimizer:
 
         return windows
 
+    def _generate_architectural_details(self, rooms: List[Dict], offset_x: float, offset_y: float) -> tuple[List[Dict], List[Dict]]:
+        """Extract explicit 3D CAD architectural walls and connect adjacent rooms with doors."""
+        walls = []
+        doors = []
+        thickness = 0.2  # 20cm thick walls
+        
+        for i, room in enumerate(rooms):
+            rx, ry, rw, rh = room["x"], room["y"], room["width"], room["height"]
+            
+            # Generate explicit walls with 3D coordinates
+            walls.extend([
+                {"room_id": room["id"], "type": "exterior", "orientation": "horizontal", "x": rx + rw/2, "y": ry, "length": rw, "thickness": thickness},
+                {"room_id": room["id"], "type": "exterior", "orientation": "horizontal", "x": rx + rw/2, "y": ry + rh, "length": rw, "thickness": thickness},
+                {"room_id": room["id"], "type": "exterior", "orientation": "vertical", "x": rx, "y": ry + rh/2, "length": rh, "thickness": thickness},
+                {"room_id": room["id"], "type": "exterior", "orientation": "vertical", "x": rx + rw, "y": ry + rh/2, "length": rh, "thickness": thickness},
+            ])
+            
+            # Basic door connections
+            if i > 0:
+                doors.append({
+                    "room_to": room["id"], "type": "interior", 
+                    "x": rx + rw/2, "y": ry, "width": 0.9, "orientation": "horizontal", "symbol": "arc_swing"
+                })
+            else:
+                doors.append({
+                    "room_to": room["id"], "type": "entry", 
+                    "x": rx + rw/2, "y": ry + rh, "width": 1.2, "orientation": "horizontal", "symbol": "double_door"
+                })
+
+        return walls, doors
+
     def optimize(
         self,
         plot_id: str,
@@ -263,6 +296,8 @@ class GeneticFloorPlanOptimizer:
             log(f"Footprint shifted {np.random.uniform(1, 3):.1f}m {['North','East','South','West'][np.random.randint(4)]} to avoid root system.")
 
         windows = self._generate_windows(best, env_data)
+        walls, doors = self._generate_architectural_details(best.rooms, best.offset_x, best.offset_y)
+        
         total_area = sum(r["width"] * r["height"] for r in best.rooms)
         tree_disturbance = 0.0 if not trees else max(0, 5 - len(trees)) * 2
 
@@ -273,12 +308,15 @@ class GeneticFloorPlanOptimizer:
 
         log(f"Living area windows rotated {int(best.orientation_deg % 30)}° for max solar gain.")
         log("Cross-ventilation path established via West-East axis.")
+        log("Generated explicit architectural CAD walls and standard connectivity doors.")
 
         return {
             "plot_id": plot_id,
             "house_type": house_type,
             "footprint_area_m2": round(total_area, 1),
             "rooms": best.rooms,
+            "walls": walls,
+            "doors": doors,
             "windows": windows,
             "orientation_deg": round(best.orientation_deg, 1),
             "solar_gain_score": round(solar_gain, 2),

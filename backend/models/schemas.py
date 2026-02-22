@@ -48,6 +48,7 @@ class AnalysisResponse(BaseModel):
     flood_probability: float
     buildability_score: float
     status: str = "EXCELLENT"
+    score_references: Optional[List[str]] = None
 
 
 class GenerateFloorPlanRequest(BaseModel):
@@ -59,6 +60,7 @@ class GenerateFloorPlanRequest(BaseModel):
 
 
 class Room(BaseModel):
+    id: Optional[str] = None
     type: str
     width: float
     height: float
@@ -68,9 +70,38 @@ class Room(BaseModel):
     orientation: str
 
 
+class Wall(BaseModel):
+    room_id: str
+    type: str
+    orientation: str
+    x: float
+    y: float
+    length: float
+    thickness: float
+
+
+class Door(BaseModel):
+    room_to: str
+    type: str
+    x: float
+    y: float
+    width: float
+    orientation: str
+    symbol: str
+
+
+class Window(BaseModel):
+    wall: str
+    position: float
+    width: float
+
+
 class FloorPlanResponse(BaseModel):
     plot_id: str
     layout: List[Room]
+    walls: Optional[List[Wall]] = None
+    doors: Optional[List[Door]] = None
+    windows: Optional[List[Window]] = None
     total_area: float
     fitness_score: float
     generation_count: int

@@ -164,7 +164,7 @@ async def fetch_soil_type(lat: float, lon: float) -> tuple[str, float, bool]:
                         9: ("Silty Clay Loam", 0.35, True),
                         10: ("Sandy Clay", 0.42, False),  # too plastic
                         11: ("Silty Clay", 0.46, False),  # expansive
-                        12: ("Clay", 0.55, False),         # unsuitable
+                        12: ("Muddy/Peat", 0.65, False),  # unsuitable for housing foundation
                     }
                     soil_name, clay, buildable = classes.get(texture_val, ("Loam", 0.25, True))
                     return soil_name, clay, buildable
@@ -239,7 +239,7 @@ def compute_buildability(
     score -= flood_risk * 38          # flood risk: heaviest penalty
     score -= min(slope, 30) * 0.9     # slope: each degree costs
     if not soil_buildable:
-        score -= 22                   # clay/mud: major penalty
+        score -= 55                   # clay/mud/peat: massive penalty to force failure/restricted status
     score += ndvi * 8                 # vegetation = stable soil
     score -= min(wind_ms, 15) * 0.6  # high wind = structural cost
     score += min(sun_hours, 14) * 1.2 # passive solar bonus

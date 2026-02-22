@@ -36,6 +36,7 @@ export interface AnalysisResponse {
   };
   flood_probability: number;
   buildability_score: number;
+  score_references?: string[];
   status: string;
 }
 
@@ -57,6 +58,29 @@ export interface FloorPlanResponse {
     y: number;
     floor: number;
     orientation: string;
+  }>;
+  walls?: Array<{
+    room_id: string;
+    type: string;
+    orientation: string;
+    x: number;
+    y: number;
+    length: number;
+    thickness: number;
+  }>;
+  doors?: Array<{
+    room_to: string;
+    type: string;
+    x: number;
+    y: number;
+    width: number;
+    orientation: string;
+    symbol: string;
+  }>;
+  windows?: Array<{
+    wall: string;
+    position: number;
+    width: number;
   }>;
   total_area: number;
   fitness_score: number;

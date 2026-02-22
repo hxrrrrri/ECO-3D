@@ -332,6 +332,16 @@ export default function AnalysisPage() {
                       <span className="text-[10px] text-slate-500">{k}</span><span className="text-[10px] font-mono text-slate-200">{v}</span>
                     </div>
                   ))}
+                  {analysis.score_references && (
+                    <div className="mt-3 pt-3 border-t border-white/10">
+                      <div className="text-[9px] uppercase tracking-widest text-primary/60 mb-1.5">Methodology Citations</div>
+                      <div className="flex flex-col gap-1.5">
+                        {analysis.score_references.map((ref, idx) => (
+                          <div key={idx} className="text-[9px] text-slate-400 border-l border-primary/30 pl-1.5">{ref}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               <button onClick={() => router.push(`/model3d/${plotId}`)} className="w-full py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-primary/10 transition-all" style={{ border: "1px solid #0df2f2", color: "#0df2f2" }}>

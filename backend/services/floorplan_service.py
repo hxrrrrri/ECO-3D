@@ -110,6 +110,7 @@ async def generate_floor_plan(request: GenerateFloorPlanRequest, db: AsyncSessio
     cross_dir = _wind_cross_orientation(wind_dir)
 
     layout = None; fitness = 0.0; generations = 0
+    walls_data = None; doors_data = None; windows_data = None
 
     # Try GeneticFloorPlanOptimizer (correct class name & method)
     try:
@@ -137,16 +138,20 @@ async def generate_floor_plan(request: GenerateFloorPlanRequest, db: AsyncSessio
             trees=[],  # tree coords not available here — optimizer uses abstract positions
         )
         raw_rooms  = result_dict.get("rooms", [])
+        walls_data = result_dict.get("walls", [])
+        doors_data = result_dict.get("doors", [])
+        windows_data = result_dict.get("windows", [])
+
         # genetic_optimizer returns Room objects already
         if raw_rooms and hasattr(raw_rooms[0], "type"):
             layout = raw_rooms
         else:
             # dict format — convert
-            layout = [Room(type=r["type"], width=r.get("w",r.get("width",4)),
+            layout = [Room(id=r.get("id", f"r{i}"), type=r["type"], width=r.get("w",r.get("width",4)),
                            height=r.get("h",r.get("height",4)),
                            x=r.get("x",0), y=r.get("y",0),
                            floor=r.get("floor",1), orientation=r.get("orientation","South"))
-                      for r in raw_rooms]
+                      for i, r in enumerate(raw_rooms)]
         fitness    = result_dict.get("optimization_score", 75) / 100
         generations = 80
         logger.info(f"GeneticFloorPlanOptimizer OK: {len(layout)} rooms, fitness={fitness:.2f}")
@@ -197,7 +202,9 @@ async def generate_floor_plan(request: GenerateFloorPlanRequest, db: AsyncSessio
         logger.warning(f"DB persist failed ({e})")
 
     return FloorPlanResponse(
-        plot_id=request.plot_id, layout=layout, total_area=total_area,
+        plot_id=request.plot_id, layout=layout, 
+        walls=walls_data, doors=doors_data, windows=windows_data,
+        total_area=total_area,
         fitness_score=fitness, generation_count=int(generations),
         sunlight_score=sunlight, ventilation_score=ventilation,
         tree_preserved_count=trees_saved,

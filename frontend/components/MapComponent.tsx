@@ -33,6 +33,13 @@ export default function MapComponent({
       link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
       document.head.appendChild(link);
     }
+    if (!document.getElementById("geosearch-css")) {
+      const gLink = document.createElement("link");
+      gLink.id = "geosearch-css";
+      gLink.rel = "stylesheet";
+      gLink.href = "https://unpkg.com/leaflet-geosearch@3.11.1/dist/geosearch.css";
+      document.head.appendChild(gLink);
+    }
 
     // Small delay to let CSS load before map init
     const timer = setTimeout(() => {
@@ -66,6 +73,51 @@ export default function MapComponent({
         ).addTo(map);
 
         L.control.zoom({ position: "bottomright" }).addTo(map);
+
+        // Add GeoSearch
+        import("leaflet-geosearch").then(({ GeoSearchControl, OpenStreetMapProvider }) => {
+          // @ts-ignore
+          const provider = new OpenStreetMapProvider();
+          // @ts-ignore
+          const searchControl = new GeoSearchControl({
+            provider: provider,
+            style: 'bar',
+            showMarker: false,
+            showPopup: false,
+            autoClose: true,
+            retainZoomLevel: false,
+            animateZoom: true,
+            keepResult: true,
+            searchLabel: 'Search anything (e.g., Central Park, NY)...',
+          });
+          map.addControl(searchControl);
+
+          map.on("geosearch/showlocation", (result: any) => {
+            const lat = result.location.y;
+            const lng = result.location.x;
+
+            const icon = L.divIcon({
+              className: "",
+              iconSize: [32, 32],
+              iconAnchor: [16, 16],
+              html: `
+                <div style="position:relative;width:32px;height:32px;">
+                  <div style="position:absolute;inset:0;border-radius:50%;background:rgba(13,242,242,0.35);animation:eco-ping 1.2s cubic-bezier(0,0,0.2,1) infinite;"></div>
+                  <div style="position:absolute;inset:6px;border-radius:50%;background:#0df2f2;box-shadow:0 0 14px 4px rgba(13,242,242,0.7);"></div>
+                </div>
+                <style>@keyframes eco-ping{0%{transform:scale(1);opacity:.75}100%{transform:scale(2.2);opacity:0}}</style>
+              `,
+            });
+
+            if (markerRef.current) {
+              markerRef.current.setLatLng([lat, lng]);
+            } else {
+              markerRef.current = L.marker([lat, lng], { icon }).addTo(map);
+            }
+
+            onLocationSelect(lat, lng);
+          });
+        });
 
         map.on("click", (e: any) => {
           const { lat, lng } = e.latlng;

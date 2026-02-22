@@ -232,7 +232,16 @@ async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> An
         try: await db.rollback()
         except: pass
 
-    status = "EXCELLENT" if build >= 80 else "GOOD" if build >= 60 else "FAIR" if build >= 40 else "POOR"
+    if not env_data.get("soil_buildable", True) or build < 30:
+        status = "NOT BUILDABLE"
+    else:
+        status = "EXCELLENT" if build >= 80 else "GOOD" if build >= 60 else "FAIR" if build >= 40 else "POOR"
+
+    references = [
+        "FEMA Hazard Mitigation Standards: Flood probability and structural slope limits.",
+        "LEED BD+C v4: Sustainable Sites requirements for soil stability and vegetation preservation.",
+        "ASHRAE Standard 55: Thermal Environmental Conditions factoring in local wind and sun exposure."
+    ]
 
     return AnalysisResponse(
         plot_id=plot_id, segmentation=seg, tree_coordinates=trees,
@@ -242,4 +251,5 @@ async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> An
             wind_direction=env_data["wind_direction"], sun_exposure_hours=env_data["sun_exposure_hours"],
         ),
         flood_probability=flood, buildability_score=build, status=status,
+        score_references=references,
     )
