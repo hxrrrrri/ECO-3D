@@ -6,7 +6,7 @@
 
 ---
 
-## 🚀 Key Features Overview
+## Key Features Overview
 
 The platform is designed to be a completely self-contained ecosystem, encompassing the following core pillars:
 
