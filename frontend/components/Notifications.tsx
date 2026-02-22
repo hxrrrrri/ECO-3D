@@ -26,9 +26,8 @@ export function Notifications() {
 
     const fetchNotifications = async () => {
         try {
-            // In a real app, you would pass the user token to backend to get their notifications.
-            // Here we just fetch global notifications for demo by calling the API without id.
-            const res = await fetch("http://localhost:8000/notifications");
+            const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+            const res = await fetch(`${apiBase}/notifications`);
             if (res.ok) {
                 const data = await res.json();
                 setNotifications(data);
@@ -41,7 +40,8 @@ export function Notifications() {
     const markAsRead = async (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
         try {
-            await fetch(`http://localhost:8000/notifications/${id}/read`, {
+            const _apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+            await fetch(`${_apiBase}/notifications/${id}/read`, {
                 method: "POST"
             });
             setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));

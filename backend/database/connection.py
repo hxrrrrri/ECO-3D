@@ -39,7 +39,7 @@ class Base(DeclarativeBase):
 
 async def init_db() -> None:
     """Create all tables on startup."""
-    from database.models import PlotRecord, AnalysisRecord, FloorPlanRecord  # noqa: F401
+    from database.models import PlotRecord, AnalysisRecord, FloorPlanRecord, User, Notification  # noqa: F401
     try:
         async with engine.begin() as conn:
             # Enable PostGIS only for PostgreSQL

@@ -411,14 +411,14 @@ export default function FloorPlanPage() {
             <span className="material-symbols-outlined text-primary text-xl">deployed_code</span>
             <span className="font-bold text-white text-sm">ECO-3D</span>
           </Link>
-          <div className="flex items-center gap-6">
-            <Link href={`/analysis/${plotId}`} className="text-[11px] text-slate-400 hover:text-white transition-colors flex items-center gap-1">
-              <span className="material-symbols-outlined text-sm">arrow_back</span> Analysis
-            </Link>
+          <nav className="flex items-center gap-4">
+            <Link href={`/analysis/${plotId}`} className="text-[11px] text-slate-400 hover:text-white transition-colors">Blueprint Generator</Link>
+            <Link href={`/environment/${plotId}`} className="text-[11px] text-slate-400 hover:text-white transition-colors">Environmental Data</Link>
             <Link href={`/model3d/${plotId}`} className="text-[11px] text-primary hover:brightness-110 transition-all flex items-center gap-1">
               <span className="material-symbols-outlined text-sm">view_in_ar</span> 3D Model
             </Link>
-          </div>
+            <Link href={`/report/${plotId}`} className="text-[11px] text-slate-400 hover:text-white transition-colors">Export</Link>
+          </nav>
           <span className="text-[11px] font-mono text-slate-500">{plotId}</span>
         </header>
 

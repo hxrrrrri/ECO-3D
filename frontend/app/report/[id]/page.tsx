@@ -1,269 +1,230 @@
 "use client";
-
-import { useMemo } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
+import { analyzePlot, generateFloorPlan } from "@/lib/api";
+import dynamic from "next/dynamic";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-function fmt(n: number, dec = 1) { return n.toFixed(dec); }
+const MapComponent = dynamic(() => import("@/components/MapComponent"), {
+  ssr: false,
+  loading: () => (
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#080e0e" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        <div style={{ width: 32, height: 32, border: "2px solid #0df2f2", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.9s linear infinite" }}/>
+        <p style={{ fontSize: 10, color: "rgba(13,242,242,0.5)", textTransform: "uppercase", letterSpacing: "0.2em", fontFamily: "monospace" }}>Loading Map...</p>
+      </div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  ),
+});
 
-const GRADE = (v: number) =>
-    v >= 90 ? ["S", "#0df2f2"] : v >= 75 ? ["A", "#2ecc71"] : v >= 60 ? ["B", "#f1c40f"] : ["C", "#e67e22"];
+const ANALYSIS_STEPS = [
+  "Querying OpenTopoData SRTM30m elevation...",
+  "Fetching SoilGrids 2.0 soil properties...",
+  "Verifying legal land status (OSM + WDPA + FEMA)...",
+  "Classifying seismic hazard zone (USGS ASCE 7-22)...",
+  "Computing NDVI vegetation proxy (Open-Meteo ET₀)...",
+  "Retrieving Open-Meteo wind & rainfall normals...",
+  "Running GloFAS flood discharge model...",
+  "Computing AHP-WLC buildability score (Saaty 1980)...",
+  "Generating wind/solar optimised floor plan (IRC 2021)...",
+];
 
-// ─── Section wrapper ──────────────────────────────────────────────────────────
-function Section({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) {
-    return (
-        <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid rgba(13,242,242,0.08)", background: "rgba(10,26,26,0.55)" }}>
-            <div className="flex items-center gap-3 px-6 py-4 border-b border-white/5">
-                <span className="material-symbols-outlined text-primary text-lg">{icon}</span>
-                <h2 className="text-[11px] font-bold uppercase tracking-widest text-primary">{title}</h2>
-            </div>
-            <div className="p-6">{children}</div>
-        </div>
-    );
-}
+export default function MapPage() {
+  const router = useRouter();
+  const {
+    selectedLat, selectedLon, currentPlotId, analysis, isAnalyzing, error,
+    setSelectedLocation, setAnalysis, setFloorPlan, setAnalyzing, setError,
+  } = useEco3DStore();
 
-// ─── Metric row ───────────────────────────────────────────────────────────────
-function MetricRow({ label, value, sub }: { label: string; value: string; sub?: string }) {
-    return (
-        <div className="flex items-center justify-between py-3 border-b border-white/5">
-            <span className="text-sm text-slate-400">{label}</span>
-            <div className="text-right">
-                <div className="text-sm font-mono font-bold text-white">{value}</div>
-                {sub && <div className="text-[10px] text-slate-600 mt-0.5">{sub}</div>}
-            </div>
-        </div>
-    );
-}
+  const [stage,         setStage]         = useState<"idle"|"locating"|"analyzing"|"done">("idle");
+  const [stepIdx,       setStepIdx]       = useState(0);
+  const [plotBoundary,  setPlotBoundary]  = useState<number[][]|null>(null);
+  const [buildability,  setBuildability]  = useState<{ok:boolean; reason:string}|null>(null);
+  const [legalData,     setLegalData]     = useState<any>(null);
+  const [drawnPolygon,  setDrawnPolygon]  = useState<number[][]|null>(null);
+  const analysisTriggered = useRef(false);
 
-// ─── Score pill ───────────────────────────────────────────────────────────────
-function ScorePill({ score, label }: { score: number; label: string }) {
-    const [grade, color] = GRADE(score);
-    return (
-        <div className="flex flex-col items-center gap-2 p-5 rounded-xl" style={{ border: `1px solid ${color}22`, background: `${color}08` }}>
-            <div className="text-4xl font-black" style={{ color }}>{score}<span className="text-xl text-slate-500 font-bold">%</span></div>
-            <div className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest" style={{ background: `${color}22`, color }}>{grade}</div>
-            <div className="text-[10px] uppercase tracking-widest text-slate-500 text-center font-bold">{label}</div>
-        </div>
-    );
-}
+  const handleLocationSelect = useCallback(async (lat: number, lon: number, polygon?: number[][]) => {
+    analysisTriggered.current = false;
+    setSelectedLocation(lat, lon);
+    setDrawnPolygon(polygon || null);
+    setStage("locating");
+    setBuildability(null);
 
-// ─── Progress bar ─────────────────────────────────────────────────────────────
-function Bar({ label, value, color }: { label: string; value: number; color: string }) {
-    return (
-        <div className="mb-4">
-            <div className="flex justify-between text-[11px] mb-1.5">
-                <span className="text-slate-400">{label}</span>
-                <span className="font-mono text-white">{value}%</span>
-            </div>
-            <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${value}%`, background: color, boxShadow: `0 0 8px ${color}55` }} />
-            </div>
-        </div>
-    );
-}
+    try {
+      const resp = await fetch(`http://localhost:8000/plot-boundary?lat=${lat}&lon=${lon}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setPlotBoundary(polygon || data.boundary);
+        if (data.legal_verification) setLegalData(data.legal_verification);
+        if (!data.is_buildable) {
+          setBuildability({ ok: false, reason: data.reason });
+          setStage("idle");
+          return;
+        }
+        setBuildability({ ok: true, reason: data.reason });
+      }
+    } catch { /* silent */ }
+    setStage("idle");
+  }, [setSelectedLocation]);
 
-// ─── Status badge ─────────────────────────────────────────────────────────────
-function Badge({ label, ok }: { label: string; ok: boolean }) {
-    return (
-        <div className="flex items-center gap-2 py-2">
-            <span className="material-symbols-outlined text-sm" style={{ color: ok ? "#2ecc71" : "#e67e22" }}>
-                {ok ? "check_circle" : "warning"}
+  useEffect(() => {
+    if (!selectedLat || !selectedLon || !currentPlotId) return;
+    if (analysisTriggered.current) return;
+    if (buildability && !buildability.ok) return;
+    analysisTriggered.current = true;
+    runAnalysis();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLat, selectedLon, currentPlotId, buildability]);
+
+  const runAnalysis = async () => {
+    if (!selectedLat || !selectedLon || !currentPlotId) return;
+    setAnalyzing(true);
+    setStage("analyzing");
+    setError(null);
+    setStepIdx(0);
+
+    // Animate through steps
+    let cancelled = false;
+    for (let i = 0; i < ANALYSIS_STEPS.length - 1; i++) {
+      if (cancelled) break;
+      setStepIdx(i);
+      await new Promise(r => setTimeout(r, 700));
+    }
+
+    try {
+      const result = await analyzePlot({
+        plot_id: currentPlotId,
+        lat: selectedLat,
+        lon: selectedLon,
+        polygon: drawnPolygon || plotBoundary || undefined,
+      });
+      setAnalysis(result);
+      setStepIdx(ANALYSIS_STEPS.length - 1);
+
+      const fp = await generateFloorPlan({
+        plot_id: currentPlotId,
+        plot_area_sqm: 220,
+        num_floors: 2,
+        preserve_trees: true,
+      });
+      setFloorPlan(fp);
+      setStage("done");
+      await new Promise(r => setTimeout(r, 400));
+      router.push(`/analysis/${currentPlotId}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Analysis failed — is backend running on port 8000?";
+      setError(msg);
+      setStage("idle");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  return (
+    <>
+      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+      <style>{`body{background:#080e0e;margin:0}*{box-sizing:border-box}.gl{background:rgba(8,20,20,0.85);backdrop-filter:blur(12px);border:1px solid rgba(13,242,242,0.1)}`}</style>
+
+      <div style={{ height:"100vh", width:"100vw", display:"flex", flexDirection:"column", overflow:"hidden", background:"#080e0e", fontFamily:"'Space Grotesk',sans-serif" }}>
+
+        <header style={{ flexShrink:0, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 20px", zIndex:50, borderBottom:"1px solid rgba(255,255,255,0.05)", background:"rgba(8,14,14,0.98)" }}>
+          <Link href="/" style={{ display:"flex", alignItems:"center", gap:8, textDecoration:"none" }}>
+            <span style={{ fontSize:22, color:"#0df2f2" }}>◈</span>
+            <span style={{ color:"#fff", fontWeight:700 }}>ECO-3D <span style={{ color:"rgba(13,242,242,0.5)", fontWeight:300 }}>Studio</span></span>
+          </Link>
+          <div style={{ fontSize:11, color:"#475569", textAlign:"center" }}>
+            Click on the map · or draw a boundary · or search for any place on Earth
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:6, padding:"4px 10px", background:"rgba(13,242,242,0.06)", border:"1px solid rgba(13,242,242,0.15)", borderRadius:20 }}>
+            <span style={{ width:6, height:6, borderRadius:"50%", background:"#22c55e", animation:"pulse 2s infinite", display:"inline-block" }}/>
+            <span style={{ fontSize:10, color:"#22c55e", fontFamily:"monospace", textTransform:"uppercase", letterSpacing:"0.12em" }}>
+              {isAnalyzing ? "Analyzing…" : "Ready"}
             </span>
-            <span className="text-sm text-slate-300">{label}</span>
-        </div>
-    );
-}
+          </div>
+        </header>
 
-// ─── Main page ────────────────────────────────────────────────────────────────
-export default function ReportPage() {
-    const params = useParams();
-    const plotId = params.id as string;
-    const { floorPlan, analysis, selectedLat, selectedLon } = useEco3DStore();
+        <div style={{ flex:1, position:"relative", overflow:"hidden", minHeight:0 }}>
+          <MapComponent onLocationSelect={handleLocationSelect} plotBoundary={plotBoundary} selectedLat={selectedLat} selectedLon={selectedLon}/>
 
-    const ecoScore = floorPlan ? Math.round(floorPlan.fitness_score * 100) : null;
-    const solarScore = floorPlan ? Math.round(floorPlan.sunlight_score * 100) : null;
-    const ventScore = floorPlan ? Math.round(floorPlan.ventilation_score * 100) : null;
-
-    const totalArea = floorPlan?.total_area ?? 0;
-    const rooms = floorPlan?.layout ?? [];
-    const treeCount = floorPlan?.tree_preserved_count ?? 0;
-
-    const buildability = analysis ? Math.round(analysis.buildability_score) : null;
-    const floodRisk = analysis ? Math.round(analysis.flood_probability * 100) : null;
-    const ndvi = analysis?.environmental?.ndvi ?? null;
-    const elevation = analysis?.environmental?.elevation ?? null;
-    const lat = selectedLat;
-    const lon = selectedLon;
-
-    const roomTypes = useMemo(() =>
-        rooms.reduce<Record<string, number>>((acc, r) => {
-            const k = r.type.replace(/_/g, " ");
-            acc[k] = (acc[k] ?? 0) + 1;
-            return acc;
-        }, {}),
-        [rooms]
-    );
-
-    const hasData = !!floorPlan;
-    const reportDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-
-    return (
-        <>
-            <div className="min-h-screen w-full" style={{ background: "#080e0e", fontFamily: "'Space Grotesk', sans-serif" }}>
-
-                {/* ── Header ── */}
-                <header className="flex items-center justify-between px-6 py-3 border-b border-white/5 sticky top-0 z-50"
-                    style={{ background: "rgba(8,14,14,0.98)", backdropFilter: "blur(12px)" }}>
-                    <Link href="/" className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-primary text-xl">deployed_code</span>
-                        <span className="font-bold text-white text-sm">ECO-3D</span>
-                    </Link>
-                    <div className="flex items-center gap-4">
-                        <Link href={`/analysis/${plotId}`}
-                            className="text-[11px] text-slate-400 hover:text-white transition-colors flex items-center gap-1">
-                            <span className="material-symbols-outlined text-sm">arrow_back</span> Analysis
-                        </Link>
-                        <Link href={`/floorplan/${plotId}`}
-                            className="text-[11px] text-slate-400 hover:text-white transition-colors flex items-center gap-1">
-                            <span className="material-symbols-outlined text-sm">architecture</span> Floor Plan
-                        </Link>
-                        <Link href={`/model3d/${plotId}`}
-                            className="text-[11px] text-primary hover:brightness-110 flex items-center gap-1">
-                            <span className="material-symbols-outlined text-sm">view_in_ar</span> 3D Model
-                        </Link>
-                    </div>
-                    <span className="text-[11px] font-mono text-slate-500">{plotId}</span>
-                </header>
-
-                <div className="max-w-6xl mx-auto px-6 py-10">
-
-                    {/* ── Title ── */}
-                    <div className="mb-10 flex items-end justify-between">
-                        <div>
-                            <div className="text-[10px] uppercase tracking-[0.25em] text-primary font-bold mb-2">ECO-3D PROJECT REPORT</div>
-                            <h1 className="text-5xl font-black text-white uppercase tracking-tight mb-2">Site Report</h1>
-                            <p className="text-slate-500 text-sm font-mono">{plotId} · Generated {reportDate}</p>
-                        </div>
-                        {/* Print / Export hint */}
-                        <button
-                            onClick={() => window.print()}
-                            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[12px] font-bold uppercase tracking-widest transition-all hover:brightness-110"
-                            style={{ background: "#0df2f2", color: "#080e0e", boxShadow: "0 0 20px rgba(13,242,242,0.25)" }}>
-                            <span className="material-symbols-outlined text-sm">download</span>
-                            Export PDF
-                        </button>
-                    </div>
-
-                    {!hasData && (
-                        <div className="rounded-2xl p-16 flex flex-col items-center gap-4 text-center mb-10"
-                            style={{ border: "1px solid rgba(13,242,242,0.08)", background: "rgba(10,26,26,0.55)" }}>
-                            <span className="material-symbols-outlined text-primary/30 text-6xl">description</span>
-                            <p className="text-slate-400 text-sm">No report data available for this plot.<br />Please generate a floor plan first.</p>
-                            <Link href={`/analysis/${plotId}`}
-                                className="mt-2 px-6 py-2.5 rounded-xl text-[12px] font-bold uppercase tracking-widest"
-                                style={{ background: "#0df2f2", color: "#080e0e" }}>
-                                Go to Analysis →
-                            </Link>
-                        </div>
-                    )}
-
-                    {/* ── Scores row ── */}
-                    {hasData && (
-                        <div className="grid grid-cols-3 gap-5 mb-8">
-                            <ScorePill score={ecoScore!} label="Eco Fitness Score" />
-                            <ScorePill score={solarScore!} label="Sunlight Score" />
-                            <ScorePill score={ventScore!} label="Ventilation Score" />
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-6">
-
-                        {/* ── Plot Info ── */}
-                        <Section title="Plot Information" icon="location_on">
-                            <MetricRow label="Plot ID" value={plotId} />
-                            <MetricRow label="Latitude" value={lat != null ? `${fmt(lat, 6)}°` : "—"} />
-                            <MetricRow label="Longitude" value={lon != null ? `${fmt(lon, 6)}°` : "—"} />
-                            <MetricRow label="Total Built Area" value={totalArea > 0 ? `${fmt(totalArea, 1)} m²` : "—"} />
-                            <MetricRow label="Total Rooms" value={rooms.length > 0 ? String(rooms.length) : "—"} />
-                            <MetricRow label="Floors" value={rooms.length > 0 ? String(Math.max(...rooms.map(r => r.floor))) : "—"} />
-                            <MetricRow label="Trees Preserved" value={treeCount > 0 ? `${treeCount} trees` : "0"} />
-                        </Section>
-
-                        {/* ── Environmental ── */}
-                        <Section title="Environmental Analysis" icon="eco">
-                            <MetricRow label="Buildability Score" value={buildability != null ? `${buildability}%` : "—"} />
-                            <MetricRow label="Flood Risk" value={floodRisk != null ? `${floodRisk}%` : "—"}
-                                sub={floodRisk != null ? (floodRisk < 20 ? "Low risk" : floodRisk < 50 ? "Moderate" : "High risk") : undefined} />
-                            <MetricRow label="NDVI (Greenery)" value={ndvi != null ? fmt(ndvi, 3) : "—"}
-                                sub={ndvi != null ? (ndvi > 0.5 ? "Dense vegetation" : ndvi > 0.2 ? "Moderate green" : "Sparse") : undefined} />
-                            <MetricRow label="Elevation" value={elevation != null ? `${fmt(elevation, 0)} m` : "—"} />
-                            <div className="mt-4 pt-4 border-t border-white/5">
-                                <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-3">Compliance Checklist</div>
-                                <Badge label="Tree disturbance within limits" ok={treeCount <= 5} />
-                                <Badge label="Flood risk acceptable" ok={floodRisk != null && floodRisk < 30} />
-                                <Badge label="Buildability threshold met" ok={buildability != null && buildability >= 60} />
-                                <Badge label="NDVI sustainability check" ok={ndvi != null && ndvi > 0.15} />
-                            </div>
-                        </Section>
-
-                        {/* ── Performance ── */}
-                        <Section title="Building Performance" icon="speed">
-                            <Bar label="Eco Fitness" value={ecoScore ?? 0} color="#0df2f2" />
-                            <Bar label="Solar Gain" value={solarScore ?? 0} color="#f59e0b" />
-                            <Bar label="Ventilation" value={ventScore ?? 0} color="#3b82f6" />
-                            {buildability != null && <Bar label="Buildability" value={buildability} color="#2ecc71" />}
-                        </Section>
-
-                        {/* ── Room Schedule ── */}
-                        <Section title="Room Breakdown" icon="meeting_room">
-                            {rooms.length === 0 ? (
-                                <p className="text-slate-500 text-sm">No rooms available.</p>
-                            ) : (
-                                <>
-                                    <div className="grid grid-cols-2 gap-3 mb-4">
-                                        {Object.entries(roomTypes).map(([type, count]) => (
-                                            <div key={type} className="flex items-center justify-between px-3 py-2 rounded-lg"
-                                                style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)" }}>
-                                                <span className="text-sm capitalize text-slate-300">{type}</span>
-                                                <span className="text-sm font-bold text-primary">{count}×</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="border-t border-white/5 pt-4">
-                                        <MetricRow label="Avg Room Area"
-                                            value={`${fmt(rooms.reduce((s, r) => s + r.width * r.height, 0) / rooms.length, 1)} m²`} />
-                                        <MetricRow label="Largest Room"
-                                            value={`${fmt(Math.max(...rooms.map(r => r.width * r.height)), 1)} m²`} />
-                                        <MetricRow label="Smallest Room"
-                                            value={`${fmt(Math.min(...rooms.map(r => r.width * r.height)), 1)} m²`} />
-                                    </div>
-                                </>
-                            )}
-                        </Section>
-
-                    </div>
-
-                    {/* ── Navigation footer ── */}
-                    <div className="mt-10 flex items-center justify-between pt-8 border-t border-white/5">
-                        <div className="flex gap-3">
-                            <Link href={`/floorplan/${plotId}`}
-                                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[12px] font-bold uppercase tracking-widest transition-all hover:bg-white/5"
-                                style={{ border: "1px solid rgba(13,242,242,0.2)", color: "#0df2f2" }}>
-                                <span className="material-symbols-outlined text-sm">architecture</span>Floor Plan
-                            </Link>
-                            <Link href={`/model3d/${plotId}`}
-                                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[12px] font-bold uppercase tracking-widest transition-all hover:bg-white/5"
-                                style={{ border: "1px solid rgba(13,242,242,0.2)", color: "#0df2f2" }}>
-                                <span className="material-symbols-outlined text-sm">view_in_ar</span>3D Model
-                            </Link>
-                        </div>
-                        <p className="text-[10px] font-mono text-slate-600">ECO-3D Platform · AI-Powered Architecture · {reportDate}</p>
-                    </div>
-
-                </div>
+          {/* Non-buildable warning */}
+          {buildability && !buildability.ok && (
+            <div className="gl" style={{ position:"absolute", top:16, left:"50%", transform:"translateX(-50%)", padding:"10px 18px", borderRadius:12, display:"flex", alignItems:"center", gap:12, zIndex:50 }}>
+              <span style={{ fontSize:20 }}>⚠</span>
+              <div>
+                <div style={{ fontSize:12, fontWeight:700, color:"#f87171" }}>Not Suitable for Construction</div>
+                <div style={{ fontSize:11, color:"#64748b", marginTop:2 }}>{buildability.reason}</div>
+              </div>
             </div>
-        </>
-    );
+          )}
+
+          {/* Legal verification quick-info badge (bottom-right of map) */}
+          {legalData && buildability?.ok && (
+            <div className="gl" style={{ position:"absolute", bottom:90, right:16, padding:"10px 14px", borderRadius:10, zIndex:50, minWidth:200 }}>
+              <div style={{ fontSize:9, textTransform:"uppercase", letterSpacing:"0.15em", color:"#0df2f2", marginBottom:6 }}>Legal Status</div>
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                <span>{legalData.is_legally_buildable ? "✅" : "🚫"}</span>
+                <span style={{ fontSize:11, fontWeight:700, color:legalData.is_legally_buildable ? "#22c55e" : "#ef4444" }}>
+                  {legalData.is_legally_buildable ? "Buildable" : "Restricted"}
+                </span>
+                <span style={{ marginLeft:"auto", fontSize:14, fontWeight:900, color:legalData.legal_score > 70 ? "#22c55e" : "#f59e0b" }}>
+                  {Math.round(legalData.legal_score)}
+                </span>
+              </div>
+              {legalData.flood_zone && (
+                <div style={{ fontSize:10, color:"#64748b" }}>Flood: <span style={{ color:"#e2e8f0" }}>{legalData.flood_zone}</span></div>
+              )}
+              {legalData.seismic_zone && (
+                <div style={{ fontSize:10, color:"#64748b" }}>Seismic: <span style={{ color:"#e2e8f0" }}>{legalData.seismic_zone}</span></div>
+              )}
+              {legalData.warnings?.length > 0 && (
+                <div style={{ fontSize:9, color:"#f59e0b", marginTop:4 }}>⚠ {legalData.warnings.length} warning{legalData.warnings.length > 1 ? "s" : ""}</div>
+              )}
+            </div>
+          )}
+
+          {/* Analysis overlay */}
+          {(stage === "analyzing" || stage === "locating") && (
+            <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", zIndex:40, background:"rgba(6,14,14,0.82)" }}>
+              <div className="gl" style={{ borderRadius:20, padding:"36px 40px", display:"flex", flexDirection:"column", alignItems:"center", gap:18, minWidth:340 }}>
+                <div style={{ position:"relative", width:64, height:64 }}>
+                  <div style={{ position:"absolute", inset:0, border:"2px solid rgba(13,242,242,0.12)", borderRadius:"50%" }}/>
+                  <div style={{ position:"absolute", inset:0, border:"2px solid #0df2f2", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 1s linear infinite" }}/>
+                  <span style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", fontSize:24 }}>🛰</span>
+                </div>
+                <div style={{ textAlign:"center" }}>
+                  <div style={{ fontSize:14, fontWeight:700, color:"#fff", marginBottom:4 }}>Analysing Plot</div>
+                  <div style={{ fontSize:11, color:"rgba(13,242,242,0.7)", fontFamily:"monospace", maxWidth:260, textAlign:"center" }}>
+                    {ANALYSIS_STEPS[Math.min(stepIdx, ANALYSIS_STEPS.length-1)]}
+                  </div>
+                </div>
+                <div style={{ width:"100%", background:"rgba(255,255,255,0.05)", borderRadius:4, height:4, overflow:"hidden" }}>
+                  <div style={{ height:"100%", background:"#0df2f2", borderRadius:4, transition:"width 0.7s ease", width:`${Math.round((stepIdx / (ANALYSIS_STEPS.length-1)) * 100)}%` }}/>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, width:"100%" }}>
+                  {["SoilGrids 2.0", "OpenTopoData", "Open-Meteo", "OSM Overpass"].map(src => (
+                    <div key={src} style={{ fontSize:9, color:"#334155", textAlign:"center", padding:"4px 8px", background:"rgba(255,255,255,0.03)", borderRadius:6, fontFamily:"monospace" }}>{src}</div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Coords HUD */}
+          {selectedLat && stage === "idle" && !isAnalyzing && (
+            <div className="gl" style={{ position:"absolute", bottom:24, left:"50%", transform:"translateX(-50%)", padding:"10px 20px", borderRadius:12, display:"flex", alignItems:"center", gap:14, zIndex:40 }}>
+              <span style={{ fontSize:16 }}>📍</span>
+              <span style={{ fontSize:12, fontFamily:"monospace", color:"#e2e8f0" }}>
+                {selectedLat.toFixed(5)}°,&nbsp;{selectedLon?.toFixed(5)}°
+              </span>
+              {error && <span style={{ fontSize:11, color:"#f87171", maxWidth:280 }}>{error}</span>}
+            </div>
+          )}
+        </div>
+      </div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
+    </>
+  );
 }

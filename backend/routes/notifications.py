@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import or_
 from typing import List
 import uuid
 
@@ -19,7 +20,11 @@ async def get_notifications(user_id: str = None, db: AsyncSession = Depends(get_
     """
     stmt = select(Notification).order_by(Notification.created_at.desc())
     if user_id:
-        stmt = stmt.where((Notification.user_id == uuid.UUID(user_id)) | (Notification.user_id == None))
+        try:
+            uid = uuid.UUID(user_id)
+            stmt = stmt.where(or_(Notification.user_id == uid, Notification.user_id == None))
+        except ValueError:
+            stmt = stmt.where(Notification.user_id == None)
     else:
         stmt = stmt.where(Notification.user_id == None)
         

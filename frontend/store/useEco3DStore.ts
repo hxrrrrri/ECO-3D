@@ -28,7 +28,7 @@ export const useEco3DStore = create<Eco3DState>((set) => ({
   isAnalyzing: false, isGeneratingFloorPlan: false, error: null,
   setSelectedLocation: (lat, lon, polygon) => set({
     selectedLat: lat, selectedLon: lon, selectedPolygon: polygon || null,
-    currentPlotId: `PLOT-${Math.floor(lat * 1000)}-${Math.floor(lon * 1000)}`,
+    currentPlotId: `PLOT${Math.abs(Math.floor(lat * 1000))}X${Math.abs(Math.floor(lon * 1000))}`,
   }),
   setAnalysis: (analysis) => set({ analysis, environmentalData: analysis.environmental }),
   setFloorPlan: (floorPlan) => set({ floorPlan, floorPlanData: floorPlan }),

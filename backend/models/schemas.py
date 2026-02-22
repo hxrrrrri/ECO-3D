@@ -1,6 +1,7 @@
 """Pydantic request/response schemas."""
-from typing import Optional, List
-from pydantic import BaseModel, Field
+from typing import Optional, List, Any
+from datetime import datetime
+from pydantic import BaseModel, Field, field_serializer, field_validator
 
 
 class Coordinate(BaseModel):
@@ -123,21 +124,33 @@ class UserLogin(BaseModel):
 
 
 class UserResponse(BaseModel):
-    id: str
+    id: Any
     email: str
     full_name: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
+
+    @field_serializer("id")
+    def serialize_id(self, v):
+        return str(v)
 
 
 class NotificationResponse(BaseModel):
-    id: str
+    id: Any
     title: str
     message: str
     type: str
     is_read: bool
-    created_at: str
+    created_at: Any
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
+
+    @field_serializer("id")
+    def serialize_id(self, v):
+        return str(v)
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, v):
+        if isinstance(v, datetime):
+            return v.isoformat()
+        return str(v) if v is not None else ""

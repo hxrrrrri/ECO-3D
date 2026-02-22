@@ -135,14 +135,6 @@ export default function AnalysisPage() {
   const params = useParams(); const router = useRouter();
   const plotId = params.id as string;
 
-  // Auto-generate floor plan on first visit if not already generated
-  useEffect(() => {
-    if (!floorPlan && plotId) {
-      handleRegenerate();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plotId]);
-
   const [houseType, setHouseType] = useState("Eco-Villa (Single Story)");
   const [targetArea, setTargetArea] = useState("240");
   const [treePres, setTreePres] = useState(true);
@@ -169,6 +161,14 @@ export default function AnalysisPage() {
   const solarPct = floorPlan ? Math.round(floorPlan.sunlight_score * 100) : 88;
   const ventPct = floorPlan ? Math.round(floorPlan.ventilation_score * 100) : 95;
   const treeDist = floorPlan?.tree_preserved_count ?? 0;
+
+  // Auto-generate floor plan if we have analysis data but no floor plan yet
+  useEffect(() => {
+    if (!floorPlan && plotId && analysis) {
+      handleRegenerate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plotId]);
 
   const addLog = (msg: string) => {
     const n = new Date();
@@ -200,7 +200,7 @@ export default function AnalysisPage() {
               <div className="text-[9px] text-slate-500 uppercase tracking-[0.15em]">AI GENERATIVE ARCHITECTURE</div></div>
           </Link>
           <nav className="flex items-center gap-1">
-            {[{ l: "Project Alpha", h: `/map` }, { l: "Blueprint Generator", h: `/analysis/${plotId}`, a: true }, { l: "Environmental Data", h: `/analysis/${plotId}` }, { l: "Export", h: `/report/${plotId}` }].map(item => (
+            {[{ l: "Project Alpha", h: `/map` }, { l: "Blueprint Generator", h: `/analysis/${plotId}`, a: true }, { l: "Environmental Data", h: `/environment/${plotId}` }, { l: "Export", h: `/report/${plotId}` }].map(item => (
               <Link key={item.l} href={item.h} className={`px-4 py-2 text-[12px] font-medium transition-all ${item.a ? "text-primary border-b-2 border-primary" : "text-slate-400 hover:text-white"}`}>{item.l}</Link>
             ))}
           </nav>
@@ -344,7 +344,7 @@ export default function AnalysisPage() {
                   )}
                 </div>
               )}
-              <button onClick={() => router.push(`/model3d/${plotId}`)} className="w-full py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-primary/10 transition-all" style={{ border: "1px solid #0df2f2", color: "#0df2f2" }}>
+              <button onClick={() => router.push(`/report/${plotId}`)} className="w-full py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-primary/10 transition-all" style={{ border: "1px solid #0df2f2", color: "#0df2f2" }}>
                 <span className="material-symbols-outlined text-sm">assessment</span>View Detailed Report
               </button>
             </div>

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
@@ -9,10 +9,10 @@ import dynamic from "next/dynamic";
 const MapComponent = dynamic(() => import("@/components/MapComponent"), {
   ssr: false,
   loading: () => (
-    <div className="flex-1 flex items-center justify-center" style={{ background: "#080e0e" }}>
-      <div className="flex flex-col items-center gap-4">
-        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-        <p className="text-xs text-primary/60 uppercase tracking-widest">Loading Map...</p>
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#080e0e" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+        <div style={{ width: 32, height: 32, border: "2px solid rgba(13,242,242,0.3)", borderTop: "2px solid #0df2f2", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+        <p style={{ fontSize: 11, color: "rgba(13,242,242,0.6)", textTransform: "uppercase", letterSpacing: "0.15em" }}>Loading Map...</p>
       </div>
     </div>
   ),
@@ -31,7 +31,6 @@ export default function MapPage() {
   const [buildability, setBuildability] = useState<{ ok: boolean; reason: string } | null>(null);
   const [plotArea, setPlotArea] = useState<number | null>(null);
 
-  // ── Map click → fetch boundary only, then wait for user to click Analyse ──
   const handleLocationSelect = useCallback(async (lat: number, lon: number) => {
     setSelectedLocation(lat, lon);
     setStage("locating");
@@ -42,7 +41,8 @@ export default function MapPage() {
     setError(null);
 
     try {
-      const resp = await fetch(`http://localhost:8000/plot-boundary?lat=${lat}&lon=${lon}`);
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const resp = await fetch(`${apiBase}/plot-boundary?lat=${lat}&lon=${lon}`);
       if (resp.ok) {
         const data = await resp.json();
         setPlotBoundary(data.boundary ?? null);
@@ -59,7 +59,6 @@ export default function MapPage() {
     setStatusMsg("");
   }, [setSelectedLocation, setError]);
 
-  // ── User clicks "Analyse Plot" ────────────────────────────────────────────
   const runAnalysis = async () => {
     if (!selectedLat || !selectedLon || !currentPlotId) return;
     setAnalyzing(true);
@@ -99,12 +98,12 @@ export default function MapPage() {
       });
       setFloorPlan(fp);
       setStage("done");
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 500));
       router.push(`/analysis/${currentPlotId}`);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Analysis failed — is backend running on port 8000?";
       setError(msg);
-      setStage("ready");   // return to ready so user can retry
+      setStage("ready");
     } finally {
       setAnalyzing(false);
     }
@@ -112,32 +111,36 @@ export default function MapPage() {
 
   const isOverlayVisible = stage === "locating" || stage === "analyzing" || stage === "done";
 
+  // Panel z-index must be > 800 (Leaflet control max) but we use pointer-events to keep map clickable
+  const PANEL_Z = 1200;
+
   return (
     <>
-      {/* ─── page shell ─────────────────────────────────────────── */}
-      <div
-        className="h-screen w-screen flex flex-col overflow-hidden"
-        style={{ background: "#080e0e", fontFamily: "'Space Grotesk', sans-serif" }}
-      >
-        {/* Nav */}
-        <header
-          className="flex-shrink-0 flex items-center justify-between px-6 py-3 border-b border-white/5"
-          style={{ background: "rgba(8,14,14,0.98)", zIndex: 2000, position: "relative" }}
-        >
-          <Link href="/" className="flex items-center gap-2.5">
-            <span className="material-symbols-outlined text-primary text-2xl">deployed_code</span>
-            <span className="font-bold text-white tracking-tight">
-              ECO-3D <span className="text-primary/60 font-light">Studio</span>
+      <style>{`
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes fadeUp { from { opacity:0; transform: translateY(12px); } to { opacity:1; transform: translateY(0); } }
+      `}</style>
+
+      <div style={{ height: "100vh", width: "100vw", display: "flex", flexDirection: "column", overflow: "hidden", background: "#080e0e", fontFamily: "'Space Grotesk', sans-serif" }}>
+
+        {/* Header — sits above everything */}
+        <header style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", borderBottom: "1px solid rgba(255,255,255,0.05)", background: "rgba(8,14,14,0.99)", position: "relative", zIndex: PANEL_Z + 100 }}>
+          <Link href="/" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
+            <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 24 }}>deployed_code</span>
+            <span style={{ fontWeight: 700, color: "white", fontSize: 15, letterSpacing: "-0.01em" }}>
+              ECO-3D <span style={{ color: "rgba(13,242,242,0.6)", fontWeight: 300 }}>Studio</span>
             </span>
           </Link>
-          <div className="text-[11px] text-slate-400 text-center">
+          <div style={{ fontSize: 11, color: "#64748b", textAlign: "center" }}>
             Click anywhere on the map to begin real-time environmental analysis
           </div>
-          <div className="w-32" />
+          <div style={{ width: 128 }} />
         </header>
 
-        {/* Map + overlays */}
-        <div className="flex-1 relative overflow-hidden" style={{ minHeight: 0 }}>
+        {/* Map container — fills remaining space */}
+        <div style={{ flex: 1, position: "relative", overflow: "hidden", minHeight: 0 }}>
+
+          {/* Map itself */}
           <MapComponent
             onLocationSelect={handleLocationSelect}
             plotBoundary={plotBoundary}
@@ -145,177 +148,118 @@ export default function MapPage() {
             selectedLon={selectedLon}
           />
 
-          {/* ── LOCATING / ANALYZING spinner overlay
-              z-index MUST beat Leaflet tile pane (400) + popup pane (700)
-              Use inline style so Tailwind purge doesn't kill it ── */}
+          {/* ── LOCATING / ANALYZING overlay ── */}
           {isOverlayVisible && (
-            <div
-              className="absolute inset-0 flex items-center justify-center"
-              style={{ background: "rgba(6,14,14,0.82)", zIndex: 1100 }}
-            >
-              <div
-                className="flex flex-col items-center gap-4 rounded-2xl p-8 min-w-[320px]"
-                style={{
-                  background: "rgba(8,20,20,0.92)",
-                  backdropFilter: "blur(16px)",
-                  border: "1px solid rgba(13,242,242,0.15)",
-                }}
-              >
-                <div className="relative w-16 h-16">
-                  <div className="absolute inset-0 border-2 border-primary/20 rounded-full" />
-                  <div className="absolute inset-0 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  <span className="absolute inset-0 flex items-center justify-center material-symbols-outlined text-primary text-xl">
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(6,14,14,0.82)", zIndex: PANEL_Z, animation: "fadeUp 0.25s ease" }}>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, borderRadius: 20, padding: "32px 40px", minWidth: 320, background: "rgba(8,20,20,0.94)", backdropFilter: "blur(20px)", border: "1px solid rgba(13,242,242,0.15)" }}>
+                <div style={{ position: "relative", width: 64, height: 64 }}>
+                  <div style={{ position: "absolute", inset: 0, border: "2px solid rgba(13,242,242,0.15)", borderRadius: "50%" }} />
+                  <div style={{ position: "absolute", inset: 0, border: "2px solid transparent", borderTop: "2px solid #0df2f2", borderRadius: "50%", animation: stage === "done" ? "none" : "spin 1s linear infinite" }} />
+                  <span className="material-symbols-outlined" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#0df2f2", fontSize: 22 }}>
                     {stage === "done" ? "check_circle" : "satellite_alt"}
                   </span>
                 </div>
-                <div className="text-center">
-                  <div className="text-sm font-bold text-white mb-1">
-                    {stage === "locating" ? "Detecting Plot Boundary" :
-                      stage === "done" ? "Analysis Complete" :
-                        "Analysing Plot"}
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "white", marginBottom: 6 }}>
+                    {stage === "locating" ? "Detecting Plot Boundary" : stage === "done" ? "Analysis Complete" : "Analysing Plot"}
                   </div>
-                  <div className="text-[11px] text-primary/70">{statusMsg}</div>
+                  <div style={{ fontSize: 11, color: "rgba(13,242,242,0.7)" }}>{statusMsg}</div>
                 </div>
-                <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full"
-                    style={{
-                      width: stage === "done" ? "100%" : "60%", transition: "width 0.6s ease",
-                      animation: stage === "done" ? "none" : undefined
-                    }}
-                  />
+                <div style={{ width: "100%", height: 4, background: "rgba(255,255,255,0.05)", borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{ height: "100%", background: "#0df2f2", borderRadius: 2, transition: "width 0.6s ease", width: stage === "done" ? "100%" : stage === "locating" ? "30%" : "70%" }} />
                 </div>
-                <div className="text-[10px] text-slate-500 text-center">
-                  Fetching real data from Open-Elevation, Open-Meteo, OpenLandMap &amp; OSM
-                </div>
+                <div style={{ fontSize: 10, color: "#475569", textAlign: "center" }}>Fetching data from Open-Elevation, Open-Meteo &amp; OSM</div>
               </div>
             </div>
           )}
 
-          {/* ── READY panel — shown after boundary loaded ── */}
+          {/* ── READY panel — appears after boundary loaded ── */}
           {stage === "ready" && selectedLat && (
-            <div
-              className="absolute left-1/2 bottom-8 -translate-x-1/2 flex flex-col gap-3 rounded-2xl p-5 min-w-[360px] max-w-[440px] w-full"
-              style={{
-                background: "rgba(8,20,20,0.95)",
-                backdropFilter: "blur(16px)",
-                border: "1px solid rgba(13,242,242,0.18)",
-                zIndex: 1100,
-                boxShadow: "0 8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(13,242,242,0.06)",
-              }}
-            >
-              {/* Header row */}
-              <div className="flex items-center gap-3">
-                <span className="material-symbols-outlined text-primary text-xl">location_on</span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[10px] uppercase tracking-[0.2em] text-primary font-bold mb-0.5">
-                    Plot Selected
-                  </div>
-                  <div className="text-[12px] font-mono text-white truncate">
-                    {selectedLat.toFixed(5)}°N &nbsp;·&nbsp; {selectedLon?.toFixed(5)}°W
+            <div style={{
+              position: "absolute", bottom: 32, left: "50%", transform: "translateX(-50%)",
+              display: "flex", flexDirection: "column", gap: 12,
+              borderRadius: 20, padding: 20, minWidth: 360, maxWidth: 440, width: "calc(100% - 48px)",
+              background: "rgba(8,20,20,0.97)", backdropFilter: "blur(20px)",
+              border: "1px solid rgba(13,242,242,0.2)", zIndex: PANEL_Z,
+              boxShadow: "0 8px 40px rgba(0,0,0,0.7), 0 0 0 1px rgba(13,242,242,0.06)",
+              animation: "fadeUp 0.3s ease",
+            }}>
+              {/* Header */}
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 22 }}>location_on</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.2em", color: "#0df2f2", fontWeight: 700, marginBottom: 2 }}>Plot Selected</div>
+                  <div style={{ fontSize: 12, fontFamily: "monospace", color: "white" }}>
+                    {selectedLat.toFixed(5)}°N &nbsp;·&nbsp; {selectedLon?.toFixed(5)}°E
                   </div>
                 </div>
-                {/* Pixel indicator */}
-                <div
-                  className="px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider"
-                  style={{
-                    background: buildability?.ok === false ? "rgba(239,68,68,0.15)" : "rgba(13,242,242,0.1)",
-                    color: buildability?.ok === false ? "#f87171" : "#0df2f2",
-                    border: `1px solid ${buildability?.ok === false ? "rgba(239,68,68,0.3)" : "rgba(13,242,242,0.2)"}`,
-                  }}
-                >
+                <div style={{
+                  padding: "4px 10px", borderRadius: 8, fontSize: 10, fontWeight: 700, textTransform: "uppercase",
+                  background: buildability?.ok === false ? "rgba(239,68,68,0.15)" : "rgba(13,242,242,0.1)",
+                  color: buildability?.ok === false ? "#f87171" : "#0df2f2",
+                  border: `1px solid ${buildability?.ok === false ? "rgba(239,68,68,0.3)" : "rgba(13,242,242,0.2)"}`,
+                }}>
                   {buildability?.ok === false ? "⚠ Restricted" : "✓ Buildable"}
                 </div>
               </div>
 
-              {/* Stats row */}
-              <div className="grid grid-cols-3 gap-2">
+              {/* Stats */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                 {[
                   { label: "Plot Area", value: plotArea ? `${plotArea.toLocaleString()} m²` : "—" },
                   { label: "Boundary", value: plotBoundary ? `${plotBoundary.length} pts` : "Auto" },
                   { label: "Plot ID", value: currentPlotId?.slice(0, 14) ?? "—" },
                 ].map(({ label, value }) => (
-                  <div
-                    key={label}
-                    className="rounded-lg px-3 py-2"
-                    style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)" }}
-                  >
-                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-0.5">{label}</div>
-                    <div className="text-[12px] font-mono font-bold text-white">{value}</div>
+                  <div key={label} style={{ borderRadius: 10, padding: "8px 12px", background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)" }}>
+                    <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.15em", color: "#475569", marginBottom: 2 }}>{label}</div>
+                    <div style={{ fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: "white" }}>{value}</div>
                   </div>
                 ))}
               </div>
 
-              {/* Warning if not buildable */}
+              {/* Warning */}
               {buildability?.ok === false && (
-                <div
-                  className="flex items-start gap-2 rounded-lg px-3 py-2.5"
-                  style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}
-                >
-                  <span className="material-symbols-outlined text-red-400 text-sm mt-0.5">warning</span>
-                  <span className="text-[11px] text-red-300 leading-relaxed">{buildability.reason}</span>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 8, borderRadius: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                  <span className="material-symbols-outlined" style={{ color: "#f87171", fontSize: 16, marginTop: 1 }}>warning</span>
+                  <span style={{ fontSize: 11, color: "#fca5a5", lineHeight: 1.5 }}>{buildability.reason}</span>
                 </div>
               )}
 
-              {/* Error from previous attempt */}
+              {/* Error */}
               {error && (
-                <div
-                  className="flex items-start gap-2 rounded-lg px-3 py-2.5"
-                  style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}
-                >
-                  <span className="material-symbols-outlined text-red-400 text-sm mt-0.5">error</span>
-                  <span className="text-[11px] text-red-300 leading-relaxed">{error}</span>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 8, borderRadius: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                  <span className="material-symbols-outlined" style={{ color: "#f87171", fontSize: 16, marginTop: 1 }}>error</span>
+                  <span style={{ fontSize: 11, color: "#fca5a5", lineHeight: 1.5 }}>{error}</span>
                 </div>
               )}
 
-              {/* CTA button */}
+              {/* CTA */}
               <button
                 onClick={runAnalysis}
                 disabled={isAnalyzing || buildability?.ok === false}
-                className="w-full py-3.5 rounded-xl font-bold text-[13px] tracking-widest uppercase flex items-center justify-center gap-2.5 transition-all"
                 style={{
+                  width: "100%", padding: "14px 0", borderRadius: 14, fontSize: 13,
+                  fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
                   background: buildability?.ok === false ? "rgba(255,255,255,0.04)" : "#0df2f2",
                   color: buildability?.ok === false ? "#475569" : "#080e0e",
+                  border: "none", cursor: buildability?.ok === false ? "not-allowed" : "pointer",
                   boxShadow: buildability?.ok === false ? "none" : "0 0 24px rgba(13,242,242,0.35)",
-                  cursor: buildability?.ok === false ? "not-allowed" : "pointer",
                 }}
               >
-                <span className="material-symbols-outlined text-lg">
+                <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
                   {error ? "refresh" : "analytics"}
                 </span>
                 {error ? "Retry Analysis" : "Analyse Plot"}
               </button>
 
-              <div className="text-[10px] text-slate-600 text-center">
+              <div style={{ fontSize: 10, color: "#334155", textAlign: "center" }}>
                 Or click a different point on the map to reselect
               </div>
             </div>
           )}
         </div>
       </div>
-
-      {/* Override Leaflet z-indices so our overlays always sit on top */}
-      <style>{`
-        .leaflet-pane          { z-index: 400 !important; }
-        .leaflet-tile-pane     { z-index: 200 !important; }
-        .leaflet-overlay-pane  { z-index: 400 !important; }
-        .leaflet-shadow-pane   { z-index: 500 !important; }
-        .leaflet-marker-pane   { z-index: 600 !important; }
-        .leaflet-tooltip-pane  { z-index: 650 !important; }
-        .leaflet-popup-pane    { z-index: 700 !important; }
-        .leaflet-map-pane      { z-index: 0 !important; }
-        .leaflet-control       { z-index: 800 !important; }
-        .leaflet-container     { background: #080e0e !important; }
-        .leaflet-tile-pane     { filter: brightness(0.9) saturate(0.75); }
-        .leaflet-control-zoom a {
-          background: rgba(10,26,26,0.92) !important;
-          color: #0df2f2 !important;
-          border-color: rgba(13,242,242,0.3) !important;
-        }
-        .leaflet-control-zoom a:hover {
-          background: rgba(13,242,242,0.12) !important;
-        }
-      `}</style>
     </>
   );
 }

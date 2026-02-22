@@ -1,15 +1,12 @@
 """
-Full Analysis Pipeline — 5 layers wired correctly
-  1. DeepLabV3 segmentation  (ai/segmentation/segmenter.py  OR  ai/segmentation/model.py)
-  2. YOLOv8 tree detection   (ai/detection/tree_detector.py OR  ai/detection/model.py)
-  3. Real env data           (services/real_env_data.py — Open-Elevation, Open-Meteo, OpenLandMap)
-  4. XGBoost flood model     (ai/flood/model.py — auto-trains on first use)
-  5. MLP buildability model  (ai/buildability/model.py — auto-trains on first use)
-  + Genetic floor plan uses  (ai/floorplan/genetic_optimizer.py via floorplan_service.py)
+Full Analysis Pipeline — 5 layers, completely crash-proof.
+Every layer has synthetic fallback — the endpoint will NEVER return 500.
 """
 import logging
 import asyncio
 import random
+import math
+import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -22,90 +19,19 @@ from models.schemas import (
 logger = logging.getLogger(__name__)
 
 
-# ── Layer 1: DeepLabV3 segmentation ──────────────────────────────────────────
-def run_segmentation(lat: float, lon: float) -> SegmentationResult:
-    """
-    Try ai/segmentation/model.py first (uses Mapbox tile if token set),
-    fall back to ai/segmentation/segmenter.py (uses OSM tile).
-    Both fall back internally to synthetic if torch unavailable.
-    """
-    # Primary: model.py (has Mapbox support)
-    try:
-        from ai.segmentation.model import run_segmentation as seg_fn
-        dist = seg_fn(lat, lon)
-        logger.info(f"DeepLabV3 segmentation OK. dominant={max(dist, key=dist.get)}")
-        return SegmentationResult(
-            vegetation=dist.get("vegetation", 0.3),
-            water=dist.get("water", 0.05),
-            urban=dist.get("urban", 0.15),
-            bare_soil=dist.get("bare_soil", 0.1),
-            road=dist.get("road", 0.05),
-        )
-    except Exception as e:
-        logger.warning(f"ai/segmentation/model.py failed ({e}), trying segmenter.py")
-
-    # Fallback: segmenter.py
-    try:
-        from ai.segmentation.segmenter import SatelliteSegmenter
-        result = SatelliteSegmenter().segment(lat, lon, zoom=18)
-        dist = result.get("class_distribution", {})
-        veg  = dist.get("vegetation", 0) + dist.get("forest", 0) + dist.get("agriculture", 0) * 0.5
-        water = dist.get("water", 0)
-        urban = dist.get("urban", 0)
-        bare  = dist.get("bare_land", 0) + dist.get("agriculture", 0) * 0.5
-        road  = max(0.0, 1.0 - veg - water - urban - bare)
-        total = veg + water + urban + bare + road or 1.0
-        return SegmentationResult(
-            vegetation=round(veg/total, 3), water=round(water/total, 3),
-            urban=round(urban/total, 3),   bare_soil=round(bare/total, 3),
-            road=round(road/total, 3),
-        )
-    except Exception as e:
-        logger.warning(f"segmenter.py failed ({e}), using synthetic")
-        return _synthetic_seg(lat, lon)
-
-
+# ── Synthetic fallbacks (always available) ────────────────────────────────────
 def _synthetic_seg(lat: float, lon: float) -> SegmentationResult:
     rng = random.Random(f"{lat:.4f}{lon:.4f}")
     v = rng.uniform(0.25, 0.55); w = rng.uniform(0.02, 0.10)
     u = rng.uniform(0.05, 0.20); b = rng.uniform(0.03, 0.15)
     r = max(0.0, 1.0 - v - w - u - b); t = v + w + u + b + r
-    return SegmentationResult(vegetation=round(v/t,3), water=round(w/t,3),
-                               urban=round(u/t,3), bare_soil=round(b/t,3), road=round(r/t,3))
+    return SegmentationResult(
+        vegetation=round(v/t, 3), water=round(w/t, 3),
+        urban=round(u/t, 3), bare_soil=round(b/t, 3), road=round(r/t, 3),
+    )
 
 
-# ── Layer 2: YOLOv8 tree detection ────────────────────────────────────────────
-def run_tree_detection(lat: float, lon: float) -> list[TreeCoordinate]:
-    """
-    Try ai/detection/model.py (run_tree_detection) first,
-    fall back to ai/detection/tree_detector.py (TreeDetector class).
-    Both fall back internally to synthetic.
-    """
-    # Primary: detection/model.py
-    try:
-        from ai.detection.model import run_tree_detection as det_fn
-        trees = det_fn(lat, lon)
-        logger.info(f"YOLOv8 tree detection OK: {len(trees)} trees")
-        return trees
-    except Exception as e:
-        logger.warning(f"ai/detection/model.py failed ({e}), trying tree_detector.py")
-
-    # Fallback: tree_detector.py
-    try:
-        from ai.detection.tree_detector import TreeDetector
-        raw = TreeDetector().detect(lat, lon, zoom=18)
-        return [
-            TreeCoordinate(
-                lat=t.get("lat", lat), lon=t.get("lng", t.get("lon", lon)),
-                confidence=t.get("confidence", 0.8)
-            ) for t in raw
-        ]
-    except Exception as e:
-        logger.warning(f"tree_detector.py failed ({e}), using synthetic")
-        return _synthetic_trees(lat, lon)
-
-
-def _synthetic_trees(lat: float, lon: float) -> list[TreeCoordinate]:
+def _synthetic_trees(lat: float, lon: float) -> list:
     rng = random.Random(f"trees{lat:.4f}{lon:.4f}")
     return [
         TreeCoordinate(
@@ -116,12 +42,84 @@ def _synthetic_trees(lat: float, lon: float) -> list[TreeCoordinate]:
     ]
 
 
-# ── Layer 4: XGBoost flood model ──────────────────────────────────────────────
+def _synthetic_env(lat: float, lon: float) -> dict:
+    rng = random.Random(f"env{lat:.4f}{lon:.4f}")
+    doy = datetime.date.today().timetuple().tm_yday
+    decl = 23.45 * math.sin(math.radians((360 / 365) * (doy - 81)))
+    cos_ha = max(-1.0, min(1.0, -math.tan(math.radians(lat)) * math.tan(math.radians(decl))))
+    sun_h = round(2 * math.degrees(math.acos(cos_ha)) / 15, 2)
+    elev = round(rng.uniform(10, 400), 1)
+    slope = round(rng.uniform(1, 20), 2)
+    ndvi = round((0.55 if abs(lat) < 23.5 else 0.38 if abs(lat) < 45 else 0.22) + rng.uniform(-0.1, 0.1), 3)
+    rain = round((1600 if abs(lat) < 10 else 800 if abs(lat) < 30 else 500) + rng.uniform(-200, 200), 1)
+    flood = round(min(0.95, max(0.02, 0.38*(1-elev/80) + 0.18*(1-slope/15) + 0.14*min(1, rain/2000))), 3)
+    build = round(min(99, max(2, 100 - flood*38 - slope*0.9 + ndvi*8 + sun_h*1.2)), 1)
+    return {
+        "elevation": elev, "slope": slope,
+        "wind_ms": round(rng.uniform(2, 8), 1),
+        "wind_direction": rng.choice(["N", "NE", "E", "SE", "S", "SW", "W", "NW"]),
+        "rainfall_mm": rain,
+        "soil_type": rng.choice(["Sandy Loam", "Loam", "Clay Loam"]),
+        "soil_buildable": True, "clay_fraction": 0.25,
+        "ndvi": ndvi, "sun_exposure_hours": sun_h,
+        "flood_probability": flood, "buildability_score": build,
+    }
+
+
+# ── Layer 1: Segmentation ─────────────────────────────────────────────────────
+def run_segmentation(lat: float, lon: float) -> SegmentationResult:
+    try:
+        from ai.segmentation.model import run_segmentation as seg_fn
+        dist = seg_fn(lat, lon)
+        return SegmentationResult(
+            vegetation=float(dist.get("vegetation", 0.3)),
+            water=float(dist.get("water", 0.05)),
+            urban=float(dist.get("urban", 0.15)),
+            bare_soil=float(dist.get("bare_soil", 0.1)),
+            road=float(dist.get("road", 0.05)),
+        )
+    except Exception as e:
+        logger.warning(f"Segmentation failed ({e}), using synthetic")
+    return _synthetic_seg(lat, lon)
+
+
+# ── Layer 2: Tree detection ───────────────────────────────────────────────────
+def run_tree_detection(lat: float, lon: float) -> list:
+    try:
+        from ai.detection.model import run_tree_detection as det_fn
+        trees = det_fn(lat, lon)
+        if trees:
+            result = []
+            for t in trees:
+                if isinstance(t, TreeCoordinate):
+                    result.append(t)
+                elif isinstance(t, dict):
+                    result.append(TreeCoordinate(
+                        lat=float(t.get("lat", lat)),
+                        lon=float(t.get("lon", t.get("lng", lon))),
+                        confidence=float(t.get("confidence", 0.8)),
+                    ))
+            if result:
+                return result
+    except Exception as e:
+        logger.warning(f"Tree detection failed ({e}), using synthetic")
+    return _synthetic_trees(lat, lon)
+
+
+# ── Layer 3: Real env data ────────────────────────────────────────────────────
+async def _fetch_env_data(lat: float, lon: float) -> dict:
+    try:
+        from services.real_env_data import fetch_all_real_data
+        data = await asyncio.wait_for(fetch_all_real_data(lat, lon), timeout=30.0)
+        logger.info(f"Real env data fetched OK")
+        return data
+    except Exception as e:
+        logger.warning(f"Real env data failed ({e}), using synthetic")
+        return _synthetic_env(lat, lon)
+
+
+# ── Layer 4: Flood model ──────────────────────────────────────────────────────
 def run_flood_model(env: dict) -> float:
-    """
-    Use ai/flood/model.py (XGBoost, auto-trains on first use).
-    Falls back to physics formula from real_env_data.py.
-    """
     try:
         from ai.flood.model import predict_flood_probability
         prob = predict_flood_probability({
@@ -130,21 +128,16 @@ def run_flood_model(env: dict) -> float:
             "ndvi":              env["ndvi"],
             "rainfall_mm":       env["rainfall_mm"],
             "soil_type":         env["soil_type"],
-            "distance_to_water": 500.0,   # OSM query could improve this
+            "distance_to_water": 500.0,
         })
-        logger.info(f"XGBoost flood probability: {prob:.3f}")
-        return prob
+        return float(prob)
     except Exception as e:
-        logger.warning(f"XGBoost flood model failed ({e}), using physics formula")
+        logger.warning(f"Flood model failed ({e}), using physics formula")
         return float(env.get("flood_probability", 0.3))
 
 
-# ── Layer 5: MLP buildability model ──────────────────────────────────────────
+# ── Layer 5: Buildability model ───────────────────────────────────────────────
 def run_buildability_model(env: dict, flood: float) -> float:
-    """
-    Use ai/buildability/model.py (MLP, auto-trains on first use).
-    Falls back to physics formula from real_env_data.py.
-    """
     try:
         from ai.buildability.model import predict_buildability_score
         score = predict_buildability_score({
@@ -155,101 +148,108 @@ def run_buildability_model(env: dict, flood: float) -> float:
             "wind_exposure":      min(1.0, env.get("wind_ms", 3.0) / 15.0),
             "sun_exposure":       env["sun_exposure_hours"],
         })
-        logger.info(f"MLP buildability score: {score:.1f}")
-        return score
+        return float(score)
     except Exception as e:
-        logger.warning(f"MLP buildability model failed ({e}), using physics formula")
+        logger.warning(f"Buildability model failed ({e}), using physics formula")
         return float(env.get("buildability_score", 65.0))
 
 
-# ── Synthetic env fallback ────────────────────────────────────────────────────
-def _synthetic_env(lat: float, lon: float, rng: random.Random) -> dict:
-    import math, datetime
-    doy   = datetime.date.today().timetuple().tm_yday
-    decl  = 23.45 * math.sin(math.radians((360/365)*(doy-81)))
-    cos_ha = max(-1.0, min(1.0, -math.tan(math.radians(lat))*math.tan(math.radians(decl))))
-    sun_h  = round(2*math.degrees(math.acos(cos_ha))/15, 2)
-    elev   = round(rng.uniform(10, 400), 1); slope = round(rng.uniform(1, 20), 2)
-    ndvi   = round((0.55 if abs(lat)<23.5 else 0.38 if abs(lat)<45 else 0.22)+rng.uniform(-0.1,0.1), 3)
-    rain   = round((1600 if abs(lat)<10 else 800 if abs(lat)<30 else 500)+rng.uniform(-200,200), 1)
-    flood  = round(min(0.95, max(0.02, 0.38*(1-elev/80)+0.18*(1-slope/15)+0.14*min(1,rain/2000))), 3)
-    build  = round(min(99, max(2, 100-flood*38-slope*0.9+ndvi*8+sun_h*1.2)), 1)
-    return {
-        "elevation": elev, "slope": slope, "wind_ms": round(rng.uniform(2,8),1),
-        "wind_direction": rng.choice(["N","NE","E","SE","S","SW","W","NW"]),
-        "rainfall_mm": rain, "soil_type": rng.choice(["Sandy Loam","Loam","Clay Loam"]),
-        "soil_buildable": True, "clay_fraction": 0.25,
-        "ndvi": ndvi, "sun_exposure_hours": sun_h,
-        "flood_probability": flood, "buildability_score": build,
-    }
+def _safe_json(v):
+    """Convert any value to JSON-safe Python type."""
+    if isinstance(v, (str, bool, type(None))):
+        return v
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return str(v)
 
 
 # ── Main orchestrator ─────────────────────────────────────────────────────────
 async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> AnalysisResponse:
     lat, lon, plot_id = request.lat, request.lon, request.plot_id
-    rng = random.Random(f"{lat:.5f}{lon:.5f}")
 
-    # Layers 1 & 2 are CPU-bound — run in thread pool
-    # Layer 3 is async HTTP — run concurrently
-    loop = asyncio.get_running_loop()  # get_event_loop() deprecated in 3.10+
+    loop = asyncio.get_running_loop()
 
-    seg_task   = loop.run_in_executor(None, run_segmentation, lat, lon)
-    trees_task = loop.run_in_executor(None, run_tree_detection, lat, lon)
-
+    # Run all layers concurrently — each has its own internal try/except
     try:
-        from services.real_env_data import fetch_all_real_data
         seg, trees, env_data = await asyncio.gather(
-            seg_task, trees_task, fetch_all_real_data(lat, lon)
+            loop.run_in_executor(None, run_segmentation, lat, lon),
+            loop.run_in_executor(None, run_tree_detection, lat, lon),
+            _fetch_env_data(lat, lon),
         )
-        logger.info(f"Layers 1-3 complete for ({lat:.4f}, {lon:.4f})")
     except Exception as e:
-        logger.error(f"Pipeline gather error ({e}), using available data")
-        seg      = await seg_task
-        trees    = await trees_task
-        env_data = _synthetic_env(lat, lon, rng)
+        logger.error(f"Gather failed entirely ({e}), using all-synthetic data")
+        seg = _synthetic_seg(lat, lon)
+        trees = _synthetic_trees(lat, lon)
+        env_data = _synthetic_env(lat, lon)
 
-    # Layers 4 & 5: ML models (sync, fast after first-run train)
     flood = run_flood_model(env_data)
     build = run_buildability_model(env_data, flood)
 
-    # ── Persist ───────────────────────────────────────────────────────────────
+    # DB persist — non-fatal
     try:
-        existing = await db.execute(select(PlotRecord).where(PlotRecord.plot_id == plot_id))
+        existing = await db.execute(
+            select(PlotRecord).where(PlotRecord.plot_id == plot_id)
+        )
         if not existing.scalars().first():
-            db.add(PlotRecord(plot_id=plot_id, lat=lat, lon=lon, polygon=request.polygon))
+            db.add(PlotRecord(
+                plot_id=plot_id, lat=lat, lon=lon, polygon=request.polygon
+            ))
         db.add(AnalysisRecord(
-            plot_id=plot_id, segmentation_mask=seg.model_dump(),
+            plot_id=plot_id,
+            segmentation_mask=seg.model_dump(),
             tree_coordinates=[t.model_dump() for t in trees],
-            ndvi=env_data["ndvi"], slope=env_data["slope"], elevation=env_data["elevation"],
-            rainfall_mm=env_data["rainfall_mm"], soil_type=env_data["soil_type"],
-            wind_direction=env_data["wind_direction"], sun_exposure_hours=env_data["sun_exposure_hours"],
-            flood_probability=flood, buildability_score=build,
-            raw_features={**env_data, "_lat": lat, "_lon": lon},  # prefixed to avoid key collision
+            ndvi=float(env_data["ndvi"]),
+            slope=float(env_data["slope"]),
+            elevation=float(env_data["elevation"]),
+            rainfall_mm=float(env_data["rainfall_mm"]),
+            soil_type=str(env_data["soil_type"]),
+            wind_direction=str(env_data["wind_direction"]),
+            sun_exposure_hours=float(env_data["sun_exposure_hours"]),
+            flood_probability=float(flood),
+            buildability_score=float(build),
+            raw_features={k: _safe_json(v) for k, v in {**env_data, "_lat": lat, "_lon": lon}.items()},
         ))
         await db.commit()
+        logger.info(f"DB persist OK for {plot_id}")
     except Exception as e:
-        logger.warning(f"DB persist failed: {e}")
-        try: await db.rollback()
-        except: pass
+        logger.warning(f"DB persist failed (non-fatal): {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
-    if not env_data.get("soil_buildable", True) or build < 30:
+    soil_ok = bool(env_data.get("soil_buildable", True))
+    if not soil_ok or build < 30:
         status = "NOT BUILDABLE"
+    elif build >= 80:
+        status = "EXCELLENT"
+    elif build >= 60:
+        status = "GOOD"
+    elif build >= 40:
+        status = "FAIR"
     else:
-        status = "EXCELLENT" if build >= 80 else "GOOD" if build >= 60 else "FAIR" if build >= 40 else "POOR"
-
-    references = [
-        "FEMA Hazard Mitigation Standards: Flood probability and structural slope limits.",
-        "LEED BD+C v4: Sustainable Sites requirements for soil stability and vegetation preservation.",
-        "ASHRAE Standard 55: Thermal Environmental Conditions factoring in local wind and sun exposure."
-    ]
+        status = "POOR"
 
     return AnalysisResponse(
-        plot_id=plot_id, segmentation=seg, tree_coordinates=trees,
+        plot_id=plot_id,
+        segmentation=seg,
+        tree_coordinates=trees,
         environmental=EnvironmentalFeatures(
-            ndvi=env_data["ndvi"], slope=env_data["slope"], elevation=env_data["elevation"],
-            rainfall_mm=env_data["rainfall_mm"], soil_type=env_data["soil_type"],
-            wind_direction=env_data["wind_direction"], sun_exposure_hours=env_data["sun_exposure_hours"],
+            ndvi=float(env_data["ndvi"]),
+            slope=float(env_data["slope"]),
+            elevation=float(env_data["elevation"]),
+            rainfall_mm=float(env_data["rainfall_mm"]),
+            soil_type=str(env_data["soil_type"]),
+            wind_direction=str(env_data["wind_direction"]),
+            sun_exposure_hours=float(env_data["sun_exposure_hours"]),
         ),
-        flood_probability=flood, buildability_score=build, status=status,
-        score_references=references,
+        flood_probability=float(flood),
+        buildability_score=float(build),
+        status=status,
+        score_references=[
+            "FEMA Hazard Mitigation Standards: Flood probability and structural slope limits.",
+            "LEED BD+C v4: Sustainable Sites requirements for soil stability and vegetation preservation.",
+            "ASHRAE Standard 55: Thermal Environmental Conditions factoring in local wind and sun exposure.",
+        ],
     )
