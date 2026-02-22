@@ -434,11 +434,6 @@ function UnifiedHouse({ rooms, showWind, showSun, windDir }: {
         );
       })}
 
-      {/* ── WALL TOP CAP (crown, shows house boundary clearly) ───────────── */}
-      <mesh position={[cx, FH + 0.08, cz]}>
-        <boxGeometry args={[totalW + OWT*2 + 0.1, 0.15, totalD + OWT*2 + 0.1]} />
-        <meshStandardMaterial color="#0bc8c8" emissive="#0bc8c8" emissiveIntensity={0.06} roughness={0.7} />
-      </mesh>
 
       {/* ── OVERLAYS ────────────────────────────────────────────────────── */}
       {showSun && <SunSphere dir={windDir} />}
