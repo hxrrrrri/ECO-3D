@@ -16,6 +16,7 @@ export default function MapComponent({
   const mapRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
   const polygonRef = useRef<any>(null);
+  const LRef = useRef<any>(null);
 
   // Custom search bar state
   const [query, setQuery] = useState("");
@@ -24,15 +25,16 @@ export default function MapComponent({
   const [showResults, setShowResults] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Photon geocoding search (no CORS issues, no API key)
+  // Photon geocoding — only navigates map, does NOT trigger onLocationSelect
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim() || q.length < 2) { setResults([]); setShowResults(false); return; }
     setSearching(true);
     try {
-      const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=en`);
+      const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=7&lang=en`);
       const data = await res.json();
       const items = (data.features ?? []).map((f: any) => ({
-        name: [f.properties.name, f.properties.city, f.properties.country].filter(Boolean).join(", "),
+        name: [f.properties.name, f.properties.city, f.properties.state, f.properties.country]
+          .filter(Boolean).join(", "),
         lat: f.geometry.coordinates[1],
         lon: f.geometry.coordinates[0],
       }));
@@ -49,30 +51,25 @@ export default function MapComponent({
     const v = e.target.value;
     setQuery(v);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => doSearch(v), 350);
+    if (v.length >= 2) searchTimer.current = setTimeout(() => doSearch(v), 400);
+    else { setResults([]); setShowResults(false); }
   };
 
+  // On result click: ONLY fly map to location, do NOT call onLocationSelect.
+  // User must click the exact spot on the map to trigger plot selection.
   const handleSelectResult = (item: { name: string; lat: number; lon: number }) => {
     setQuery(item.name);
     setResults([]);
     setShowResults(false);
     if (mapRef.current) {
-      mapRef.current.setView([item.lat, item.lon], 16, { animate: true });
+      mapRef.current.setView([item.lat, item.lon], 16, { animate: true, duration: 1.2 });
     }
-    placeMarkerGlobal(item.lat, item.lon);
-    onLocationSelect(item.lat, item.lon);
+    // ❌ Do NOT call onLocationSelect here — user clicks the exact spot they want
   };
 
-  const handleSearchKey = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && query.trim()) { doSearch(query); }
+  const handleSearchKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && query.trim()) doSearch(query);
     if (e.key === "Escape") { setShowResults(false); }
-  };
-
-  // Store placeMarker fn in ref so we can call it from search result handler
-  const placeMarkerFnRef = useRef<((lat: number, lon: number) => void) | null>(null);
-
-  const placeMarkerGlobal = (lat: number, lon: number) => {
-    if (placeMarkerFnRef.current) placeMarkerFnRef.current(lat, lon);
   };
 
   useEffect(() => {
@@ -89,6 +86,7 @@ export default function MapComponent({
     const timer = setTimeout(() => {
       import("leaflet").then((L) => {
         if (mapRef.current || !containerRef.current) return;
+        LRef.current = L;
 
         delete (L.Icon.Default.prototype as any)._getIconUrl;
         L.Icon.Default.mergeOptions({
@@ -101,7 +99,7 @@ export default function MapComponent({
           center: [20, 0], zoom: 3, zoomControl: false,
         });
 
-        // Satellite imagery
+        // Satellite imagery layer
         L.tileLayer(
           "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
           { attribution: "Tiles © Esri", maxZoom: 19 }
@@ -115,7 +113,6 @@ export default function MapComponent({
 
         L.control.zoom({ position: "bottomright" }).addTo(map);
 
-        // Define placeMarker function
         function placeMarker(lat: number, lng: number) {
           const icon = L.divIcon({
             className: "",
@@ -129,17 +126,11 @@ export default function MapComponent({
               <style>@keyframes eco-ping{0%{transform:scale(1);opacity:.75}100%{transform:scale(2.2);opacity:0}}</style>
             `,
           });
-          if (markerRef.current) {
-            markerRef.current.setLatLng([lat, lng]);
-          } else {
-            markerRef.current = L.marker([lat, lng], { icon }).addTo(map);
-          }
+          if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
+          else markerRef.current = L.marker([lat, lng], { icon }).addTo(map);
         }
 
-        // Register global fn ref
-        placeMarkerFnRef.current = placeMarker;
-
-        // Click handler
+        // ✅ Only map clicks trigger onLocationSelect
         map.on("click", (e: any) => {
           const { lat, lng } = e.latlng;
           placeMarker(lat, lng);
@@ -152,21 +143,15 @@ export default function MapComponent({
 
     return () => {
       clearTimeout(timer);
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-        markerRef.current = null;
-        polygonRef.current = null;
-        placeMarkerFnRef.current = null;
-      }
+      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; markerRef.current = null; polygonRef.current = null; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sync view to selected lat/lon
+  // Sync view when selectedLat/Lon changes externally
   useEffect(() => {
     if (mapRef.current && selectedLat != null && selectedLon != null) {
-      mapRef.current.setView([selectedLat, selectedLon], 16, { animate: true });
+      mapRef.current.setView([selectedLat, selectedLon], 17, { animate: true });
     }
   }, [selectedLat, selectedLon]);
 
@@ -179,29 +164,31 @@ export default function MapComponent({
       const latlngs = plotBoundary.map(([lon, lat]) => [lat, lon] as [number, number]);
       polygonRef.current = L.polygon(latlngs, {
         color: "#0df2f2", weight: 2, opacity: 0.9,
-        fillColor: "#0df2f2", fillOpacity: 0.08, dashArray: "6 4",
+        fillColor: "#0df2f2", fillOpacity: 0.1, dashArray: "6 4",
       }).addTo(mapRef.current);
-      mapRef.current.fitBounds(polygonRef.current.getBounds(), { padding: [50, 50] });
+      // Fit with padding but don't over-zoom
+      const bounds = polygonRef.current.getBounds();
+      mapRef.current.fitBounds(bounds, { padding: [60, 60], maxZoom: 18 });
     });
   }, [plotBoundary]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      {/* The Leaflet map */}
+      {/* Leaflet map */}
       <div ref={containerRef} style={{ width: "100%", height: "100%", minHeight: "500px", background: "#0a1a1a" }} />
 
-      {/* Custom search bar — always visible above map */}
+      {/* Custom search bar — centered top, always above map */}
       <div style={{
         position: "absolute", top: 14, left: "50%", transform: "translateX(-50%)",
-        zIndex: 2000, width: "clamp(280px, 38vw, 500px)", pointerEvents: "auto",
+        zIndex: 2000, width: "clamp(300px, 40vw, 520px)", pointerEvents: "auto",
       }}>
         <div style={{
           background: "rgba(8,18,18,0.97)", border: "1px solid rgba(13,242,242,0.3)",
-          borderRadius: 10, backdropFilter: "blur(20px)", boxShadow: "0 4px 24px rgba(0,0,0,0.5)",
-          overflow: "visible",
+          borderRadius: showResults && results.length > 0 ? "10px 10px 0 0" : 10,
+          backdropFilter: "blur(20px)", boxShadow: "0 4px 32px rgba(0,0,0,0.6)",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px" }}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="rgba(13,242,242,0.7)" strokeWidth="2">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 16px" }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="rgba(13,242,242,0.65)" strokeWidth="2.2">
               <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
             </svg>
             <input
@@ -209,48 +196,58 @@ export default function MapComponent({
               value={query}
               onChange={handleSearchInput}
               onKeyDown={handleSearchKey}
-              placeholder="Search any location — city, address, landmark..."
+              onFocus={() => results.length > 0 && setShowResults(true)}
+              placeholder="Search city, address or landmark — then click your exact spot on the map"
               style={{
                 flex: 1, background: "transparent", border: "none", outline: "none",
-                color: "white", fontSize: 13, fontFamily: "'Space Grotesk', sans-serif",
+                color: "white", fontSize: 12.5, fontFamily: "'Space Grotesk', sans-serif",
               }}
             />
             {searching && (
-              <div style={{ width: 14, height: 14, border: "2px solid rgba(13,242,242,0.3)", borderTop: "2px solid #0df2f2", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+              <div style={{ width: 14, height: 14, border: "2px solid rgba(13,242,242,0.2)", borderTop: "2px solid #0df2f2", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
             )}
-            {query && (
-              <button onClick={() => { setQuery(""); setResults([]); setShowResults(false); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#475569", padding: 0, fontSize: 16, lineHeight: 1 }}>×</button>
+            {query && !searching && (
+              <button onClick={() => { setQuery(""); setResults([]); setShowResults(false); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#475569", padding: "0 2px", fontSize: 18, lineHeight: 1, flexShrink: 0 }}>×</button>
             )}
           </div>
-
-          {/* Results dropdown */}
-          {showResults && results.length > 0 && (
-            <div style={{ borderTop: "1px solid rgba(13,242,242,0.1)", maxHeight: 240, overflowY: "auto" }}>
-              {results.map((item, i) => (
-                <button key={i} onClick={() => handleSelectResult(item)} style={{
-                  width: "100%", display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px",
-                  background: "transparent", border: "none", cursor: "pointer", textAlign: "left",
-                  borderBottom: i < results.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
-                  transition: "background 0.15s",
-                }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "rgba(13,242,242,0.07)")}
-                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(13,242,242,0.5)" strokeWidth="2" style={{ flexShrink: 0, marginTop: 2 }}>
-                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" />
-                  </svg>
-                  <span style={{ color: "#cbd5e1", fontSize: 12, fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1.4 }}>{item.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {showResults && results.length === 0 && !searching && query.length > 1 && (
-            <div style={{ padding: "10px 14px", borderTop: "1px solid rgba(13,242,242,0.1)", color: "#475569", fontSize: 12, fontFamily: "monospace" }}>No results found</div>
-          )}
         </div>
+
+        {/* Results dropdown */}
+        {showResults && results.length > 0 && (
+          <div style={{
+            background: "rgba(8,18,18,0.99)", border: "1px solid rgba(13,242,242,0.2)", borderTop: "none",
+            borderRadius: "0 0 10px 10px", maxHeight: 260, overflowY: "auto",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
+          }}>
+            <div style={{ padding: "6px 16px 4px", fontSize: 9, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.12em", fontFamily: "monospace" }}>
+              Results — click to navigate, then click your exact spot on the map
+            </div>
+            {results.map((item, i) => (
+              <button key={i} onClick={() => handleSelectResult(item)} style={{
+                width: "100%", display: "flex", alignItems: "flex-start", gap: 10,
+                padding: "9px 16px", background: "transparent", border: "none", cursor: "pointer",
+                textAlign: "left", borderBottom: i < results.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
+              }}
+                onMouseEnter={e => (e.currentTarget.style.background = "rgba(13,242,242,0.07)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(13,242,242,0.5)" strokeWidth="2" style={{ flexShrink: 0, marginTop: 2 }}>
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" />
+                </svg>
+                <span style={{ color: "#cbd5e1", fontSize: 12, fontFamily: "'Space Grotesk', sans-serif", lineHeight: 1.4 }}>{item.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {showResults && results.length === 0 && !searching && query.length > 2 && (
+          <div style={{ background: "rgba(8,18,18,0.99)", border: "1px solid rgba(13,242,242,0.2)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: "12px 16px", color: "#475569", fontSize: 12, fontFamily: "monospace" }}>
+            No results found for "{query}"
+          </div>
+        )}
       </div>
 
-      {/* Satellite Active badge */}
+      {/* Satellite badge */}
       <div style={{
         position: "absolute", bottom: 16, left: 16, zIndex: 1000, pointerEvents: "none",
         background: "rgba(10,26,26,0.88)", backdropFilter: "blur(12px)",
@@ -258,9 +255,7 @@ export default function MapComponent({
         padding: "6px 14px", display: "flex", alignItems: "center", gap: 8,
       }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#0df2f2", boxShadow: "0 0 6px #0df2f2" }} />
-        <span style={{ color: "#0df2f2", fontSize: 10, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-          Satellite View Active
-        </span>
+        <span style={{ color: "#0df2f2", fontSize: 10, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>Satellite View Active</span>
       </div>
 
       <style>{`
