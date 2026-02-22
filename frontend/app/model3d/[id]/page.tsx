@@ -3,560 +3,687 @@
 import { useRef, useMemo, Suspense, useState, useEffect, Component } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, Text } from "@react-three/drei";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { OrbitControls, Text, Environment } from "@react-three/drei";
 import * as THREE from "three";
 import { useEco3DStore } from "@/store/useEco3DStore";
 
-// ─── Error boundary for Three.js ──────────────────────────────────────────────
 class ThreeErrorBoundary extends Component<{ children: React.ReactNode }, { error: string | null }> {
-  constructor(props: any) {
-    super(props);
-    this.state = { error: null };
-  }
-  static getDerivedStateFromError(error: Error) {
-    return { error: error.message };
-  }
+  constructor(props: any) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error: Error) { return { error: error.message }; }
   render() {
-    if (this.state.error) {
-      return (
-        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#060e0e" }}>
-          <div style={{ textAlign: "center", color: "#0df2f2", fontFamily: "monospace" }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>⬡</div>
-            <div style={{ fontSize: 14, marginBottom: 6 }}>3D Engine initializing...</div>
-            <div style={{ fontSize: 11, color: "#475569" }}>{this.state.error}</div>
-          </div>
+    if (this.state.error) return (
+      <div style={{ width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"#060e0e" }}>
+        <div style={{ textAlign:"center",color:"#0df2f2",fontFamily:"monospace" }}>
+          <div style={{ fontSize:32,marginBottom:12 }}>⬡</div>
+          <div style={{ fontSize:14,marginBottom:6 }}>3D Engine initializing...</div>
+          <div style={{ fontSize:11,color:"#475569" }}>{this.state.error}</div>
         </div>
-      );
-    }
+      </div>
+    );
     return this.props.children;
   }
 }
 
-// ─── Room color palette ───────────────────────────────────────────────────────
 const ROOM_COLORS: Record<string, string> = {
-  living: "#0df2f2", kitchen: "#2ecc71", bedroom: "#3498db",
-  bathroom: "#9b59b6", office: "#f1c40f", garage: "#7f8c8d", utility: "#e67e22",
+  living: "#1a8a8a", kitchen: "#1a7a44", bedroom: "#1a4a8a",
+  bathroom: "#5a2a7a", office: "#8a6a0a", garage: "#4a5a5a", utility: "#8a4a1a",
 };
-
 const getRoomColor = (type: string) => {
   const key = Object.keys(ROOM_COLORS).find(k => type.toLowerCase().includes(k));
-  return key ? ROOM_COLORS[key] : "#0df2f2";
+  return key ? ROOM_COLORS[key] : "#1a8a8a";
 };
 
-// ─── Scene lighting ───────────────────────────────────────────────────────────
+// ── Scene lighting ────────────────────────────────────────────────────────────
 function SceneLighting({ direction }: { direction: string }) {
-  const posMap: Record<string, [number, number, number]> = {
-    N: [0, 12, -10], NE: [8, 12, -8], E: [12, 12, 0], SE: [8, 12, 8],
-    S: [0, 12, 10], SW: [-8, 12, 8], W: [-12, 12, 0], NW: [-8, 12, -8],
+  const posMap: Record<string, [number,number,number]> = {
+    N:[0,12,-10],NE:[8,12,-8],E:[12,12,0],SE:[8,12,8],S:[0,12,10],SW:[-8,12,8],W:[-12,12,0],NW:[-8,12,-8],
   };
-  const pos = posMap[direction] ?? [8, 12, 8];
+  const pos = posMap[direction] ?? [8,12,8];
   return (
     <>
-      <ambientLight intensity={0.4} color="#c0f0ff" />
-      <hemisphereLight args={["#1a4040", "#000000", 0.3]} />
-      <directionalLight
-        position={pos} intensity={2.0} castShadow color="#fff8e0"
-        shadow-mapSize-width={1024} shadow-mapSize-height={1024}
-        shadow-camera-near={0.5} shadow-camera-far={60}
-        shadow-camera-left={-20} shadow-camera-right={20}
-        shadow-camera-top={20} shadow-camera-bottom={-20}
-      />
-      <pointLight position={[-10, 8, -10]} intensity={0.5} color="#0df2f2" distance={30} />
-      <pointLight position={[10, 6, 10]} intensity={0.3} color="#0a9a9a" distance={25} />
+      <ambientLight intensity={0.5} color="#d0e8ff" />
+      <hemisphereLight args={["#a8d4ff","#1a3030",0.4]} />
+      <directionalLight position={pos} intensity={2.2} castShadow color="#fff5e0"
+        shadow-mapSize-width={2048} shadow-mapSize-height={2048}
+        shadow-camera-near={0.5} shadow-camera-far={80}
+        shadow-camera-left={-25} shadow-camera-right={25}
+        shadow-camera-top={25} shadow-camera-bottom={-25} />
+      <pointLight position={[-10,8,-10]} intensity={0.6} color="#0df2f2" distance={35} />
+      <pointLight position={[10,6,10]} intensity={0.35} color="#0a9a9a" distance={28} />
     </>
   );
 }
 
-// ─── Building geometry ────────────────────────────────────────────────────────
-function Building({ rooms, walls, doors }: { rooms: any[]; walls?: any[]; doors?: any[] }) {
-  const groupRef = useRef<THREE.Group>(null);
-  const floorH = 3.2;
-
-  if (walls && walls.length > 0) {
-    return (
-      <group ref={groupRef}>
-        {rooms.map((room, idx) => {
-          const color = getRoomColor(room.type);
-          const x = (room.x ?? 0) + (room.width ?? 4) / 2 - 8;
-          const z = (room.y ?? 0) + (room.height ?? 4) / 2 - 8;
-          const y = ((room.floor ?? 1) - 1) * floorH;
-          return (
-            <group key={`fs-${idx}`}>
-              <mesh position={[x, y + 0.05, z]} receiveShadow>
-                <boxGeometry args={[(room.width ?? 4) - 0.1, 0.1, (room.height ?? 4) - 0.1]} />
-                <meshStandardMaterial color={color} transparent opacity={0.45} roughness={0.8} />
-              </mesh>
-            </group>
-          );
-        })}
-        {walls.map((wall, idx) => {
-          const w = wall.orientation === "horizontal" ? (wall.length ?? 4) : (wall.thickness ?? 0.2);
-          const d = wall.orientation === "horizontal" ? (wall.thickness ?? 0.2) : (wall.length ?? 4);
-          const h = floorH * 0.95;
-          return (
-            <mesh key={`w-${idx}`} position={[(wall.x ?? 0) - 8, h / 2, (wall.y ?? 0) - 8]} castShadow receiveShadow>
-              <boxGeometry args={[w, h, d]} />
-              <meshStandardMaterial color={wall.type === "exterior" ? "#dde6f0" : "#c0ccd8"} roughness={0.85} />
-            </mesh>
-          );
-        })}
-        {(doors ?? []).map((door, idx) => {
-          const isH = door.orientation === "horizontal";
-          const w = isH ? (door.width ?? 1) : 0.28;
-          const d = isH ? 0.28 : (door.width ?? 1);
-          return (
-            <mesh key={`d-${idx}`} position={[(door.x ?? 0) - 8, 1.05, (door.y ?? 0) - 8]} castShadow>
-              <boxGeometry args={[w, 2.1, d]} />
-              <meshStandardMaterial color={door.type === "entry" ? "#c0392b" : "#2c3e50"} roughness={0.4} transparent opacity={0.85} />
-            </mesh>
-          );
-        })}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow>
-          <planeGeometry args={[48, 48]} />
-          <meshStandardMaterial color="#061414" roughness={0.92} />
-        </mesh>
-      </group>
-    );
-  }
-
-  // Volumetric block fallback
+// ── Window component ──────────────────────────────────────────────────────────
+function Window({ position, size, normal }: { position: [number,number,number]; size: [number,number]; normal: [number,number,number] }) {
+  const [wx, wz] = size;
+  const isNS = Math.abs(normal[2]) > 0.5;
+  const args: [number,number,number] = isNS ? [wx, wz, 0.05] : [0.05, wz, wx];
   return (
-    <group ref={groupRef}>
-      {rooms.map((room, idx) => {
-        const color = getRoomColor(room.type ?? "living");
-        const x = (room.x ?? 0) + (room.width ?? 4) / 2 - 8;
-        const z = (room.y ?? 0) + (room.height ?? 4) / 2 - 8;
-        const y = ((room.floor ?? 1) - 1) * floorH + floorH / 2;
-        return (
-          <group key={idx}>
-            <mesh position={[x, y, z]} castShadow receiveShadow>
-              <boxGeometry args={[room.width ?? 4, floorH * 0.94, room.height ?? 4]} />
-              <meshStandardMaterial
-                color={color} transparent opacity={0.75}
-                roughness={0.2} metalness={0.1}
-                emissive={color} emissiveIntensity={0.05}
-              />
-            </mesh>
-            {/* Glass top cap */}
-            <mesh position={[x, y + floorH * 0.47, z]}>
-              <boxGeometry args={[(room.width ?? 4), 0.06, (room.height ?? 4)]} />
-              <meshStandardMaterial color={color} transparent opacity={0.25} roughness={0} metalness={0.9} />
-            </mesh>
-            {/* Floor slab */}
-            <mesh position={[x, ((room.floor ?? 1) - 1) * floorH, z]} receiveShadow>
-              <boxGeometry args={[(room.width ?? 4) + 0.06, 0.08, (room.height ?? 4) + 0.06]} />
-              <meshStandardMaterial color="#0a2020" roughness={0.9} />
-            </mesh>
-            <Text
-              position={[x, y + floorH * 0.5 + 0.3, z]}
-              fontSize={0.28} color={color}
-              anchorX="center" anchorY="bottom"
-              outlineWidth={0.02} outlineColor="#000"
-            >
-              {(room.type ?? "room").replace(/_/g, " ").toUpperCase()}
-            </Text>
-          </group>
-        );
-      })}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow>
-        <planeGeometry args={[48, 48]} />
-        <meshStandardMaterial color="#061414" roughness={0.92} />
+    <group position={position}>
+      {/* Frame */}
+      <mesh>
+        <boxGeometry args={args} />
+        <meshStandardMaterial color="#c8d8e0" metalness={0.3} roughness={0.4} />
+      </mesh>
+      {/* Glass pane */}
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={isNS ? [wx - 0.08, wz - 0.08, 0.03] : [0.03, wz - 0.08, wx - 0.08]} />
+        <meshStandardMaterial color="#88ccee" transparent opacity={0.35} metalness={0.8} roughness={0} />
       </mesh>
     </group>
   );
 }
 
-// ─── Default placeholder building ─────────────────────────────────────────────
-function DefaultBuilding() {
-  const configs: [number, number, number, number][] = [
-    [-4, -3, 3.0, 5.0], [0, -3, 3.0, 6.5], [4, -3, 3.0, 4.2],
-    [-2, 1, 3.0, 5.8], [2, 1, 3.0, 4.8],
-  ];
+// ── Door component ────────────────────────────────────────────────────────────
+function Door({ position, size, isExterior }: { position: [number,number,number]; size: [number,number,number]; isExterior: boolean }) {
   return (
-    <group>
-      {configs.map(([x, z, w, h], i) => (
-        <group key={i}>
-          <mesh position={[x, h / 2, z]} castShadow>
-            <boxGeometry args={[w, h, w]} />
-            <meshStandardMaterial color="#0df2f2" transparent opacity={0.55} roughness={0.25} emissive="#0df2f2" emissiveIntensity={0.06} />
+    <mesh position={position} castShadow>
+      <boxGeometry args={size} />
+      <meshStandardMaterial color={isExterior ? "#3d2b1a" : "#5a4a3a"} roughness={0.7} metalness={0.1} />
+    </mesh>
+  );
+}
+
+// ── Wall with opening cutouts ─────────────────────────────────────────────────
+function Wall({ position, size, color, hasWindow, hasDoor }: {
+  position: [number,number,number]; size: [number,number,number];
+  color: string; hasWindow?: boolean; hasDoor?: boolean;
+}) {
+  const [wx, wy, wz] = size;
+  const isNS = wz < wx; // longer in X = north/south facing wall
+
+  return (
+    <group position={position}>
+      {hasDoor ? (
+        // Wall with door: two sections left and right of door gap
+        <>
+          {isNS ? (
+            <>
+              <mesh castShadow receiveShadow position={[-(wx * 0.3), 0, 0]}>
+                <boxGeometry args={[wx * 0.35, wy, wz]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+              <mesh castShadow receiveShadow position={[wx * 0.3, 0, 0]}>
+                <boxGeometry args={[wx * 0.35, wy, wz]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+              {/* Top section above door */}
+              <mesh castShadow receiveShadow position={[0, wy * 0.37, 0]}>
+                <boxGeometry args={[wx * 0.3, wy * 0.26, wz]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+            </>
+          ) : (
+            <>
+              <mesh castShadow receiveShadow position={[0, 0, -(wz * 0.3)]}>
+                <boxGeometry args={[wx, wy, wz * 0.35]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+              <mesh castShadow receiveShadow position={[0, 0, wz * 0.3]}>
+                <boxGeometry args={[wx, wy, wz * 0.35]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+              <mesh castShadow receiveShadow position={[0, wy * 0.37, 0]}>
+                <boxGeometry args={[wx, wy * 0.26, wz * 0.3]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+            </>
+          )}
+          {/* Door panel */}
+          <Door
+            position={[0, -wy * 0.07, 0]}
+            size={isNS ? [wx * 0.28, wy * 0.74, wz + 0.02] : [wx + 0.02, wy * 0.74, wz * 0.28]}
+            isExterior={false}
+          />
+        </>
+      ) : hasWindow ? (
+        <>
+          {/* Wall with window: below, left, right, above window */}
+          <mesh castShadow receiveShadow position={[0, -wy * 0.3, 0]}>
+            <boxGeometry args={[wx, wy * 0.3, wz]} />
+            <meshStandardMaterial color={color} roughness={0.85} />
           </mesh>
-          <mesh position={[x, h + 0.06, z]}>
-            <boxGeometry args={[w + 0.12, 0.12, w + 0.12]} />
-            <meshStandardMaterial color="#0df2f2" transparent opacity={0.28} />
+          <mesh castShadow receiveShadow position={[0, wy * 0.35, 0]}>
+            <boxGeometry args={[wx, wy * 0.3, wz]} />
+            <meshStandardMaterial color={color} roughness={0.85} />
+          </mesh>
+          {isNS ? (
+            <>
+              <mesh castShadow receiveShadow position={[-(wx * 0.38), 0, 0]}>
+                <boxGeometry args={[wx * 0.24, wy * 0.4, wz]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+              <mesh castShadow receiveShadow position={[wx * 0.38, 0, 0]}>
+                <boxGeometry args={[wx * 0.24, wy * 0.4, wz]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+            </>
+          ) : (
+            <>
+              <mesh castShadow receiveShadow position={[0, 0, -(wz * 0.38)]}>
+                <boxGeometry args={[wx, wy * 0.4, wz * 0.24]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+              <mesh castShadow receiveShadow position={[0, 0, wz * 0.38]}>
+                <boxGeometry args={[wx, wy * 0.4, wz * 0.24]} />
+                <meshStandardMaterial color={color} roughness={0.85} />
+              </mesh>
+            </>
+          )}
+          {/* Window glass */}
+          <Window
+            position={[0, 0, 0]}
+            size={isNS ? [wx * 0.48, wy * 0.38] : [wz * 0.48, wy * 0.38]}
+            normal={isNS ? [0,0,1] : [1,0,0]}
+          />
+        </>
+      ) : (
+        <mesh castShadow receiveShadow>
+          <boxGeometry args={size} />
+          <meshStandardMaterial color={color} roughness={0.85} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+// ── Room with full walls, floor, ceiling, furniture ──────────────────────────
+function Room3D({ room, idx, totalRooms }: { room: any; idx: number; totalRooms: number }) {
+  const w = room.width ?? 4;
+  const d = room.height ?? 4;  // depth in plan = Z in 3D
+  const floorH = 3.0;
+  const wallT = 0.22;
+  const floorY = ((room.floor ?? 1) - 1) * floorH;
+
+  const cx = (room.x ?? 0) + w / 2 - 8;
+  const cz = (room.y ?? 0) + d / 2 - 8;
+  const color = getRoomColor(room.type ?? "living");
+  const roomType = room.type?.toLowerCase() ?? "living";
+
+  // Is this an exterior room? (simplified: use index)
+  const isEdge = true;
+
+  return (
+    <group position={[cx, floorY, cz]}>
+      {/* Floor slab */}
+      <mesh position={[0, 0.06, 0]} receiveShadow>
+        <boxGeometry args={[w - wallT, 0.12, d - wallT]} />
+        <meshStandardMaterial
+          color={roomType.includes("bathroom") ? "#2a3a3a" : roomType.includes("kitchen") ? "#1e2e2e" : "#152525"}
+          roughness={0.9}
+        />
+      </mesh>
+      {/* Ceiling */}
+      <mesh position={[0, floorH - 0.06, 0]}>
+        <boxGeometry args={[w - wallT, 0.1, d - wallT]} />
+        <meshStandardMaterial color="#e8ecec" roughness={0.8} />
+      </mesh>
+
+      {/* North wall (-Z) */}
+      <Wall position={[0, floorH/2, -d/2]} size={[w, floorH, wallT]} color="#d4dde0" hasWindow={!roomType.includes("bathroom")} />
+      {/* South wall (+Z) */}
+      <Wall position={[0, floorH/2, d/2]} size={[w, floorH, wallT]} color="#d4dde0" hasDoor={idx % 3 !== 2} hasWindow={idx % 3 === 2 && !roomType.includes("bathroom")} />
+      {/* West wall (-X) */}
+      <Wall position={[-w/2, floorH/2, 0]} size={[wallT, floorH, d]} color="#ccd6da" hasWindow={w > 4.5 && !roomType.includes("bathroom")} />
+      {/* East wall (+X) */}
+      <Wall position={[w/2, floorH/2, 0]} size={[wallT, floorH, d]} color="#ccd6da" hasDoor={idx % 3 === 2} />
+
+      {/* Room label floating above */}
+      <Text
+        position={[0, floorH * 0.5, 0]}
+        color={color}
+        fontSize={Math.min(0.35, w * 0.09)}
+        font={undefined}
+        anchorX="center"
+        anchorY="middle"
+      >
+        {(room.type ?? "room").toUpperCase().replace(/_/g, " ")}
+      </Text>
+
+      {/* Furniture */}
+      <RoomFurniture type={roomType} w={w} d={d} floorY={0.15} color={color} />
+
+      {/* Glow floor tint */}
+      <mesh position={[0, 0.14, 0]} rotation={[-Math.PI/2, 0, 0]}>
+        <planeGeometry args={[w - wallT - 0.3, d - wallT - 0.3]} />
+        <meshStandardMaterial color={color} transparent opacity={0.06} roughness={1} />
+      </mesh>
+    </group>
+  );
+}
+
+// ── Furniture for each room type ─────────────────────────────────────────────
+function RoomFurniture({ type, w, d, floorY, color }: { type: string; w: number; d: number; floorY: number; color: string }) {
+  const mats = useMemo(() => ({
+    wood:  new THREE.MeshStandardMaterial({ color: "#5c3d1e", roughness: 0.8 }),
+    light: new THREE.MeshStandardMaterial({ color: "#d4c8b0", roughness: 0.7 }),
+    dark:  new THREE.MeshStandardMaterial({ color: "#2a2a3a", roughness: 0.6 }),
+    metal: new THREE.MeshStandardMaterial({ color: "#aab0b8", roughness: 0.3, metalness: 0.7 }),
+    glass: new THREE.MeshStandardMaterial({ color: "#88bbdd", transparent: true, opacity: 0.5, roughness: 0 }),
+    fabric:new THREE.MeshStandardMaterial({ color: "#3a5a6a", roughness: 0.95 }),
+    white: new THREE.MeshStandardMaterial({ color: "#e8e8e0", roughness: 0.6 }),
+  }), []);
+
+  const y = floorY;
+  const hw = w / 2 - 0.5;
+  const hd = d / 2 - 0.5;
+
+  if (type.includes("living")) return (
+    <group>
+      {/* Sofa */}
+      <mesh position={[0, y + 0.25, hd - 0.8]} material={mats.fabric} castShadow>
+        <boxGeometry args={[Math.min(w - 1.2, 3), 0.5, 0.9]} />
+      </mesh>
+      <mesh position={[0, y + 0.55, hd - 0.35]} material={mats.fabric} castShadow>
+        <boxGeometry args={[Math.min(w - 1.2, 3), 0.6, 0.2]} />
+      </mesh>
+      {/* Coffee table */}
+      <mesh position={[0, y + 0.25, 0.5]} material={mats.glass} castShadow>
+        <boxGeometry args={[1.0, 0.05, 0.6]} />
+      </mesh>
+      <mesh position={[0, y + 0.12, 0.5]} material={mats.metal}>
+        <boxGeometry args={[0.02, 0.28, 0.02]} />
+      </mesh>
+      {/* TV unit */}
+      <mesh position={[0, y + 0.2, -hd + 0.5]} material={mats.dark} castShadow>
+        <boxGeometry args={[Math.min(w - 1.5, 2.5), 0.4, 0.35]} />
+      </mesh>
+      <mesh position={[0, y + 0.42, -hd + 0.5]} material={mats.dark}>
+        <boxGeometry args={[Math.min(w - 2, 2), 0.3, 0.05]} />
+      </mesh>
+      {/* Plant */}
+      <mesh position={[hw - 0.3, y + 0.5, -hd + 0.5]} material={mats.metal} castShadow>
+        <cylinderGeometry args={[0.1, 0.12, 0.3, 8]} />
+      </mesh>
+      <mesh position={[hw - 0.3, y + 0.8, -hd + 0.5]} castShadow>
+        <sphereGeometry args={[0.22, 8, 8]} />
+        <meshStandardMaterial color="#2a7a2a" roughness={0.9} />
+      </mesh>
+    </group>
+  );
+
+  if (type.includes("bedroom")) return (
+    <group>
+      {/* Bed frame */}
+      <mesh position={[0, y + 0.25, 0.4]} material={mats.wood} castShadow>
+        <boxGeometry args={[Math.min(w - 1.2, 2.0), 0.3, Math.min(d - 1.5, 2.2)]} />
+      </mesh>
+      {/* Mattress */}
+      <mesh position={[0, y + 0.5, 0.4]} material={mats.white} castShadow>
+        <boxGeometry args={[Math.min(w - 1.4, 1.8), 0.22, Math.min(d - 1.8, 2.0)]} />
+      </mesh>
+      {/* Pillow x2 */}
+      {[-0.35, 0.35].map((px, pi) => (
+        <mesh key={pi} position={[px, y + 0.64, -0.2]} material={mats.white} castShadow>
+          <boxGeometry args={[0.55, 0.1, 0.38]} />
+        </mesh>
+      ))}
+      {/* Headboard */}
+      <mesh position={[0, y + 0.75, -0.55]} material={mats.wood} castShadow>
+        <boxGeometry args={[Math.min(w - 1.2, 2.0), 0.9, 0.1]} />
+      </mesh>
+      {/* Bedside tables */}
+      {[-1.1, 1.1].map((px, pi) => (
+        <group key={pi}>
+          <mesh position={[px, y + 0.28, 0.2]} material={mats.wood} castShadow>
+            <boxGeometry args={[0.5, 0.45, 0.45]} />
+          </mesh>
+          <mesh position={[px, y + 0.54, 0.2]} material={mats.metal} castShadow>
+            <cylinderGeometry args={[0.06, 0.06, 0.06, 8]} />
           </mesh>
         </group>
       ))}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-        <planeGeometry args={[28, 28]} />
-        <meshStandardMaterial color="#061414" roughness={0.9} />
+      {/* Wardrobe */}
+      <mesh position={[-hw + 0.4, y + 1.0, hd - 0.4]} material={mats.light} castShadow>
+        <boxGeometry args={[0.65, 2.1, 0.55]} />
       </mesh>
-      {/* "No plot selected" label */}
-      <Text position={[0, 8, 0]} fontSize={0.6} color="#0df2f2" anchorX="center" anchorY="middle" fillOpacity={0.5}>
-        PREVIEW MODEL
-      </Text>
+    </group>
+  );
+
+  if (type.includes("kitchen")) return (
+    <group>
+      {/* Base cabinets along -Z wall */}
+      <mesh position={[0, y + 0.45, -hd + 0.3]} material={mats.light} castShadow>
+        <boxGeometry args={[w - 0.5, 0.9, 0.6]} />
+      </mesh>
+      {/* Counter top */}
+      <mesh position={[0, y + 0.92, -hd + 0.3]} material={mats.metal} castShadow>
+        <boxGeometry args={[w - 0.5, 0.04, 0.6]} />
+      </mesh>
+      {/* Wall cabinets */}
+      <mesh position={[0, y + 1.8, -hd + 0.15]} material={mats.light} castShadow>
+        <boxGeometry args={[w - 0.5, 0.7, 0.32]} />
+      </mesh>
+      {/* Sink */}
+      <mesh position={[hw - 0.6, y + 0.96, -hd + 0.28]} material={mats.metal} castShadow>
+        <boxGeometry args={[0.55, 0.04, 0.42]} />
+      </mesh>
+      {/* Stove */}
+      <mesh position={[-0.3, y + 0.96, -hd + 0.28]} material={mats.dark} castShadow>
+        <boxGeometry args={[0.6, 0.04, 0.55]} />
+      </mesh>
+      {[-0.15, 0.15].map((px, pi) => (
+        <mesh key={pi} position={[-0.3 + px, y + 1.0, -hd + 0.26]} castShadow>
+          <cylinderGeometry args={[0.08, 0.08, 0.02, 10]} />
+          <meshStandardMaterial color="#cc3300" emissive="#cc3300" emissiveIntensity={0.3} />
+        </mesh>
+      ))}
+      {/* Island / dining */}
+      {d > 4 && <mesh position={[0, y + 0.9, 0.8]} material={mats.light} castShadow>
+        <boxGeometry args={[1.2, 1.0, 0.65]} />
+      </mesh>}
+    </group>
+  );
+
+  if (type.includes("bathroom")) return (
+    <group>
+      {/* Bathtub */}
+      <mesh position={[-hw + 0.55, y + 0.28, -hd + 0.65]} material={mats.white} castShadow>
+        <boxGeometry args={[0.75, 0.55, 1.4]} />
+      </mesh>
+      <mesh position={[-hw + 0.55, y + 0.52, -hd + 0.65]} material={mats.glass} castShadow>
+        <boxGeometry args={[0.65, 0.06, 1.3]} />
+      </mesh>
+      {/* Toilet */}
+      <mesh position={[hw - 0.4, y + 0.3, hd - 0.6]} material={mats.white} castShadow>
+        <boxGeometry args={[0.42, 0.55, 0.55]} />
+      </mesh>
+      <mesh position={[hw - 0.4, y + 0.58, hd - 0.85]} material={mats.white} castShadow>
+        <boxGeometry args={[0.42, 0.12, 0.18]} />
+      </mesh>
+      {/* Vanity */}
+      <mesh position={[-hw + 0.4, y + 0.4, hd - 0.4]} material={mats.light} castShadow>
+        <boxGeometry args={[0.65, 0.8, 0.45]} />
+      </mesh>
+      <mesh position={[-hw + 0.4, y + 0.82, hd - 0.4]} material={mats.metal} castShadow>
+        <boxGeometry args={[0.55, 0.04, 0.38]} />
+      </mesh>
+    </group>
+  );
+
+  if (type.includes("office")) return (
+    <group>
+      <mesh position={[0, y + 0.38, -hd + 0.45]} material={mats.light} castShadow>
+        <boxGeometry args={[Math.min(w-1, 1.6), 0.04, 0.7]} />
+      </mesh>
+      <mesh position={[0, y + 0.1, -hd + 0.45]} material={mats.wood} castShadow>
+        <boxGeometry args={[1.5, 0.2, 0.65]} />
+      </mesh>
+      {/* Chair */}
+      <mesh position={[0, y + 0.22, 0]} material={mats.dark} castShadow>
+        <cylinderGeometry args={[0.22, 0.22, 0.44, 8]} />
+      </mesh>
+      <mesh position={[0, y + 0.5, -0.06]} material={mats.dark} castShadow>
+        <boxGeometry args={[0.44, 0.5, 0.07]} />
+      </mesh>
+    </group>
+  );
+
+  return null;
+}
+
+// ── Gabled roof ───────────────────────────────────────────────────────────────
+function GabledRoof({ minX, maxX, minZ, maxZ }: { minX: number; maxX: number; minZ: number; maxZ: number }) {
+  const floorH = 3.0;
+  const cx = (minX + maxX) / 2;
+  const cz = (minZ + maxZ) / 2;
+  const bw = maxX - minX + 0.5;
+  const bd = maxZ - minZ + 0.5;
+  const roofH = 2.2;
+  const roofY = floorH + roofH / 2;
+
+  // Roof as pyramid/gable shape using custom geometry
+  const shape = useMemo(() => {
+    const geo = new THREE.BufferGeometry();
+    const hw = bw / 2; const hd = bd / 2;
+    // Gable: ridge runs along Z
+    const vertices = new Float32Array([
+      // Front face (-Z)
+      -hw, 0, -hd, hw, 0, -hd, 0, roofH, 0,
+      // Back face (+Z)
+      -hw, 0, hd, 0, roofH, 0, hw, 0, hd,
+      // Left slope
+      -hw, 0, -hd, 0, roofH, 0, -hw, 0, hd,
+      // Right slope
+      hw, 0, -hd, hw, 0, hd, 0, roofH, 0,
+      // Bottom
+      -hw, 0, -hd, -hw, 0, hd, hw, 0, hd,
+      -hw, 0, -hd, hw, 0, hd, hw, 0, -hd,
+    ]);
+    geo.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+    geo.computeVertexNormals();
+    return geo;
+  }, [bw, bd, roofH]);
+
+  return (
+    <group position={[cx, floorH + 0.02, cz]}>
+      <mesh geometry={shape} castShadow receiveShadow>
+        <meshStandardMaterial color="#8a5a3a" roughness={0.85} side={THREE.DoubleSide} />
+      </mesh>
+      {/* Eaves */}
+      <mesh position={[0, -0.1, 0]} receiveShadow>
+        <boxGeometry args={[bw + 0.6, 0.18, bd + 0.6]} />
+        <meshStandardMaterial color="#b87a50" roughness={0.75} />
+      </mesh>
     </group>
   );
 }
 
-// ─── Wind particles ───────────────────────────────────────────────────────────
-function WindParticles({ count = 200 }: { count?: number }) {
-  const meshRef = useRef<THREE.Points>(null);
-  const positions = useMemo(() => {
-    const arr = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      arr[i * 3] = (Math.random() - 0.5) * 32;
-      arr[i * 3 + 1] = Math.random() * 16;
-      arr[i * 3 + 2] = (Math.random() - 0.5) * 32;
-    }
-    return arr;
-  }, [count]);
-
-  useFrame((_, dt) => {
-    if (!meshRef.current) return;
-    const pos = meshRef.current.geometry.attributes.position;
-    for (let i = 0; i < count; i++) {
-      const nx = pos.getX(i) + dt * 2.5;
-      pos.setX(i, nx > 16 ? -16 : nx);
-    }
-    pos.needsUpdate = true;
-  });
-
+// ── Ground / plot ─────────────────────────────────────────────────────────────
+function Ground() {
   return (
-    <points ref={meshRef}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" array={positions} count={count} itemSize={3} />
-      </bufferGeometry>
-      <pointsMaterial color="#0df2f2" size={0.07} transparent opacity={0.3} sizeAttenuation />
-    </points>
+    <>
+      {/* Lawn */}
+      <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -0.02, 0]} receiveShadow>
+        <planeGeometry args={[60, 60]} />
+        <meshStandardMaterial color="#0d2010" roughness={0.95} />
+      </mesh>
+      {/* Plot boundary (lighter) */}
+      <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
+        <planeGeometry args={[22, 22]} />
+        <meshStandardMaterial color="#122218" roughness={0.95} />
+      </mesh>
+      {/* Grid lines */}
+      <gridHelper args={[60, 60, "#0a2020", "#0a2020"]} position={[0, 0, 0]} />
+    </>
   );
 }
 
-// ─── Ambient dust ─────────────────────────────────────────────────────────────
-function AmbientDust({ count = 120 }: { count?: number }) {
-  const ref = useRef<THREE.Points>(null);
-  const positions = useMemo(() => {
-    const arr = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      arr[i * 3] = (Math.random() - 0.5) * 40;
-      arr[i * 3 + 1] = Math.random() * 20;
-      arr[i * 3 + 2] = (Math.random() - 0.5) * 40;
+// ── Main building scene ───────────────────────────────────────────────────────
+function BuildingScene({ rooms, windDir }: { rooms: any[]; windDir: string }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const [autoRotate, setAutoRotate] = useState(true);
+
+  useFrame((_, delta) => {
+    if (groupRef.current && autoRotate) {
+      groupRef.current.rotation.y += delta * 0.08;
     }
-    return arr;
-  }, [count]);
-  useFrame((state) => {
-    if (ref.current) ref.current.rotation.y = state.clock.elapsedTime * 0.02;
   });
+
+  const floor1 = rooms.filter(r => (r.floor ?? 1) === 1);
+  if (floor1.length === 0) return null;
+
+  const minX = Math.min(...floor1.map(r => r.x ?? 0)) - 8;
+  const maxX = Math.max(...floor1.map(r => (r.x ?? 0) + (r.width ?? 4))) - 8;
+  const minZ = Math.min(...floor1.map(r => r.y ?? 0)) - 8;
+  const maxZ = Math.max(...floor1.map(r => (r.y ?? 0) + (r.height ?? 4))) - 8;
+
   return (
-    <points ref={ref}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" array={positions} count={count} itemSize={3} />
-      </bufferGeometry>
-      <pointsMaterial color="#1a5a5a" size={0.04} transparent opacity={0.35} sizeAttenuation />
-    </points>
+    <group ref={groupRef}>
+      {rooms.map((room, idx) => (
+        <Room3D key={idx} room={room} idx={idx} totalRooms={rooms.length} />
+      ))}
+      <GabledRoof minX={minX} maxX={maxX} minZ={minZ} maxZ={maxZ} />
+      <Ground />
+    </group>
   );
 }
 
-// ─── BIM import helper ────────────────────────────────────────────────────────
-function parseBIMFile(content: string): any[] | null {
-  try {
-    const data = JSON.parse(content);
-    if (Array.isArray(data.rooms)) return data.rooms;
-    if (Array.isArray(data.layout)) return data.layout;
-    if (Array.isArray(data)) return data;
-  } catch { }
-  return null;
+// ── Room info tooltip ─────────────────────────────────────────────────────────
+function RoomLegend({ rooms }: { rooms: any[] }) {
+  const counts: Record<string, number> = {};
+  rooms.forEach(r => { const k = (r.type ?? "room").toLowerCase(); counts[k] = (counts[k] ?? 0) + 1; });
+  const palette: Record<string, string> = {
+    living: "#1a8a8a", bedroom: "#1a4a8a", kitchen: "#1a7a44",
+    bathroom: "#5a2a7a", office: "#8a6a0a", garage: "#4a5a5a", utility: "#8a4a1a",
+  };
+  return (
+    <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 12, padding: "8px 16px", background: "rgba(6,14,14,0.9)", borderRadius: 8, border: "1px solid rgba(13,242,242,0.1)" }}>
+      <div style={{ color: "rgba(13,242,242,0.4)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "0.12em", alignSelf: "center" }}>ROOM LEGEND</div>
+      {Object.entries(counts).map(([type, count]) => (
+        <div key={type} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: palette[type] ?? "#0df2f2", display: "inline-block" }} />
+          <span style={{ color: "#94a3b8", fontSize: 10, fontFamily: "monospace" }}>{type.charAt(0).toUpperCase() + type.slice(1)}{count > 1 ? ` ×${count}` : ""}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
-// ─── Main 3D page ─────────────────────────────────────────────────────────────
 export default function Model3DPage() {
   const params = useParams();
-  const id = params.id as string;
-  const { floorPlanData, environmentalData } = useEco3DStore();
+  const plotId = params.id as string;
 
-  const [imported, setImported] = useState<any[] | null>(null);
-  const [importError, setImportError] = useState("");
-  const [showWind, setShowWind] = useState(true);
-  const [showSun, setShowSun] = useState(true);
+  const { floorPlan, analysis } = useEco3DStore();
+  const rooms = floorPlan?.layout ?? [];
+  const windDir = analysis?.environmental?.wind_direction ?? "NW";
+  const sunDir = analysis?.environmental?.wind_direction ?? "S";
+
+  const [showWind, setShowWind] = useState(false);
+  const [showSun, setShowSun] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
-  const [showDust, setShowDust] = useState(true);
-  const [fps, setFps] = useState(60);
-  const [exportMsg, setExportMsg] = useState("");
-  const [canvasReady, setCanvasReady] = useState(false);
+  const [showDust, setShowDust] = useState(false);
+  const [fps, setFps] = useState(0);
 
-  const windDir = environmentalData?.wind_direction ?? "SW";
-  const rooms = imported ?? floorPlanData?.layout ?? [];
-  const walls = imported ? [] : (floorPlanData?.walls ?? []);
-  const doors = imported ? [] : (floorPlanData?.doors ?? []);
-
-  // Delay Canvas mount slightly so DOM is fully ready
   useEffect(() => {
-    const t = setTimeout(() => setCanvasReady(true), 100);
-    return () => clearTimeout(t);
+    let last = performance.now(); let frames = 0;
+    const id = setInterval(() => {
+      const now = performance.now(); frames++;
+      if (now - last > 1000) { setFps(Math.round(frames * 1000 / (now - last))); frames = 0; last = now; }
+    }, 100);
+    return () => clearInterval(id);
   }, []);
-
-  // FPS counter
-  useEffect(() => {
-    let frames = 0; let last = performance.now(); let rafId = 0;
-    const tick = () => {
-      frames++;
-      const now = performance.now();
-      if (now - last >= 1000) { setFps(frames); frames = 0; last = now; }
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, []);
-
-  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    setImportError("");
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const content = ev.target?.result as string;
-      const parsed = parseBIMFile(content);
-      if (parsed) setImported(parsed);
-      else setImportError("Invalid BIM file — expected JSON with rooms/layout array.");
-    };
-    reader.readAsText(file);
-    e.target.value = "";
-  };
-
-  const handleExport = () => {
-    const payload = {
-      version: "ECO3D-BIM-1.0", plotId: id, rooms,
-      exportedAt: new Date().toISOString(),
-      metadata: {
-        totalRooms: rooms.length,
-        totalArea: rooms.reduce((a: number, r: any) => a + (r.width ?? 0) * (r.height ?? 0), 0).toFixed(1),
-        windDirection: windDir,
-      },
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `eco3d-bim-${id}.json`;
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a); URL.revokeObjectURL(url);
-    setExportMsg("BIM exported!"); setTimeout(() => setExportMsg(""), 2000);
-  };
 
   return (
     <>
-      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
+      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
       <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
-      <style>{`
-        body { background: #060e0e; margin: 0; }
-        .gl { background: rgba(8,20,20,0.75); backdrop-filter: blur(12px); border: 1px solid rgba(13,242,242,0.1); }
-        .glm { background: rgba(13,242,242,0.04); border: 1px solid rgba(13,242,242,0.12); }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-        .fi { animation: fadeIn 0.4s ease forwards; }
-      `}</style>
+      <div style={{ width:"100vw",height:"100vh",background:"#060e0e",display:"flex",flexDirection:"column",fontFamily:"'Space Grotesk',sans-serif",overflow:"hidden" }}>
 
-      {/* Full-screen container with explicit height */}
-      <div style={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#060e0e", fontFamily: "'Space Grotesk', sans-serif" }}>
-
-        {/* ── Header ── */}
-        <header className="flex-shrink-0" style={{ position: "relative", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", borderBottom: "1px solid rgba(255,255,255,0.05)", background: "rgba(6,14,14,0.92)", backdropFilter: "blur(16px)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <Link href="/" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
-              <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 24 }}>deployed_code</span>
-              <div>
-                <span style={{ color: "white", fontWeight: 700, fontSize: 18, letterSpacing: "-0.02em" }}>ECO-3D</span>
-                <span style={{ color: "rgba(13,242,242,0.6)", fontWeight: 300, fontSize: 16, marginLeft: 6 }}>Studio</span>
-              </div>
-            </Link>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 20, background: "rgba(13,242,242,0.08)", border: "1px solid rgba(13,242,242,0.15)" }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#0df2f2", animation: "hud-pulse 2s infinite", display: "inline-block" }} />
-              <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "#0df2f2" }}>WebGL Active</span>
-            </div>
-          </div>
-
-          <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {/* Nav */}
+        <header style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 24px",background:"rgba(6,12,12,0.98)",borderBottom:"1px solid rgba(255,255,255,0.05)",flexShrink:0 }}>
+          <Link href="/" style={{ display:"flex",alignItems:"center",gap:10,textDecoration:"none" }}>
+            <span className="material-symbols-outlined" style={{ color:"#0df2f2",fontSize:22 }}>deployed_code</span>
+            <div><div style={{ color:"white",fontWeight:700,fontSize:15 }}>ECO-3D <span style={{ color:"rgba(13,242,242,0.5)",fontWeight:300 }}>Studio</span></div>
+              <div style={{ fontSize:9,color:"#475569",textTransform:"uppercase",letterSpacing:"0.15em" }}>AI GENERATIVE ARCHITECTURE</div></div>
+          </Link>
+          <nav style={{ display:"flex",gap:4 }}>
             {[
-              { l: "Blueprint Generator", h: `/analysis/${id}` },
-              { l: "Environmental Data", h: `/environment/${id}` },
-              { l: "3D Model", h: `/model3d/${id}`, a: true },
-              { l: "Export", h: `/report/${id}` },
+              { l:"Blueprint Generator", h:`/analysis/${plotId}` },
+              { l:"Environmental Data", h:`/environment/${plotId}` },
+              { l:"3D Model", h:`/model3d/${plotId}`, a:true },
+              { l:"Export", h:`/report/${plotId}` },
             ].map(item => (
-              <Link key={item.l} href={item.h} style={{
-                padding: "8px 16px", fontSize: 12, fontWeight: 500, borderRadius: 4,
-                textDecoration: "none", transition: "all 0.2s",
-                color: item.a ? "#0df2f2" : "#94a3b8",
-                borderBottom: item.a ? "2px solid #0df2f2" : "none",
-              }}>{item.l}</Link>
+              <Link key={item.l} href={item.h} style={{ padding:"8px 16px",fontSize:12,fontWeight:500,textDecoration:"none",color:(item as any).a?"#0df2f2":"#64748b",borderBottom:(item as any).a?"2px solid #0df2f2":"2px solid transparent",transition:"all 0.2s" }}>
+                {item.l}
+              </Link>
             ))}
           </nav>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <label className="gl" style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "#0df2f2" }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>upload_file</span>
-              Import BIM
-              <input type="file" accept=".json,.bim" onChange={handleImport} style={{ display: "none" }} />
-            </label>
-            <button onClick={handleExport} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", borderRadius: 8, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", background: "#0df2f2", color: "#060e0e", border: "none", cursor: "pointer", boxShadow: "0 0 16px rgba(13,242,242,0.3)" }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>download</span>
-              {exportMsg || "Export BIM"}
+          <div style={{ display:"flex",gap:10 }}>
+            <button style={{ display:"flex",alignItems:"center",gap:6,padding:"7px 14px",background:"rgba(13,242,242,0.06)",border:"1px solid rgba(13,242,242,0.15)",borderRadius:8,color:"#0df2f2",fontSize:11,fontWeight:700,cursor:"pointer" }}>
+              <span className="material-symbols-outlined" style={{ fontSize:14 }}>upload</span>IMPORT BIM
+            </button>
+            <button style={{ display:"flex",alignItems:"center",gap:6,padding:"7px 14px",background:"#0df2f2",borderRadius:8,color:"#060e0e",fontSize:11,fontWeight:700,cursor:"pointer",border:"none" }}>
+              <span className="material-symbols-outlined" style={{ fontSize:14 }}>download</span>EXPORT BIM
             </button>
           </div>
         </header>
 
-        {/* ── 3D Canvas area — explicit flex-1 with overflow hidden ── */}
-        <div style={{ flex: 1, position: "relative", overflow: "hidden", background: "radial-gradient(ellipse at 50% 30%, #0d2020 0%, #060e0e 70%)" }}>
+        <div style={{ display:"flex",flex:1,overflow:"hidden" }}>
+          {/* Left info panel */}
+          <div style={{ width:140,flexShrink:0,background:"rgba(6,10,10,0.98)",padding:16,display:"flex",flexDirection:"column",gap:14,borderRight:"1px solid rgba(255,255,255,0.05)" }}>
+            {[
+              { l:"Sunlight Direction", v:`${windDir} — ${analysis?.environmental?.sun_exposure_hours?.toFixed(1) ?? "8.2"}h/day` },
+              { l:"Wind Direction", v:`Prevailing ${windDir}` },
+              { l:"Floor Plan", v:`${rooms.filter(r=>(r.floor??1)===1).length} Rooms • ${floorPlan?.total_area?.toFixed(0) ?? "—"}m²` },
+            ].map(({ l, v }) => (
+              <div key={l} style={{ background:"rgba(13,242,242,0.04)",border:"1px solid rgba(13,242,242,0.1)",borderRadius:8,padding:"10px 12px" }}>
+                <div style={{ fontSize:9,color:"rgba(13,242,242,0.5)",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:4 }}>{l}</div>
+                <div style={{ fontSize:12,color:"white",fontWeight:600,lineHeight:1.4 }}>{v}</div>
+              </div>
+            ))}
+            <div style={{ marginTop:"auto",background:"rgba(13,242,242,0.04)",border:"1px solid rgba(13,242,242,0.1)",borderRadius:8,padding:"10px 12px" }}>
+              <div style={{ fontSize:9,color:"rgba(13,242,242,0.5)",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:4 }}>Rendering Engine</div>
+              <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:4 }}>
+                <span style={{ width:7,height:7,borderRadius:"50%",background:"#0df2f2",flexShrink:0 }} />
+                <span style={{ fontSize:11,color:"white",fontWeight:600 }}>Three.js WebGL</span>
+              </div>
+              <div style={{ fontSize:10,color:"#64748b" }}>{fps} FPS</div>
+              <div style={{ fontSize:10,color:"#64748b",marginTop:2 }}>{rooms.length} rooms • {(rooms.length * 4).toFixed(0)}k polys</div>
+            </div>
+          </div>
 
-          {/* Canvas — only mount after DOM ready */}
-          {canvasReady && (
+          {/* 3D Viewport */}
+          <div style={{ flex:1,position:"relative" }}>
             <ThreeErrorBoundary>
               <Canvas
-                style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
-                camera={{ position: [16, 13, 16], fov: 48 }}
                 shadows
-                gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
-                onCreated={({ gl }) => {
-                  gl.setClearColor("#060e0e");
-                  gl.shadowMap.enabled = true;
-                  gl.shadowMap.type = THREE.PCFSoftShadowMap;
-                }}
+                camera={{ position: [14, 10, 14], fov: 45, near: 0.1, far: 200 }}
+                style={{ background: "linear-gradient(180deg,#0a1a1a 0%,#060e0e 100%)" }}
+                gl={{ antialias: true, alpha: false }}
               >
-                <color attach="background" args={["#060e0e"]} />
-                <fog attach="fog" args={["#060e0e", 35, 90]} />
-
-                <SceneLighting direction={showSun ? windDir : "S"} />
-
-                {showGrid && (
-                  <gridHelper
-                    args={[40, 40, new THREE.Color(0.05, 0.55, 0.55), new THREE.Color(0.02, 0.22, 0.22)]}
-                    position={[0, 0, 0]}
-                  />
-                )}
-
-                {showWind && <WindParticles count={200} />}
-                {showDust && <AmbientDust count={100} />}
-
                 <Suspense fallback={null}>
-                  {rooms.length > 0
-                    ? <Building rooms={rooms} walls={walls} doors={doors} />
-                    : <DefaultBuilding />
-                  }
+                  <SceneLighting direction={windDir} />
+                  {showGrid && <gridHelper args={[40, 40, "#0a2828", "#091a1a"]} />}
+                  <BuildingScene rooms={rooms} windDir={windDir} />
+                  <OrbitControls
+                    enablePan={true} enableZoom={true} enableRotate={true}
+                    minPolarAngle={0.1} maxPolarAngle={Math.PI / 2.1}
+                    minDistance={4} maxDistance={60}
+                    autoRotate={false}
+                  />
                 </Suspense>
-
-                <OrbitControls
-                  enableDamping
-                  dampingFactor={0.06}
-                  minPolarAngle={0.05}
-                  maxPolarAngle={Math.PI / 2.05}
-                  minDistance={4}
-                  maxDistance={55}
-                />
               </Canvas>
             </ThreeErrorBoundary>
-          )}
 
-          {/* Loading state before canvas mounts */}
-          {!canvasReady && (
-            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div style={{ textAlign: "center", color: "#0df2f2" }}>
-                <div style={{ width: 40, height: 40, border: "2px solid rgba(13,242,242,0.2)", borderTop: "2px solid #0df2f2", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 12px" }} />
-                <div style={{ fontSize: 12, letterSpacing: "0.15em", textTransform: "uppercase" }}>Loading 3D Engine...</div>
-              </div>
+            {/* Right toolbar */}
+            <div style={{ position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",display:"flex",flexDirection:"column",gap:6 }}>
+              {[
+                { l:"COMPASS", i:"explore" },
+                { l:"WIND", i:"air", active: showWind, toggle: ()=>setShowWind(!showWind) },
+                { l:"SUN", i:"wb_sunny", active: showSun, toggle: ()=>setShowSun(!showSun) },
+                { l:"GRID", i:"grid_on", active: showGrid, toggle: ()=>setShowGrid(!showGrid) },
+                { l:"DUST", i:"blur_on", active: showDust, toggle: ()=>setShowDust(!showDust) },
+              ].map(({ l, i, active, toggle }) => (
+                <button key={l} onClick={toggle} style={{ width:42,height:42,background:active?"rgba(13,242,242,0.15)":"rgba(6,14,14,0.9)",border:`1px solid ${active?"rgba(13,242,242,0.35)":"rgba(255,255,255,0.06)"}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:1,cursor:"pointer",transition:"all 0.2s" }}>
+                  <span className="material-symbols-outlined" style={{ fontSize:16,color:active?"#0df2f2":"#475569" }}>{i}</span>
+                  <span style={{ fontSize:6,color:active?"#0df2f2":"#334155",fontFamily:"monospace",letterSpacing:"0.06em" }}>{l}</span>
+                </button>
+              ))}
             </div>
-          )}
 
-          {importError && (
-            <div className="gl fi" style={{ position: "absolute", top: 80, left: "50%", transform: "translateX(-50%)", padding: "8px 16px", borderRadius: 8, fontSize: 11, color: "#f87171" }}>
-              {importError}
+            {/* Compass */}
+            <div style={{ position:"absolute",top:12,right:68,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center" }}>
+              <svg width="32" height="32">
+                <circle cx="16" cy="16" r="14" fill="rgba(6,14,14,0.9)" stroke="rgba(13,242,242,0.2)" strokeWidth="1" />
+                <polygon points="16,4 20,16 16,14 12,16" fill="#0df2f2" />
+                <polygon points="16,28 12,16 16,18 20,16" fill="#334155" />
+                <text x="16" y="10" textAnchor="middle" fill="#0df2f2" fontSize="6" fontFamily="monospace">N</text>
+              </svg>
             </div>
-          )}
 
-          {/* Left HUD */}
-          <div className="fi" style={{ position: "absolute", top: 16, left: 16, display: "flex", flexDirection: "column", gap: 10, pointerEvents: "none" }}>
-            <div className="gl" style={{ padding: 12, borderRadius: 12, borderLeft: "2px solid #0df2f2", minWidth: 180 }}>
-              <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "rgba(13,242,242,0.5)", marginBottom: 4 }}>Sunlight Direction</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "white" }}>{windDir} — {environmentalData?.sun_exposure_hours?.toFixed(1) ?? "8.0"}h/day</div>
+            {/* Controls hint */}
+            <div style={{ position:"absolute",bottom:8,right:68,fontSize:10,fontFamily:"monospace",color:"#334155",textAlign:"right" }}>
+              Drag to orbit • Scroll to zoom<br/>Right-drag to pan
             </div>
-            <div className="gl" style={{ padding: 12, borderRadius: 12, borderLeft: "2px solid #3b82f6", minWidth: 180 }}>
-              <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "rgba(59,130,246,0.5)", marginBottom: 4 }}>Wind Direction</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "white" }}>Prevailing {windDir}</div>
-            </div>
-            {rooms.length > 0 && (
-              <div className="gl" style={{ padding: 12, borderRadius: 12, borderLeft: "2px solid #2ecc71", minWidth: 180 }}>
-                <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "rgba(46,204,113,0.5)", marginBottom: 4 }}>Floor Plan</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "white" }}>
-                  {rooms.length} Rooms · {rooms.reduce((a: number, r: any) => a + (r.width ?? 0) * (r.height ?? 0), 0).toFixed(0)}m²
-                </div>
-              </div>
-            )}
+
+            {/* Room legend */}
+            <RoomLegend rooms={rooms} />
           </div>
-
-          {/* Compass */}
-          <div className="fi" style={{ position: "absolute", top: 16, right: 16, pointerEvents: "none" }}>
-            <div className="gl" style={{ width: 56, height: 56, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", border: "2px solid rgba(13,242,242,0.2)" }}>
-              <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 24, transform: "rotate(45deg)" }}>navigation</span>
-              <span style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)", fontSize: 8, fontWeight: 900, color: "#0df2f2" }}>N</span>
-              <span style={{ position: "absolute", bottom: -8, left: "50%", transform: "translateX(-50%)", fontSize: 8, color: "#475569" }}>S</span>
-              <span style={{ position: "absolute", right: -8, top: "50%", transform: "translateY(-50%)", fontSize: 8, color: "#475569" }}>E</span>
-              <span style={{ position: "absolute", left: -8, top: "50%", transform: "translateY(-50%)", fontSize: 8, color: "#475569" }}>W</span>
-            </div>
-          </div>
-
-          {/* Scene toggles */}
-          <div style={{ position: "absolute", top: 86, right: 16, display: "flex", flexDirection: "column", gap: 6 }}>
-            {[
-              { l: "Wind", on: showWind, s: setShowWind, icon: "air", c: "#0df2f2" },
-              { l: "Sun", on: showSun, s: setShowSun, icon: "wb_sunny", c: "#f59e0b" },
-              { l: "Grid", on: showGrid, s: setShowGrid, icon: "grid_on", c: "#64748b" },
-              { l: "Dust", on: showDust, s: setShowDust, icon: "blur_on", c: "#2ecc71" },
-            ].map(({ l, on, s, icon, c }) => (
-              <button key={l} onClick={() => s(!on)} className="gl" style={{ width: 48, height: 40, borderRadius: 8, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", border: on ? `1px solid ${c}50` : "1px solid rgba(255,255,255,0.06)" }}>
-                <span className="material-symbols-outlined" style={{ color: on ? c : "#475569", fontSize: 16 }}>{icon}</span>
-                <span style={{ fontSize: 8, textTransform: "uppercase", color: on ? c : "#475569" }}>{l}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Bottom left */}
-          <div className="gl fi" style={{ position: "absolute", bottom: 16, left: 16, padding: "10px 16px", borderRadius: 12, pointerEvents: "none" }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: "rgba(13,242,242,0.4)", textTransform: "uppercase", letterSpacing: "0.15em", marginBottom: 4 }}>Rendering Engine</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: "white", fontStyle: "italic" }}>Three.js WebGL</span>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#0df2f2", animation: "hud-pulse 2s infinite", display: "inline-block" }} />
-              <span style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(13,242,242,0.6)" }}>{fps} FPS</span>
-            </div>
-            <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>
-              {rooms.length > 0 ? `${rooms.length} rooms · ${rooms.reduce((a: number, r: any) => a + (r.width ?? 0) * (r.height ?? 0), 0).toFixed(0)}m²` : "Preview model"}
-            </div>
-          </div>
-
-          {/* Bottom right hint */}
-          <div className="gl fi" style={{ position: "absolute", bottom: 16, right: 16, padding: "10px 16px", borderRadius: 12, fontSize: 10, color: "rgba(13,242,242,0.4)", pointerEvents: "none" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>mouse</span>
-              Drag to orbit · Scroll to zoom
-            </div>
-            <div style={{ color: "rgba(13,242,242,0.25)" }}>Right-drag to pan</div>
-          </div>
-
-          {/* Room legend */}
-          {rooms.length > 0 && (
-            <div className="gl fi" style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", padding: "10px 16px", borderRadius: 12, pointerEvents: "none" }}>
-              <div style={{ fontSize: 9, fontWeight: 700, color: "rgba(13,242,242,0.4)", textTransform: "uppercase", letterSpacing: "0.15em", marginBottom: 6 }}>Room Legend</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                {Object.entries(ROOM_COLORS).map(([k, c]) => (
-                  <div key={k} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ width: 12, height: 12, borderRadius: 2, background: c, opacity: 0.75, display: "inline-block" }} />
-                    <span style={{ fontSize: 10, color: "#94a3b8", textTransform: "capitalize" }}>{k}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </div>
-
-      <style>{`
-        @keyframes hud-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-      `}</style>
     </>
   );
 }

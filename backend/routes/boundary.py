@@ -12,25 +12,30 @@ logger = logging.getLogger(__name__)
 
 @router.get("/plot-boundary")
 async def plot_boundary(lat: float = Query(...), lon: float = Query(...)):
-    """Returns plot boundary polygon and buildability check."""
-    buildability = await check_point_buildability(lat, lon)
-    boundary = await get_plot_boundary(lat, lon)
+    """Returns actual plot boundary polygon, real area, and buildability check."""
+    buildability, (polygon, area_sqm) = await asyncio.gather(
+        check_point_buildability(lat, lon),
+        _get_boundary_with_area(lat, lon),
+    )
     return {
-        "lat": lat, "lon": lon,
+        "lat": lat,
+        "lon": lon,
         "is_buildable": buildability["is_buildable"],
         "reason": buildability["reason"],
         "land_use": buildability["land_use"],
-        "boundary": boundary or [],
+        "boundary": polygon or [],
+        "area_sqm": area_sqm,
     }
+
+
+async def _get_boundary_with_area(lat: float, lon: float):
+    """Wrapper to return (polygon, area_sqm) from get_plot_boundary."""
+    return await get_plot_boundary(lat, lon)
 
 
 @router.get("/legal-verify")
 async def legal_verify(lat: float = Query(...), lon: float = Query(...)):
-    """
-    Legal verification endpoint — checks OSM land use, flood zone,
-    and seismic data for the given coordinates.
-    Returns a structured legal assessment. Never throws 500.
-    """
+    """Legal verification: OSM land use, flood zone, seismic data."""
     try:
         result = await _run_legal_verification(lat, lon)
         return result
@@ -39,32 +44,27 @@ async def legal_verify(lat: float = Query(...), lon: float = Query(...)):
         return _safe_defaults(lat, lon)
 
 
-# ── Internal legal verification logic ────────────────────────────────────────
-
 async def _run_legal_verification(lat: float, lon: float) -> dict:
-    """Run all legal checks concurrently with timeouts."""
     import httpx
 
     async def osm_check():
-        """Check OSM for land use type."""
         d = 0.001
         s, w, n, e = lat - d, lon - d, lat + d, lon + d
         query = f"""
-        [out:json][timeout:10];
-        (
-          way[landuse]({s},{w},{n},{e});
-          way[natural]({s},{w},{n},{e});
-          way[leisure=park]({s},{w},{n},{e});
-          way[boundary=protected_area]({s},{w},{n},{e});
-        );
-        out tags;
-        """
+[out:json][timeout:10];
+(
+  way[landuse]({s},{w},{n},{e});
+  way[natural]({s},{w},{n},{e});
+  way[leisure=park]({s},{w},{n},{e});
+  way[boundary=protected_area]({s},{w},{n},{e});
+);
+out tags;
+"""
         try:
             async with httpx.AsyncClient(timeout=12.0) as c:
                 r = await c.post("https://overpass-api.de/api/interpreter", data={"data": query})
                 if r.status_code == 200:
-                    elements = r.json().get("elements", [])
-                    for el in elements:
+                    for el in r.json().get("elements", []):
                         tags = el.get("tags", {})
                         lu = tags.get("landuse", "")
                         nat = tags.get("natural", "")
@@ -87,7 +87,6 @@ async def _run_legal_verification(lat: float, lon: float) -> dict:
         return {"land_use": "unknown", "buildable": True, "exclusion": None}
 
     async def flood_check():
-        """Check flood risk via GloFAS (Open-Meteo)."""
         try:
             async with httpx.AsyncClient(timeout=10.0) as c:
                 r = await c.get(
@@ -95,28 +94,20 @@ async def _run_legal_verification(lat: float, lon: float) -> dict:
                     params={"latitude": lat, "longitude": lon, "daily": "river_discharge", "forecast_days": 1}
                 )
                 if r.status_code == 200:
-                    data = r.json()
-                    discharge = data.get("daily", {}).get("river_discharge", [None])[0]
+                    discharge = r.json().get("daily", {}).get("river_discharge", [None])[0]
                     if discharge is not None:
                         q = float(discharge)
-                        if q > 500:
-                            return {"zone": "AE", "score": 20.0, "sfha": True}
-                        elif q > 200:
-                            return {"zone": "A", "score": 40.0, "sfha": True}
-                        elif q > 50:
-                            return {"zone": "B", "score": 60.0, "sfha": False}
-                        elif q > 10:
-                            return {"zone": "X (Moderate)", "score": 75.0, "sfha": False}
-                        else:
-                            return {"zone": "X", "score": 90.0, "sfha": False}
+                        if q > 500: return {"zone": "AE", "score": 20.0, "sfha": True}
+                        elif q > 200: return {"zone": "A", "score": 40.0, "sfha": True}
+                        elif q > 50: return {"zone": "B", "score": 60.0, "sfha": False}
+                        elif q > 10: return {"zone": "X (Moderate)", "score": 75.0, "sfha": False}
+                        else: return {"zone": "X", "score": 90.0, "sfha": False}
         except Exception as e:
             logger.warning(f"Flood check failed: {e}")
-        # Fallback: derive from elevation proxy
         rng = random.Random(f"flood{lat:.3f}{lon:.3f}")
         return {"zone": "X", "score": round(rng.uniform(65, 90), 1), "sfha": False}
 
     async def seismic_check():
-        """Check seismic hazard via USGS."""
         try:
             async with httpx.AsyncClient(timeout=10.0) as c:
                 r = await c.get(
@@ -125,18 +116,12 @@ async def _run_legal_verification(lat: float, lon: float) -> dict:
                             "siteClass": "D", "title": "ECO3D"}
                 )
                 if r.status_code == 200:
-                    output = r.json().get("output", {})
-                    pga = float(output.get("pga", 0.05))
-                    if pga < 0.05:
-                        zone, score = "Zone I", 95.0
-                    elif pga < 0.10:
-                        zone, score = "Zone II", 80.0
-                    elif pga < 0.20:
-                        zone, score = "Zone III", 65.0
-                    elif pga < 0.40:
-                        zone, score = "Zone IV", 45.0
-                    else:
-                        zone, score = "Zone V", 25.0
+                    pga = float(r.json().get("output", {}).get("pga", 0.05))
+                    if pga < 0.05: zone, score = "Zone I", 95.0
+                    elif pga < 0.10: zone, score = "Zone II", 80.0
+                    elif pga < 0.20: zone, score = "Zone III", 65.0
+                    elif pga < 0.40: zone, score = "Zone IV", 45.0
+                    else: zone, score = "Zone V", 25.0
                     return {"zone": zone, "pga_g": round(pga, 3), "score": score}
         except Exception as e:
             logger.warning(f"Seismic check failed: {e}")
@@ -144,7 +129,6 @@ async def _run_legal_verification(lat: float, lon: float) -> dict:
         pga = round(rng.uniform(0.04, 0.15), 3)
         return {"zone": "Zone II", "pga_g": pga, "score": round(rng.uniform(70, 90), 1)}
 
-    # Run all checks concurrently with a master timeout
     try:
         osm, flood, seismic = await asyncio.wait_for(
             asyncio.gather(osm_check(), flood_check(), seismic_check()),
@@ -154,26 +138,18 @@ async def _run_legal_verification(lat: float, lon: float) -> dict:
         logger.warning("Legal verify timed out, using defaults")
         return _safe_defaults(lat, lon)
 
-    # Compute overall legal score
     lu_score = 0.0 if osm["exclusion"] else 85.0
-    legal_score = round(
-        0.40 * lu_score +
-        0.35 * flood["score"] +
-        0.15 * seismic["score"] +
-        0.10 * 80.0,
-        1
-    )
-
-    is_buildable = osm["buildable"] and flood["sfha"] is False or flood["zone"].startswith("X")
-    if osm["exclusion"] in ("military", "protected_area", "cemetery"):
+    legal_score = round(0.40 * lu_score + 0.35 * flood["score"] + 0.15 * seismic["score"] + 0.10 * 80.0, 1)
+    is_buildable = osm["buildable"] and (not flood.get("sfha") or flood["zone"].startswith("X"))
+    if osm.get("exclusion") in ("military", "protected_area", "cemetery"):
         is_buildable = False
 
     warnings = []
-    if flood["sfha"]:
-        warnings.append(f"Located in SFHA flood zone {flood['zone']} — flood insurance required")
-    if seismic["pga_g"] > 0.20:
-        warnings.append(f"High seismic hazard ({seismic['zone']}, PGA {seismic['pga_g']}g) — enhanced structural design needed")
-    if osm["exclusion"]:
+    if flood.get("sfha"):
+        warnings.append(f"SFHA flood zone {flood['zone']} — flood insurance required")
+    if seismic.get("pga_g", 0) > 0.20:
+        warnings.append(f"High seismic hazard ({seismic['zone']}, PGA {seismic['pga_g']}g)")
+    if osm.get("exclusion"):
         warnings.append(f"Land classified as {osm['exclusion']} — building may be restricted")
 
     return {
@@ -193,7 +169,6 @@ async def _run_legal_verification(lat: float, lon: float) -> dict:
 
 
 def _safe_defaults(lat: float, lon: float) -> dict:
-    """Always-available fallback result."""
     rng = random.Random(f"legal{lat:.3f}{lon:.3f}")
     return {
         "is_legally_buildable": True,
