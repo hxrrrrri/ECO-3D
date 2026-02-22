@@ -1,0 +1,17 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+sqlalchemy>=2.0.0
+aiosqlite>=0.20.0          # SQLite async driver (no setup needed)
+asyncpg>=0.29.0            # PostgreSQL async driver (optional)
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-dotenv>=1.0.0
+httpx>=0.27.0
+pillow>=10.0.0
+numpy>=1.26.0
+#AI / ML (optional — app runs without these using synthetic data)
+torch>=2.0.0
+torchvision>=0.15.0
+xgboost>=2.0.0
+scikit-learn>=1.4.0
+ultralytics>=8.0.0

@@ -1,0 +1,6 @@
+{
+  "mae": 2.5467,
+  "r2": 0.9336,
+  "best_val_loss": 0.001012,
+  "epochs_trained": 250
+}

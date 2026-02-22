@@ -1,0 +1,24 @@
+# ECO-3D AI Training Requirements
+# Install with:  pip install -r scripts/requirements_training.txt
+
+# ── Core (always needed) ─────────────────────────────────────────────────────
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+matplotlib>=3.8.0
+
+# ── Flood Model (Layer 3) ────────────────────────────────────────────────────
+xgboost>=2.0.0
+
+# ── Buildability Model (Layer 4) + Segmentation (Layer 1) ───────────────────
+# CPU-only PyTorch (smaller download — fine for training on laptop)
+# Visit https://pytorch.org/get-started/locally/ for GPU builds
+torch>=2.2.0
+torchvision>=0.17.0
+
+# ── Tree Detection (Layer 1b) ────────────────────────────────────────────────
+ultralytics>=8.0.0     # Uncomment when you have a tree-annotated dataset
+                          # Base YOLOv8 weights auto-download on first run
+
+# ── Image handling ───────────────────────────────────────────────────────────
+Pillow>=10.0.0

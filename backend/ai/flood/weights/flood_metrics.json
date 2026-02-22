@@ -1,0 +1,13 @@
+{
+  "mae": 0.04022,
+  "r2": 0.83511,
+  "n_estimators_used": 153,
+  "feature_importances": {
+    "elevation_m": 0.5401,
+    "slope_deg": 0.1579,
+    "ndvi": 0.1151,
+    "rainfall_mm": 0.0734,
+    "soil_stability": 0.0509,
+    "distance_to_water_m": 0.0626
+  }
+}

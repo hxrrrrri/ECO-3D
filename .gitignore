@@ -1,0 +1,23 @@
+# Python
+backend/venv/
+venv/
+__pycache__/
+*.pyc
+
+venv/
+eco3d/backend/venv/
+
+# Node
+eco3d/frontend/node_modules/
+eco3d/frontend/.next/
+frontend/node_modules/
+node_modules/
+frontend/.next/
+.next/
+
+# Env
+.env
+
+# OS
+.DS_Store
+Thumbs.db
