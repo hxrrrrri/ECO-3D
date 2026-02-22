@@ -1,480 +1,455 @@
-# ECO-3D — Complete Setup Guide (A to Z)
+# ECO-3D Studio — Setup & Deployment Guide
 
-> This guide takes you from zero to a fully running ECO-3D instance. Follow **Section 1** for a zero-config 5-minute quickstart, then proceed to later sections to unlock full AI capabilities and production deployment.
+Complete installation instructions from zero to production.
 
 ---
 
 ## Table of Contents
 
 1. [Prerequisites](#1-prerequisites)
-2. [Quick Start — No ML Required](#2-quick-start--no-ml-required)
-3. [Backend Configuration](#3-backend-configuration)
-4. [Frontend Configuration](#4-frontend-configuration)
-5. [ML Model Setup (Full AI Pipeline)](#5-ml-model-setup-full-ai-pipeline)
-6. [PostgreSQL + PostGIS (Production Database)](#6-postgresql--postgis-production-database)
-7. [Docker Compose — Full Stack](#7-docker-compose--full-stack)
-8. [External API Keys](#8-external-api-keys)
-9. [Running in Production (Systemd / PM2)](#9-running-in-production-systemd--pm2)
-10. [Troubleshooting](#10-troubleshooting)
-11. [Development Tips](#11-development-tips)
+2. [Repository Structure](#2-repository-structure)
+3. [Backend Setup — Python / FastAPI](#3-backend-setup--python--fastapi)
+4. [Frontend Setup — Next.js 14](#4-frontend-setup--nextjs-14)
+5. [Real-Time Data APIs — No Keys Required](#5-real-time-data-apis--no-keys-required)
+6. [ML Model Weights (Optional)](#6-ml-model-weights-optional)
+7. [PostgreSQL + PostGIS (Production)](#7-postgresql--postgis-production)
+8. [Docker Compose — Full Stack](#8-docker-compose--full-stack)
+9. [Running Tests](#9-running-tests)
+10. [Production Deployment](#10-production-deployment)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
 ## 1. Prerequisites
 
-### Minimum (Quick Start)
-| Tool | Version | Notes |
+| Tool | Minimum Version | Check |
 |---|---|---|
-| Node.js | ≥ 18.x | [nodejs.org](https://nodejs.org) |
-| Python | ≥ 3.11 | [python.org](https://python.org) |
-| pip | ≥ 23.x | Bundled with Python |
-| git | Any | For cloning |
+| Python | 3.11+ | `python3 --version` |
+| Node.js | 18+ | `node --version` |
+| npm | 9+ | `npm --version` |
+| Git | any | `git --version` |
+| Docker (optional) | 24+ | `docker --version` |
 
-### Full ML Pipeline (Optional)
-| Tool | Purpose |
-|---|---|
-| CUDA-capable GPU | Dramatically speeds up DeepLabV3 and YOLOv8 inference |
-| CUDA ≥ 11.8 | Required for GPU-accelerated PyTorch |
-| 8GB+ RAM | XGBoost training + PyTorch inference |
-
-### Production Extras
-| Tool | Purpose |
-|---|---|
-| Docker ≥ 24 | Container orchestration |
-| Docker Compose ≥ 2.x | Multi-service orchestration |
-| PostgreSQL 16 + PostGIS 3.4 | Production-grade spatial database |
+No API keys are required for the core real-time data pipeline. All seven environmental data APIs (Open-Elevation, Open-Meteo, SoilGrids, NASA POWER, GloFAS, OSM Overpass, NOAA formula) are free and key-free.
 
 ---
 
-## 2. Quick Start — No ML Required
+## 2. Repository Structure
 
-The backend auto-detects missing ML weights and uses **physics-based synthetic fallbacks** for every AI layer. The application is fully functional — analysis results, floor plans, and 3D models all work without any ML installation.
-
-### Step 1: Clone the Repository
-
-```bash
-git clone https://github.com/your-org/eco3d.git
-cd eco3d
+```
+ECO-3D/
+├── frontend/        Next.js 14 app
+├── backend/         FastAPI + AI pipeline
+├── scripts/         ML training scripts
+├── docker-compose.yml
+├── .env.example
+├── README.md
+└── SETUP.md
 ```
 
-### Step 2: Backend Setup
+---
+
+## 3. Backend Setup — Python / FastAPI
+
+### 3.1 Clone & create virtual environment
 
 ```bash
-cd backend
+git clone https://github.com/your-org/eco-3d.git
+cd eco-3d/backend
 
-# Create isolated virtual environment
 python3 -m venv venv
-
-# Activate virtual environment
-source venv/bin/activate          # Linux / macOS
-# venv\Scripts\activate.bat       # Windows CMD
-# venv\Scripts\Activate.ps1       # Windows PowerShell
-
-# Install Python dependencies (core only, no ML libs)
-pip install -r requirements.txt
-
-# Copy environment configuration
-cp ../.env.example .env
-
-# The database auto-creates (SQLite). No migration command needed.
-# Start the backend server
-uvicorn main:app --reload --port 8000
+source venv/bin/activate          # Windows: venv\Scripts\activate
 ```
 
-**Verify:** Open [http://localhost:8000/docs](http://localhost:8000/docs) — you should see the Swagger UI with all API endpoints.
+### 3.2 Install dependencies
 
-**Verify:** `curl http://localhost:8000/health` → `{"status":"ok","version":"2.0.0"}`
+```bash
+pip install -r requirements.txt
+```
 
-### Step 3: Frontend Setup
+Key packages installed:
 
-Open a **new terminal**:
+```
+fastapi==0.110.0          uvicorn[standard]==0.29.0
+sqlalchemy[asyncio]==2.0  aiosqlite==0.20.0
+pydantic==2.7.0           python-jose[cryptography]==3.3.0
+bcrypt==4.1.2             httpx==0.27.0
+torch==2.3.0              torchvision==0.18.0
+ultralytics==8.2.0        xgboost==2.0.3
+python-multipart==0.0.9   sse-starlette==2.1.0
+```
+
+### 3.3 Configure environment
+
+```bash
+cp ../.env.example .env
+```
+
+Edit `.env`:
+
+```env
+# Required
+DATABASE_URL=sqlite+aiosqlite:///./eco3d.db
+SECRET_KEY=your-secret-here          # generate: openssl rand -hex 32
+
+# Optional — defaults work without these
+ACCESS_TOKEN_EXPIRE_MINUTES=1440
+MAPBOX_TOKEN=                        # leave blank to use OSM tiles
+WEIGHTS_DIR=training/weights         # path to ML model weights
+```
+
+### 3.4 Initialise database & run
+
+```bash
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+On first startup the app creates the SQLite database and all tables automatically. You should see:
+
+```
+INFO: Database tables created/verified
+INFO: ECO-3D API v2.1.0 — real-time data mode active
+INFO: Application startup complete.
+INFO: Uvicorn running on http://0.0.0.0:8000
+```
+
+Verify: `curl http://localhost:8000/health` → `{"status":"ok","version":"2.1.0"}`
+
+### 3.5 Backend dependencies explained
+
+**Core real-time data fetching** — `httpx` (async HTTP client) with per-API timeout tuning:
+- Open-Elevation: 12 s timeout (5-point DEM lookup)
+- Open-Meteo Forecast: 12 s (real-time wind)
+- Open-Meteo ERA5 Climate: 20 s (30-year monthly aggregation)
+- SoilGrids ISRIC REST v2: 15 s (6 soil property layers)
+- NASA POWER API: 20 s (365 daily observations)
+- Open-Meteo GloFAS: 12 s (90-day discharge forecast)
+- OSM Overpass: 14 s (spatial water feature query)
+
+All calls fire concurrently via `asyncio.gather()`. Total Layer 2 latency is bounded by the slowest single API (~15–20 s worst case), not the sum.
+
+---
+
+## 4. Frontend Setup — Next.js 14
+
+### 4.1 Install
 
 ```bash
 cd frontend
-
-# Install Node dependencies (~2 minutes first time)
 npm install
+```
 
-# Point frontend at the local backend
+### 4.2 Configure
+
+```bash
+# Minimum required
 echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
+```
 
-# Start the development server
+Optional additions to `.env.local`:
+
+```env
+NEXT_PUBLIC_MAPBOX_TOKEN=pk.eyJ1...   # for satellite tile quality upgrade
+NEXT_PUBLIC_APP_NAME=ECO-3D Studio
+```
+
+### 4.3 Run development server
+
+```bash
 npm run dev
 ```
 
-**Verify:** Open [http://localhost:3000](http://localhost:3000) — the ECO-3D landing page should appear.
+Navigate to [http://localhost:3000](http://localhost:3000).
 
-### Step 4: Create an Account and Test
-
-1. Navigate to [http://localhost:3000/signup](http://localhost:3000/signup)
-2. Create an account with any email/password
-3. Log in at [http://localhost:3000/login](http://localhost:3000/login)
-4. Navigate to [http://localhost:3000/map](http://localhost:3000/map)
-5. Click anywhere on the map to place a plot marker
-6. Click **Analyze Plot** — the 5-layer pipeline runs (using synthetic fallbacks)
-7. View results in the Analysis, Floor Plan, and 3D Model tabs
-
-> **Expected time to first result:** ~3–8 seconds (synthetic mode)
-
----
-
-## 3. Backend Configuration
-
-### The `.env` File
-
-Copy `.env.example` to `backend/.env` and customize:
-
-```env
-# ── Database ──────────────────────────────────────────────────────────────────
-# Development (zero config — auto-creates eco3d.db in backend/)
-DATABASE_URL=sqlite+aiosqlite:///./eco3d.db
-
-# Production (PostgreSQL with PostGIS)
-# DATABASE_URL=postgresql+asyncpg://eco3d:eco3d@localhost:5432/eco3d
-
-# ── Security ──────────────────────────────────────────────────────────────────
-# Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY=your-super-secret-key-replace-this-in-production
-
-# JWT token lifetime in minutes (1440 = 24 hours)
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
-
-# ── External APIs (all optional — synthetic fallback when missing) ─────────────
-OPENWEATHER_API_KEY=your_openweathermap_api_key
-MAPBOX_TOKEN=your_mapbox_token
-
-# ── Redis (optional — advanced SSE / Celery task queue) ───────────────────────
-REDIS_URL=redis://localhost:6379
-
-# ── ML Weights Directory ──────────────────────────────────────────────────────
-# Where trained model .pkl and .pth files are stored
-WEIGHTS_DIR=training/weights
-```
-
-### Key Backend Files
-
-| File | Purpose |
-|---|---|
-| `main.py` | FastAPI app initialization, CORS, router registration |
-| `config.py` | Loads `.env` via `python-dotenv` |
-| `database/connection.py` | SQLAlchemy async engine factory (SQLite ↔ PostgreSQL) |
-| `database/session.py` | `get_db()` FastAPI dependency for request-scoped sessions |
-| `services/analysis_pipeline.py` | 5-layer AI orchestrator with full crash isolation |
-
-### Running Backend in Different Modes
+### 4.4 Build for production
 
 ```bash
-# Development (auto-reload on code changes)
-uvicorn main:app --reload --port 8000
-
-# Development with verbose logging
-uvicorn main:app --reload --port 8000 --log-level debug
-
-# Production (4 workers, no reload)
-uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
-
-# With Gunicorn process manager (recommended for production)
-pip install gunicorn
-gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+npm run build
+npm run start
 ```
 
 ---
 
-## 4. Frontend Configuration
+## 5. Real-Time Data APIs — No Keys Required
 
-### Environment Variables
+All seven APIs used for environmental data are free and require no registration or API key. Here is what each does and how to verify it independently:
 
-The frontend reads a single required variable:
-
+### Open-Elevation (SRTM 30m DEM)
+Provides elevation in metres at any lat/lon. The pipeline queries 5 points (centre + N/S/E/W) to compute slope via the max rise-over-run.
 ```bash
-# frontend/.env.local
-NEXT_PUBLIC_API_URL=http://localhost:8000     # Development
-# NEXT_PUBLIC_API_URL=https://api.yourdomain.com  # Production
+curl "https://api.open-elevation.com/api/v1/lookup" \
+  -H "Content-Type: application/json" \
+  -d '{"locations":[{"latitude":10.0,"longitude":76.3}]}'
+# → {"results":[{"elevation":14}]}
 ```
 
-### Key Frontend Scripts
-
+### Open-Meteo Forecast (Real-time wind)
+Current wind speed (m/s) and direction (°) at 10 m above ground.
 ```bash
-npm run dev        # Start development server (hot reload, port 3000)
-npm run build      # Production build (outputs to .next/)
-npm run start      # Serve the production build
-npm run lint       # ESLint check
+curl "https://api.open-meteo.com/v1/forecast?latitude=10&longitude=76.3&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&forecast_days=1"
 ```
 
-### Next.js Configuration (`next.config.js`)
+### Open-Meteo Climate — ERA5 (30-year rainfall normals)
+Monthly precipitation_sum aggregated to annual total (mm/yr).
+```bash
+curl "https://climate-api.open-meteo.com/v1/climate?latitude=10&longitude=76.3&start_date=1991-01-01&end_date=2020-12-31&monthly=precipitation_sum&models=ERA5"
+```
 
-Image domains for satellite tiles and remote assets are pre-configured. If you add a custom CDN or Mapbox domain, add it to `images.domains`.
+### SoilGrids REST v2 — ISRIC / Wageningen University (soil profile)
+Six soil properties at 0–5 cm depth: clay, sand, silt (g/kg), phh2o (pH×10), soc (dg/kg), bdod (cg/cm³). Resolution: 250 m global.
+```bash
+curl "https://rest.isric.org/soilgrids/v2.0/properties/query?lon=76.3&lat=10&property=clay&property=sand&property=silt&property=phh2o&property=soc&property=bdod&depth=0-5cm&value=mean"
+```
+
+SoilGrids unit conversions applied by the pipeline:
+- `clay_pct = clay_raw / 10`   (g/kg → %)
+- `soil_ph  = phh2o_raw / 10`  (pH×10 → pH)
+- `org_carbon = soc_raw / 10`  (dg/kg → g/kg)
+- `bulk_density = bdod_raw / 100` (cg/cm³ → g/cm³)
+
+USDA Texture Triangle classification maps clay/sand/silt % to a texture name (Sandy Loam, Loam, Clay Loam, Clay, etc.) and a binary `soil_buildable` flag.
+
+### NASA POWER API (NDVI proxy + solar radiation)
+Daily shortwave radiation (ALLSKY_SFC_SW_DWN) and photosynthetically active radiation (CLRSKY_SFC_PAR_TOT) over the past 365 days. NDVI is estimated as: `FPAR = (avg_PAR × 0.45) / (avg_SW × 0.48)` → `NDVI ≈ FPAR × 0.72 + 0.05`.
+```bash
+curl "https://power.larc.nasa.gov/api/temporal/daily/point?parameters=ALLSKY_SFC_SW_DWN,CLRSKY_SFC_PAR_TOT&community=AG&longitude=76.3&latitude=10&start=20240101&end=20241231&format=JSON"
+```
+
+### Open-Meteo GloFAS — EU Copernicus (river discharge 90-day forecast)
+River discharge (m³/s) forecast for 90 days. Peak and mean values mapped to a GloFAS flood index (0–1) via logarithmic thresholds. Returns null for plots far from any river system.
+```bash
+curl "https://flood-api.open-meteo.com/v1/flood?latitude=10&longitude=76.3&daily=river_discharge&forecast_days=90"
+```
+
+### OSM Overpass API (distance to water)
+Queries rivers, streams, canals, wetlands, lakes within 5 km. Computes Haversine distance to nearest centroid.
+```bash
+curl -X POST "https://overpass-api.de/api/interpreter" \
+  -d 'data=[out:json];way["waterway"~"^(river|stream)$"](9.95,76.25,10.05,76.35);out center;'
+```
+
+### NOAA Astronomical Formula (sun hours)
+No network call. Computed from site latitude and Julian day number using the sunrise equation: `cos(hour_angle) = −tan(φ) × tan(δ)` where δ = 23.45° × sin(360/365 × (DOY − 81)).
 
 ---
 
-## 5. ML Model Setup (Full AI Pipeline)
+## 6. ML Model Weights (Optional)
 
-Skip this section if you are satisfied with synthetic fallbacks. Follow these steps to enable the authentic ML pipeline.
+The physics-based `compute_flood_risk()` and `compute_buildability()` functions run without any ML weights and produce accurate results for real data. ML model weights provide an optional second opinion.
 
-### Step 1: Install ML Dependencies
+### 6.1 Directory structure
 
-In `backend/requirements.txt`, the ML packages are listed. Install them:
+```
+backend/training/weights/
+├── flood_model.json            XGBoost booster (if trained)
+└── buildability_model.pt       PyTorch MLP state dict (if trained)
+```
+
+### 6.2 Train flood model (XGBoost, ~10 seconds)
 
 ```bash
 cd backend
-source venv/bin/activate
-
-# Install full ML stack (~2-4GB download including PyTorch)
-pip install torch>=2.0.0 torchvision>=0.15.0 torchaudio --index-url https://download.pytorch.org/whl/cu118
-# OR CPU-only (smaller):
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-
-pip install xgboost>=2.0.0 scikit-learn>=1.4.0 ultralytics>=8.0.0 pillow requests
+python scripts/train_flood_model.py
 ```
 
-### Step 2: Generate Training Data
-
-```bash
-cd scripts
-python generate_synthetic_data.py
+Generates 2 000 physics-informed synthetic samples:
+```python
+P(flood) = 0.40 × max(0, 1 − elev/100)
+         + 0.15 × max(0, 1 − slope/30)
+         + 0.10 × max(0, (rain − 500)/2500)
+         + 0.15 × max(0, 1 − NDVI)
+         + 0.10 × max(0, 1 − dist_water/500)
+         + 0.10 × soil_stability
+         + ε,    ε ~ N(0, 0.05)
 ```
-
-This generates `data/flood_training.csv` (2,000 rows) and `data/buildability_training.csv` (3,000 rows) using physics-based simulation equations.
-
-### Step 3: Train the XGBoost Flood Model
-
-```bash
-python train_flood_model.py
-```
-
-Training takes ~30 seconds on CPU. Saves weights to `backend/training/weights/flood_xgboost.pkl`.
 
 Expected output:
 ```
-Training XGBoost Flood Risk model on 2000 samples...
-  Features: elevation, slope, ndvi, rainfall_mm, soil_stability, distance_to_water
-  n_estimators=200, max_depth=6, learning_rate=0.05
-Training complete. RMSE: 0.042, R²: 0.94
-Saved: backend/training/weights/flood_xgboost.pkl
+Training XGBoost flood model on 2000 synthetic samples...
+  Train RMSE: 0.038   R²: 0.946
+  Test  RMSE: 0.042   R²: 0.941
+Model saved to training/weights/flood_model.json
 ```
 
-### Step 4: Train the MLP Buildability Model
+### 6.3 Train buildability model (PyTorch MLP, ~30 seconds)
 
 ```bash
-python train_buildability_model.py
+python scripts/train_buildability_model.py
 ```
 
-Training takes ~60 seconds on CPU (200 epochs). Saves to `backend/training/weights/buildability_mlp.pkl`.
+Architecture: `Linear(6→64) → ReLU → Dropout(0.1) → Linear(64→128) → ReLU → Dropout(0.1) → Linear(128→64) → ReLU → Linear(64→1)`. Total params: 17 217.
 
 Expected output:
 ```
-Training MLP Buildability model on 3000 samples...
-  Architecture: Linear(6→64)→ReLU→Dropout→Linear(64→128)→ReLU→Dropout→Linear(128→64)→ReLU→Linear(64→1)
-  Optimizer: Adam, lr=1e-3, weight_decay=1e-4, MSELoss
-  Epoch 0: loss=412.3
-  Epoch 50: loss=89.1
-  Epoch 100: loss=45.2
-  Epoch 150: loss=31.8
-  Epoch 200: loss=28.4
-Training complete. MAE: 4.2, R²: 0.91
-Saved: backend/training/weights/buildability_mlp.pkl
+Epoch 100/200  Loss: 38.42
+Epoch 200/200  Loss: 14.87
+Test MAE: 4.2 points   R²: 0.912
+Model saved to training/weights/buildability_model.pt
 ```
 
-### Step 5: Download Pre-trained Computer Vision Weights
+### 6.4 Verify models load
 
 ```bash
-# YOLOv8n base weights (auto-downloaded by ultralytics on first run)
-# OR download manually:
-wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt -O backend/yolov8n.pt
-
-# DeepLabV3+ResNet50 weights (auto-downloaded by torchvision on first use)
-# The model auto-downloads on first call to SatelliteSegmenter._load_model()
+python -c "
+from ai.flood.model import predict_flood_probability
+from ai.buildability.buildability_model import predict_buildability_score
+print('Flood:', predict_flood_probability({'elevation':15,'slope':2,'rainfall_mm':2800,'ndvi':0.6,'clay_fraction':0.28,'distance_to_water_m':300}))
+print('Build: OK')
+"
 ```
-
-> **Note:** Fine-tuned tree-specific YOLOv8 weights (`yolov8_trees.pt`) require a custom dataset (e.g., iTree dataset, Mapillary Vistas). The base `yolov8n.pt` is used with proxy class mapping until fine-tuning is performed.
-
-### Step 6: Set the Weights Directory
-
-Ensure `WEIGHTS_DIR` in your `.env` points to the correct location:
-
-```env
-WEIGHTS_DIR=training/weights
-```
-
-**After this setup:** Restart the backend server. The startup logs should show:
-```
-Loading XGBoost flood model from training/weights/flood_xgboost.pkl
-Loading MLP buildability model from training/weights/buildability_mlp.pkl
-Loading YOLOv8 tree weights / Loading DeepLabV3 weights
-ECO-3D backend ready
-```
-
-### Model Evaluation
-
-```bash
-cd scripts
-python evaluate_models.py
-```
-
-Outputs confusion matrices, RMSE, R², and feature importance charts for both trained models.
 
 ---
 
-## 6. PostgreSQL + PostGIS (Production Database)
+## 7. PostgreSQL + PostGIS (Production)
 
-### Option A: Docker (Recommended)
+### 7.1 Install PostgreSQL 16 + PostGIS 3.4
 
+**Ubuntu/Debian:**
+```bash
+sudo apt install postgresql-16 postgresql-16-postgis-3 -y
+```
+
+**macOS (Homebrew):**
+```bash
+brew install postgresql@16 postgis
+```
+
+**Docker (recommended for production):**
 ```bash
 docker run -d \
   --name eco3d-postgres \
-  -e POSTGRES_USER=eco3d \
-  -e POSTGRES_PASSWORD=eco3d \
   -e POSTGRES_DB=eco3d \
+  -e POSTGRES_USER=eco3d \
+  -e POSTGRES_PASSWORD=yourpassword \
   -p 5432:5432 \
-  -v eco3d_pgdata:/var/lib/postgresql/data \
   postgis/postgis:16-3.4
 ```
 
-Wait 10 seconds, then verify:
-```bash
-docker exec -it eco3d-postgres psql -U eco3d -c "SELECT PostGIS_Version();"
-```
-
-### Option B: Native Linux (Ubuntu/Debian)
+### 7.2 Create database
 
 ```bash
-sudo apt update && sudo apt install -y postgresql-16 postgresql-16-postgis-3
-
-sudo -u postgres psql << 'EOF'
-CREATE USER eco3d WITH PASSWORD 'eco3d';
-CREATE DATABASE eco3d OWNER eco3d;
-\c eco3d
-CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-EOF
+psql -U postgres -c "CREATE USER eco3d WITH PASSWORD 'yourpassword';"
+psql -U postgres -c "CREATE DATABASE eco3d OWNER eco3d;"
+psql -U eco3d -d eco3d -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+psql -U eco3d -d eco3d -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
 ```
 
-### Option C: macOS with Homebrew
+### 7.3 Update .env
 
-```bash
-brew install postgresql@16
-brew services start postgresql@16
-brew install postgis
-
-psql postgres << 'EOF'
-CREATE USER eco3d WITH PASSWORD 'eco3d';
-CREATE DATABASE eco3d OWNER eco3d;
-\c eco3d
-CREATE EXTENSION IF NOT EXISTS postgis;
-EOF
-```
-
-### Option D: Windows
-
-1. Download [PostgreSQL 16 installer](https://www.postgresql.org/download/windows/)
-2. During installation, note the port (default: 5432) and superuser password
-3. Open pgAdmin → Create user `eco3d`, database `eco3d`
-4. Open Query Tool on `eco3d` database and run:
-   ```sql
-   CREATE EXTENSION IF NOT EXISTS postgis;
-   CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-   ```
-
-### Link Backend to PostgreSQL
-
-Update `backend/.env`:
 ```env
-DATABASE_URL=postgresql+asyncpg://eco3d:eco3d@localhost:5432/eco3d
+DATABASE_URL=postgresql+asyncpg://eco3d:yourpassword@localhost:5432/eco3d
 ```
 
-Also install the async PostgreSQL driver:
-```bash
-pip install asyncpg psycopg2-binary
-```
-
-Restart the backend — tables are auto-created via SQLAlchemy `create_all` on startup.
-
----
-
-## 7. Docker Compose — Full Stack
-
-The entire application (Frontend, Backend, PostgreSQL) runs with a single command:
+### 7.4 Run migrations
 
 ```bash
-# From project root
-cp .env.example .env
-# Edit .env with your SECRET_KEY and any API keys
-
-docker-compose -f docker/docker-compose.yml up --build -d
-```
-
-| Service | Port | URL |
-|---|---|---|
-| Frontend (Next.js) | 3000 | http://localhost:3000 |
-| Backend (FastAPI) | 8000 | http://localhost:8000 |
-| PostgreSQL | 5432 | postgresql://eco3d:eco3d@localhost:5432/eco3d |
-
-To view logs:
-```bash
-docker-compose -f docker/docker-compose.yml logs -f backend
-docker-compose -f docker/docker-compose.yml logs -f frontend
-```
-
-To stop:
-```bash
-docker-compose -f docker/docker-compose.yml down
-# To also delete database volume:
-docker-compose -f docker/docker-compose.yml down -v
+uvicorn main:app --host 0.0.0.0 --port 8000
+# Tables are created automatically on first startup via SQLAlchemy
 ```
 
 ---
 
-## 8. External API Keys
+## 8. Docker Compose — Full Stack
 
-All external APIs are optional. Synthetic fallbacks activate automatically when keys are absent.
+### 8.1 docker-compose.yml
 
-### OpenWeatherMap (Rainfall Data)
+```yaml
+version: "3.9"
 
-1. Register at [openweathermap.org/api](https://openweathermap.org/api)
-2. Generate a free API key (Free tier: 1,000 calls/day)
-3. Set in `.env`: `OPENWEATHER_API_KEY=your_key_here`
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: eco3d
+      POSTGRES_USER: eco3d
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-eco3dpass}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eco3d"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-**Impact:** Without this key, annual rainfall is estimated from latitude-band climatological averages (±300mm accuracy).
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://eco3d:${POSTGRES_PASSWORD:-eco3dpass}@postgres:5432/eco3d
+      SECRET_KEY: ${SECRET_KEY}
+      WEIGHTS_DIR: /app/training/weights
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/training:/app/training
 
-### Mapbox (Satellite Tiles)
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
+      NEXT_PUBLIC_MAPBOX_TOKEN: ${MAPBOX_TOKEN:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
 
-1. Register at [mapbox.com](https://account.mapbox.com/auth/signup/)
-2. Create a public token with `styles:tiles` scope
-3. Set in `.env`: `MAPBOX_TOKEN=pk.eyJ1Ijoixxxxxxx...`
-4. In `frontend/.env.local`: `NEXT_PUBLIC_MAPBOX_TOKEN=pk.eyJ1Ijoixxxxxxx...`
+volumes:
+  pgdata:
+```
 
-**Impact:** Without this token, OpenStreetMap standard tiles are used (no satellite imagery). The AI pipeline continues to function identically.
+### 8.2 Launch
 
-### Open-Elevation API
+```bash
+SECRET_KEY=$(openssl rand -hex 32) docker compose up --build -d
+```
 
-Used automatically (no key required) at `https://api.open-elevation.com`. Rate-limited at ~100 req/min. For high-volume production use, consider self-hosting the [Open-Elevation server](https://github.com/Jorl17/open-elevation).
+View logs:
+```bash
+docker compose logs -f backend
+docker compose logs -f frontend
+```
 
 ---
 
-## 9. Running in Production (Systemd / PM2)
-
-### Backend — Systemd Service
+## 9. Running Tests
 
 ```bash
-sudo nano /etc/systemd/system/eco3d-backend.service
+cd backend
+pip install pytest pytest-asyncio httpx
+
+# Run all tests
+pytest tests/ -v
+
+# Test real-data pipeline specifically
+pytest tests/test_real_env_data.py -v
+
+# Test with real API calls (slower, requires internet)
+pytest tests/test_real_env_data.py -v -m "integration"
 ```
+
+The test suite uses `pytest-asyncio` for async endpoint tests. API calls in unit tests are mocked with `httpx.MockTransport`; integration tests call live APIs.
+
+---
+
+## 10. Production Deployment
+
+### 10.1 Backend — systemd service
 
 ```ini
+# /etc/systemd/system/eco3d-backend.service
 [Unit]
 Description=ECO-3D FastAPI Backend
 After=network.target postgresql.service
 
 [Service]
-Type=simple
-User=www-data
+Type=exec
+User=eco3d
 WorkingDirectory=/opt/eco3d/backend
-Environment="PATH=/opt/eco3d/backend/venv/bin"
-EnvironmentFile=/opt/eco3d/backend/.env
-ExecStart=/opt/eco3d/backend/venv/bin/gunicorn main:app \
-    -w 4 -k uvicorn.workers.UvicornWorker \
-    --bind 0.0.0.0:8000 \
-    --timeout 120 \
-    --access-logfile /var/log/eco3d/backend.log
+EnvironmentFile=/opt/eco3d/.env
+ExecStart=/opt/eco3d/backend/venv/bin/uvicorn main:app \
+          --host 0.0.0.0 --port 8000 --workers 4
 Restart=always
 RestartSec=5
 
@@ -483,160 +458,89 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable eco3d-backend
-sudo systemctl start eco3d-backend
-sudo systemctl status eco3d-backend
+sudo systemctl daemon-reload
+sudo systemctl enable --now eco3d-backend
 ```
 
-### Frontend — PM2
+### 10.2 Frontend — PM2
 
 ```bash
-npm install -g pm2
-cd /opt/eco3d/frontend
-npm run build
-pm2 start npm --name "eco3d-frontend" -- start
-pm2 save
-pm2 startup   # Follow the printed command to enable on boot
+cd frontend && npm run build
+pm2 start npm --name eco3d-frontend -- start -- -p 3000
+pm2 save && pm2 startup
 ```
 
-### Nginx Reverse Proxy
+### 10.3 Nginx reverse proxy with SSE support
 
 ```nginx
 server {
-    listen 80;
-    server_name yourdomain.com;
+    listen 443 ssl;
+    server_name your-domain.com;
 
-    # Frontend
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-    }
-
-    # Backend API
+    # API + SSE
     location /api/ {
-        rewrite ^/api/(.*) /$1 break;
-        proxy_pass http://localhost:8000;
+        proxy_pass http://127.0.0.1:8000/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
 
-        # SSE support — disable buffering for /notifications/stream
-        location /api/notifications/stream {
-            proxy_pass http://localhost:8000/notifications/stream;
-            proxy_buffering off;
-            proxy_cache off;
-            proxy_read_timeout 86400s;
-        }
+        # Critical for SSE (Server-Sent Events)
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_set_header Connection '';
+        chunked_transfer_encoding on;
+    }
+
+    # Frontend
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
     }
 }
 ```
 
+### 10.4 Rate limiting for external APIs
+
+The seven real-time APIs are free but have fair-use rate limits. For high-traffic production:
+
+| API | Rate limit | Mitigation |
+|---|---|---|
+| Open-Elevation | ~1 req/s | Redis cache on (lat, lon) pairs |
+| Open-Meteo | 10 000 req/day | Redis cache, 1-hr TTL |
+| SoilGrids ISRIC | ~1 req/s | Redis cache, 24-hr TTL (soil data is stable) |
+| NASA POWER | 1 000 req/day | Redis cache, 7-day TTL |
+| Open-Meteo GloFAS | 10 000 req/day | Redis cache, 6-hr TTL |
+| OSM Overpass | Fair use | Cache on bounding box |
+
+Recommended caching layer: `redis-py` with `aioredis` for async cache lookups before each API call.
+
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
-### Backend won't start: "ModuleNotFoundError"
-
+### Backend won't start: `ModuleNotFoundError: No module named 'torch'`
+PyTorch is large (~2 GB). The system runs without it — the physics-based fallback is always available.
 ```bash
-cd backend
-source venv/bin/activate
-pip install -r requirements.txt
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
-Ensure you are inside the virtual environment (`(venv)` prefix in terminal).
+### SoilGrids returns 404 or empty data
+Some remote locations have no SoilGrids coverage (e.g., open ocean, ice sheets). The latitude-calibrated fallback activates automatically. Check logs for `[SoilGrids] fallback`.
 
-### "CORS error" in browser console
+### GloFAS returns null / no discharge data
+Expected for locations far from any river system (deserts, highlands). The pipeline uses the full topo model without GloFAS blending. Check logs for `[GloFAS] Fallback`.
 
-The backend has `allow_origins=["*"]` by default (development mode). If you've restricted this in production, add your frontend domain to `CORSMiddleware` in `main.py`.
+### NASA POWER returns fill values (-999)
+Occasionally happens at extreme latitudes or for recent dates not yet processed. The pipeline filters out fill values and uses the ecological fallback. Check logs for `[NASA POWER] failed`.
 
-### "SQLite does not support..." error
-
-Some SQLAlchemy operations (e.g., `ALTER TABLE`) are limited in SQLite. For development, delete `eco3d.db` to reset:
-```bash
-rm backend/eco3d.db
-# Tables auto-recreate on next server start
-```
-
-### 3D model not visible / black screen
-
-- Ensure WebGL is enabled in your browser (most modern browsers enable it by default)
-- Disable browser hardware acceleration blockers or extensions
-- Check browser console for Three.js errors
-
-### XGBoost or PyTorch ImportError
-
-These libraries are not installed by default. To install:
-```bash
-pip install xgboost torch torchvision
-```
-Or remove them from requirements and let the synthetic fallback handle it.
+### Analysis takes > 30 seconds
+One or more external APIs are slow. All calls have hard timeouts (12–20 s each). The `asyncio.gather()` runs all concurrently so total wall time equals the slowest single call, not the sum. If consistently slow, enable Redis caching.
 
 ### SSE stream disconnects immediately
+Ensure Nginx has `proxy_buffering off` and `proxy_read_timeout 86400s`. Without this, Nginx buffers the stream and the browser never receives events.
 
-Ensure Nginx (if used) has `proxy_buffering off` for the `/notifications/stream` endpoint. Also check that the backend is running and the JWT token in `localStorage` is valid.
+### `Database is locked` (SQLite dev mode)
+SQLite supports limited concurrent writes. Either restart the backend to clear connections, or switch to PostgreSQL for production.
 
-### YOLOv8 / Ultralytics "model file not found"
-
-```bash
-# Download the base YOLOv8n weights manually
-wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt
-mv yolov8n.pt backend/yolov8n.pt
-```
-
----
-
-## 11. Development Tips
-
-### Useful Backend Commands
-
-```bash
-# Inspect the SQLite database
-sqlite3 backend/eco3d.db ".tables"
-sqlite3 backend/eco3d.db "SELECT * FROM users;"
-sqlite3 backend/eco3d.db "SELECT plot_id, buildability_score FROM analyses;"
-
-# Test the analysis endpoint directly
-curl -X POST http://localhost:8000/analyze-plot \
-  -H "Content-Type: application/json" \
-  -d '{"plot_id":"TEST-001","lat":9.9312,"lon":76.2673}'
-
-# Generate a floor plan
-curl -X POST http://localhost:8000/generate-floorplan \
-  -H "Content-Type: application/json" \
-  -d '{"plot_id":"TEST-001","plot_area_sqm":500,"num_floors":1}'
-```
-
-### VS Code Extensions Recommended
-
-- Python (Microsoft)
-- Pylance
-- ESLint
-- Tailwind CSS IntelliSense
-- Prisma (for schema visualization if migrating to Prisma ORM)
-- REST Client (for `.http` file testing)
-
-### Adding a New Room Type to the Floor Plan
-
-1. Add a new entry to `ROOM_TEMPLATES["sustainable"]` in `backend/ai/floorplan/genetic.py`
-2. Add a corresponding color entry to the `ACCENTS` dict in `frontend/app/model3d/[id]/page.tsx`
-3. Add a furniture render function following the existing pattern (e.g., `renderBedroom`)
-
-### Running Unit Tests
-
-```bash
-# Backend (pytest)
-cd backend
-pip install pytest pytest-asyncio httpx
-pytest tests/ -v
-
-# Frontend
-cd frontend
-npm run test
-```
-
----
-
-*For further questions, open an issue on the repository or consult the inline code documentation throughout `backend/ai/` and `frontend/app/`.*
+### Frontend: `CORS error` calling backend
+Ensure `NEXT_PUBLIC_API_URL` in `.env.local` exactly matches the backend origin including port. The FastAPI CORS middleware is configured for `http://localhost:3000` in development.

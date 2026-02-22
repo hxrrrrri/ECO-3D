@@ -730,13 +730,93 @@ export default function AnalysisPage() {
                 ))}
               </div>
               {analysis && (
-                <div className="glm p-3 rounded-lg">
-                  <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-2">Plot Analysis</div>
-                  {[{ k: "Buildability", v: `${analysis.buildability_score.toFixed(0)}%` }, { k: "Flood Risk", v: `${(analysis.flood_probability * 100).toFixed(0)}%` }, { k: "NDVI", v: analysis.environmental.ndvi.toFixed(3) }, { k: "Elevation", v: `${analysis.environmental.elevation.toFixed(0)}m` }].map(({ k, v }) => (
-                    <div key={k} className="flex justify-between py-1 border-b border-white/5">
-                      <span className="text-[10px] text-slate-500">{k}</span><span className="text-[10px] font-mono text-slate-200">{v}</span>
-                    </div>
-                  ))}
+                <div className="glm p-3 rounded-lg space-y-3">
+                  {/* ── Core scores ── */}
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Plot Scores</div>
+                    {[
+                      { k: "Buildability",  v: `${analysis.buildability_score.toFixed(0)} / 100` },
+                      { k: "Flood Risk",    v: `${(analysis.flood_probability * 100).toFixed(0)}%` },
+                    ].map(({ k, v }) => (
+                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
+                        <span className="text-[10px] text-slate-500">{k}</span>
+                        <span className="text-[10px] font-mono text-slate-200">{v}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── Topography ── */}
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Topography</div>
+                    {[
+                      { k: "Elevation",    v: `${analysis.environmental.elevation.toFixed(0)} m` },
+                      { k: "Slope",        v: `${analysis.environmental.slope?.toFixed(1) ?? "—"}°` },
+                      { k: "Dist. Water",  v: analysis.environmental.distance_to_water_m ? `${(analysis.environmental.distance_to_water_m as number).toFixed(0)} m` : "—" },
+                    ].map(({ k, v }) => (
+                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
+                        <span className="text-[10px] text-slate-500">{k}</span>
+                        <span className="text-[10px] font-mono text-slate-200">{v}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── Climate ── */}
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Climate (Real-Time)</div>
+                    {[
+                      { k: "Rainfall",     v: `${analysis.environmental.rainfall_mm.toFixed(0)} mm/yr` },
+                      { k: "Wind",         v: `${analysis.environmental.wind_ms?.toFixed(1) ?? "—"} m/s ${analysis.environmental.wind_direction}` },
+                      { k: "Sun Hours",    v: `${analysis.environmental.sun_exposure_hours.toFixed(1)} h/day` },
+                      { k: "Solar Rad.",   v: analysis.environmental.solar_radiation_kwh ? `${(analysis.environmental.solar_radiation_kwh as number).toFixed(1)} kWh/m²/d` : "—" },
+                      { k: "NDVI",         v: analysis.environmental.ndvi.toFixed(3) },
+                    ].map(({ k, v }) => (
+                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
+                        <span className="text-[10px] text-slate-500">{k}</span>
+                        <span className="text-[10px] font-mono text-slate-200">{v}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── Soil Profile (SoilGrids v2) ── */}
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Soil Profile — SoilGrids v2</div>
+                    {[
+                      { k: "Type",         v: analysis.environmental.soil_type },
+                      { k: "Clay",         v: analysis.environmental.clay_pct != null ? `${(analysis.environmental.clay_pct as number).toFixed(1)}%` : "—" },
+                      { k: "Sand",         v: analysis.environmental.sand_pct != null ? `${(analysis.environmental.sand_pct as number).toFixed(1)}%` : "—" },
+                      { k: "Silt",         v: analysis.environmental.silt_pct != null ? `${(analysis.environmental.silt_pct as number).toFixed(1)}%` : "—" },
+                      { k: "pH",           v: analysis.environmental.soil_ph != null ? `${(analysis.environmental.soil_ph as number).toFixed(1)}` : "—" },
+                      { k: "Organic C",    v: analysis.environmental.organic_carbon != null ? `${(analysis.environmental.organic_carbon as number).toFixed(1)} g/kg` : "—" },
+                      { k: "Bulk Density", v: analysis.environmental.bulk_density != null ? `${(analysis.environmental.bulk_density as number).toFixed(2)} g/cm³` : "—" },
+                      { k: "Buildable",    v: analysis.environmental.soil_buildable === false ? "⚠ No" : "✓ Yes" },
+                    ].map(({ k, v }) => (
+                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
+                        <span className="text-[10px] text-slate-500">{k}</span>
+                        <span className={`text-[10px] font-mono ${k === "Buildable" && v.startsWith("⚠") ? "text-amber-400" : "text-slate-200"}`}>{v}</span>
+                      </div>
+                    ))}
+                    {analysis.environmental.soil_source && (
+                      <div className="mt-1 text-[8px] text-slate-600 leading-tight">{analysis.environmental.soil_source as string}</div>
+                    )}
+                  </div>
+
+                  {/* ── River Flood — GloFAS ── */}
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">River Flood — GloFAS</div>
+                    {[
+                      { k: "Discharge Peak", v: analysis.environmental.river_discharge_peak_m3s != null ? `${(analysis.environmental.river_discharge_peak_m3s as number).toFixed(1)} m³/s` : "No river nearby" },
+                      { k: "Discharge Mean", v: analysis.environmental.river_discharge_mean_m3s != null ? `${(analysis.environmental.river_discharge_mean_m3s as number).toFixed(1)} m³/s` : "—" },
+                      { k: "Flood Index",    v: analysis.environmental.glofas_flood_index != null ? `${((analysis.environmental.glofas_flood_index as number) * 100).toFixed(0)}%` : "—" },
+                    ].map(({ k, v }) => (
+                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
+                        <span className="text-[10px] text-slate-500">{k}</span>
+                        <span className="text-[10px] font-mono text-slate-200">{v}</span>
+                      </div>
+                    ))}
+                    {analysis.environmental.flood_source && (
+                      <div className="mt-1 text-[8px] text-slate-600 leading-tight">{analysis.environmental.flood_source as string}</div>
+                    )}
+                  </div>
                 </div>
               )}
               <button onClick={() => router.push(`/report/${plotId}`)} className="w-full py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-primary/10 transition-all" style={{ border: "1px solid #0df2f2", color: "#0df2f2" }}>

@@ -39,6 +39,24 @@ class EnvironmentalFeatures(BaseModel):
     soil_type: str
     wind_direction: str
     sun_exposure_hours: float
+    # Extended real-time fields
+    wind_ms: Optional[float] = None
+    solar_radiation_kwh: Optional[float] = None
+    distance_to_water_m: Optional[float] = None
+    # Full soil profile (SoilGrids v2 — ISRIC)
+    clay_pct: Optional[float] = None
+    sand_pct: Optional[float] = None
+    silt_pct: Optional[float] = None
+    soil_ph: Optional[float] = None
+    organic_carbon: Optional[float] = None
+    bulk_density: Optional[float] = None
+    soil_buildable: Optional[bool] = None
+    soil_source: Optional[str] = None
+    # River flood (GloFAS — EU Copernicus)
+    river_discharge_peak_m3s: Optional[float] = None
+    river_discharge_mean_m3s: Optional[float] = None
+    glofas_flood_index: Optional[float] = None
+    flood_source: Optional[str] = None
 
 
 class AnalysisResponse(BaseModel):

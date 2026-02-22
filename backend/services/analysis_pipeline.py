@@ -231,6 +231,11 @@ async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> An
     else:
         status = "POOR"
 
+    def _f(key, default=None):
+        v = env_data.get(key, default)
+        try: return float(v) if v is not None else None
+        except: return None
+
     return AnalysisResponse(
         plot_id=plot_id,
         segmentation=seg,
@@ -243,6 +248,24 @@ async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> An
             soil_type=str(env_data["soil_type"]),
             wind_direction=str(env_data["wind_direction"]),
             sun_exposure_hours=float(env_data["sun_exposure_hours"]),
+            # Extended real-time fields
+            wind_ms=_f("wind_ms"),
+            solar_radiation_kwh=_f("solar_radiation_kwh"),
+            distance_to_water_m=_f("distance_to_water_m"),
+            # Full soil profile (SoilGrids v2)
+            clay_pct=_f("clay_pct"),
+            sand_pct=_f("sand_pct"),
+            silt_pct=_f("silt_pct"),
+            soil_ph=_f("soil_ph"),
+            organic_carbon=_f("organic_carbon"),
+            bulk_density=_f("bulk_density"),
+            soil_buildable=bool(env_data["soil_buildable"]) if env_data.get("soil_buildable") is not None else None,
+            soil_source=str(env_data["soil_source"]) if env_data.get("soil_source") else None,
+            # River flood (GloFAS)
+            river_discharge_peak_m3s=_f("river_discharge_peak_m3s"),
+            river_discharge_mean_m3s=_f("river_discharge_mean_m3s"),
+            glofas_flood_index=_f("glofas_flood_index"),
+            flood_source=str(env_data["flood_source"]) if env_data.get("flood_source") else None,
         ),
         flood_probability=float(flood),
         buildability_score=float(build),
@@ -251,5 +274,8 @@ async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> An
             "FEMA Hazard Mitigation Standards: Flood probability and structural slope limits.",
             "LEED BD+C v4: Sustainable Sites requirements for soil stability and vegetation preservation.",
             "ASHRAE Standard 55: Thermal Environmental Conditions factoring in local wind and sun exposure.",
+            "SoilGrids v2 (ISRIC/WUR): Soil clay, sand, silt, pH, organic carbon, bulk density at 250m resolution.",
+            "Open-Meteo GloFAS (EU Copernicus): Real-time 90-day river discharge forecast.",
+            "NASA POWER API: Satellite-derived NDVI proxy and daily solar radiation.",
         ],
     )
