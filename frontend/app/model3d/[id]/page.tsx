@@ -34,8 +34,7 @@ const ACCENTS: Record<string,string> = {
 const getAccent = (t: string) => Object.entries(ACCENTS).find(([k]) => t.toLowerCase().includes(k))?.[1] ?? "#0df2f2";
 
 // ── Lighting ──────────────────────────────────────────────────────────────────
-function Lighting({ dir, sunOn }: { dir: string; sunOn: boolean }) {
-  // Real-time sun position
+function Lighting({ dir, sunOn, nightLightOn }: { dir: string; sunOn: boolean; nightLightOn: boolean }) {
   const now = new Date();
   const h = now.getHours() + now.getMinutes()/60;
   const hourAngle = ((h - 12) / 12) * Math.PI;
@@ -43,24 +42,68 @@ function Lighting({ dir, sunOn }: { dir: string; sunOn: boolean }) {
   const azimX = Math.sin(hourAngle) * 14;
   const azimZ = Math.cos(hourAngle) * 8;
   const posY = Math.max(3, elev * 16 + 4);
-  const isDaytime = h >= 6 && h <= 19;
+  const isActuallyDaytime = h >= 6 && h <= 19;
+
+  // nightLightOn = ONLY activates when user manually presses the LIGHT button
+  // At night without studio: model uses fallback fill light (never pitch black)
+  // studioMode is PURELY manual — never auto-activates
+  const sunMode = sunOn && isActuallyDaytime && !nightLightOn;
+  const studioMode = nightLightOn; // manual toggle only, no auto
 
   return (
     <>
-      <ambientLight intensity={sunOn && isDaytime ? 0.5 : 0.9} color={isDaytime ? "#e8f4ff" : "#304060"} />
-      <hemisphereLight args={isDaytime ? ["#c8e4ff","#1a2820", 0.5] : ["#2a3050","#0a1010",0.4]} />
-      {sunOn && isDaytime
-        ? <directionalLight position={[azimX, posY, azimZ]} intensity={2.8} castShadow color="#fff5d0"
-            shadow-mapSize-width={2048} shadow-mapSize-height={2048}
-            shadow-camera-near={0.5} shadow-camera-far={120}
-            shadow-camera-left={-35} shadow-camera-right={35}
-            shadow-camera-top={35} shadow-camera-bottom={-35} />
-        : <>
-            <pointLight position={[0,14,0]} intensity={2.2} color="#ffffff" />
-            <pointLight position={[-10,8,-10]} intensity={0.7} color="#c8d8ff" />
-            <pointLight position={[10,8,10]} intensity={0.7} color="#ffd8c8" />
-          </>
-      }
+      {/* Base ambient — always present, brighter in studio mode */}
+      <ambientLight
+        intensity={studioMode ? 1.6 : (sunMode ? 0.45 : 1.2)}
+        color={studioMode ? "#ffffff" : "#e8f4ff"}
+      />
+      <hemisphereLight
+        args={studioMode ? ["#ffffff","#aabbaa",1.0] : (isActuallyDaytime ? ["#c8e4ff","#1a2820",0.5] : ["#8899cc","#223322",0.7])}
+      />
+
+      {/* Sun directional light (daytime, no studio override) */}
+      {sunMode && (
+        <directionalLight
+          position={[azimX, posY, azimZ]}
+          intensity={2.6}
+          castShadow
+          color="#fff5d0"
+          shadow-mapSize-width={2048}
+          shadow-mapSize-height={2048}
+          shadow-camera-near={0.5}
+          shadow-camera-far={120}
+          shadow-camera-left={-35}
+          shadow-camera-right={35}
+          shadow-camera-top={35}
+          shadow-camera-bottom={-35}
+        />
+      )}
+
+      {/* Studio 3-point rig — activates when LIGHT is on OR it's nighttime */}
+      {studioMode && <>
+        <directionalLight
+          position={[14, 20, 10]}
+          intensity={2.2}
+          color="#ffffff"
+          castShadow
+          shadow-mapSize-width={2048}
+          shadow-mapSize-height={2048}
+          shadow-camera-left={-32}
+          shadow-camera-right={32}
+          shadow-camera-top={32}
+          shadow-camera-bottom={-32}
+          shadow-camera-near={0.5}
+          shadow-camera-far={100}
+        />
+        <directionalLight position={[-12, 15, -8]}  intensity={1.2} color="#d8eeff" />
+        <directionalLight position={[0,   10, -16]}  intensity={0.8} color="#ffeedd" />
+        <pointLight position={[0, 6, 0]} intensity={1.0} color="#ffe8cc" distance={40} decay={1.2} />
+      </>}
+
+      {/* Fallback fill light so model is NEVER completely dark (sun off, no studio) */}
+      {!sunMode && !studioMode && (
+        <directionalLight position={[8, 12, 6]} intensity={1.6} color="#d0e8ff" />
+      )}
     </>
   );
 }
@@ -128,122 +171,118 @@ function SunSphere({ dir, lat }: { dir: string; lat?: number }) {
   );
 }
 
-// ── Organic Smoke-Swirl Wind Effect (wispy curling trails) ─────────────────────
-function WindSwirl({ dir, cx, cz, modelW, modelD }: { dir: string; cx: number; cz: number; modelW: number; modelD: number }) {
+// ── Wind Effect — clean curved streaks + ground compass arrow ─────────────────
+// Flowing cyan arc-lines that sweep past the building at low altitude, with a
+// flat glowing arrow on the ground clearly showing wind direction.
+function WindSwirl({ dir, cx, cz, modelW, modelD }: {
+  dir: string; cx: number; cz: number; modelW: number; modelD: number;
+}) {
   const v = useMemo(() => {
     const M: Record<string,[number,number]> = {
-      N:[0,-1],NE:[0.7,-0.7],E:[1,0],SE:[0.7,0.7],
-      S:[0,1],SW:[-0.7,0.7],W:[-1,0],NW:[-0.7,-0.7],
+      N:[0,-1], NNE:[0.38,-0.92], NE:[0.71,-0.71], ENE:[0.92,-0.38],
+      E:[1,0],  ESE:[0.92,0.38],  SE:[0.71,0.71],  SSE:[0.38,0.92],
+      S:[0,1],  SSW:[-0.38,0.92], SW:[-0.71,0.71], WSW:[-0.92,0.38],
+      W:[-1,0], WNW:[-0.92,-0.38],NW:[-0.71,-0.71],NNW:[-0.38,-0.92],
     };
-    const k = Object.keys(M).find(k => dir.startsWith(k)) ?? "NW";
+    const k = Object.keys(M).find(k => dir.startsWith(k)) ?? "SW";
     const [x,z] = M[k]; const l = Math.sqrt(x*x+z*z)||1;
     return { x:x/l, z:z/l };
   }, [dir]);
-
   const perp = useMemo(() => ({ x: -v.z, z: v.x }), [v]);
 
-  // 12 staggered trails spread across the building footprint
-  const TRAIL_COUNT = 12;
-  const SEG = 64;
-  const spread = Math.max(modelW, modelD) * 1.1;
+  // ── 280-particle spray system (original look) ──────────────────────────────
+  const COUNT  = 280;
+  const spread  = Math.max(modelW, modelD) * 1.4;
+  const travelD = Math.max(modelW, modelD) * 2.2;
 
-  const trailData = useMemo(() => Array.from({ length: TRAIL_COUNT }, (_, i) => {
-    const laneT = (i / (TRAIL_COUNT - 1) - 0.5) * spread;
-    return {
-      laneX: perp.x * laneT,
-      laneZ: perp.z * laneT,
-      baseH:    0.15 + (i % 5) * 0.65,
-      phase:    (i / TRAIL_COUNT) * Math.PI * 2.5,
-      curlFreq1: 0.30 + (i % 4) * 0.18,
-      curlFreq2: 1.10 + (i % 3) * 0.45,
-      curlAmp1:  1.20 + (i % 3) * 0.90,
-      curlAmp2:  0.30 + (i % 5) * 0.18,
-      speed:    0.28 + (i % 5) * 0.055,
-      hue:     0.57 + i * 0.006,
-      sat:     0.07 + (i % 3) * 0.04,
-      lit:     0.72 + (i % 4) * 0.06,
-      opacity: 0.38 + (i % 4) * 0.12,
-    };
-  }), [perp, spread]);
+  const { posArr, colArr, particles } = useMemo(() => {
+    const posArr = new Float32Array(COUNT * 3);
+    const colArr = new Float32Array(COUNT * 3);
+    const particles = Array.from({ length: COUNT }, (_, i) => ({
+      lane:    (i / COUNT - 0.5) * spread,
+      baseY:   0.3 + (i % 14) * 0.28,
+      phase:   (i / COUNT) * Math.PI * 2,
+      speed:   0.18 + (i % 13) * 0.02,
+      wobble:  0.4 + (i % 7) * 0.13,
+      wfreq:   0.8 + (i % 5) * 0.27,
+    }));
+    return { posArr, colArr, particles };
+  }, [spread]);
 
-  const lineData = useMemo(() => trailData.map(td => {
-    const positions = new Float32Array(SEG * 3);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.LineBasicMaterial({
-      color: new THREE.Color().setHSL(td.hue, td.sat, td.lit),
-      transparent: true, opacity: 0,
-    });
-    return { geo, mat, positions, td };
-  }), [trailData]);
-
-  const groupRef = useRef<THREE.Group>(null);
-
-  useEffect(() => {
-    const grp = groupRef.current;
-    if (!grp) return;
-    lineData.forEach(({ geo, mat }) => grp.add(new THREE.Line(geo, mat)));
-    return () => { lineData.forEach(({ geo, mat }) => { geo.dispose(); mat.dispose(); }); };
-  }, [lineData]);
+  const geoRef = useRef<THREE.BufferGeometry>(null!);
+  const ptsRef = useRef<THREE.Points>(null!);
 
   useFrame(({ clock }) => {
     const T = clock.elapsedTime;
-    const dist = Math.max(modelW, modelD) * 2.0;
-
-    lineData.forEach(({ geo, mat, positions, td }) => {
-      const scroll = (T * td.speed + td.phase * 0.18) % 1;
-
-      for (let i = 0; i < SEG; i++) {
-        const rawT = i / (SEG - 1);
-        const t = (rawT + scroll) % 1;
-
-        const wx = cx - v.x * dist * 0.5 + v.x * dist * t + td.laneX;
-        const wz = cz - v.z * dist * 0.5 + v.z * dist * t + td.laneZ;
-
-        // Large lazy primary sweep
-        const pA = t * Math.PI * 2.8 * td.curlFreq1 + T * 0.42 + td.phase;
-        // Tighter secondary loop for inner swirl detail
-        const pB = t * Math.PI * 6.5 * td.curlFreq2 + T * 0.95 + td.phase * 1.4;
-        // Fine tertiary wobble for irregular organic texture
-        const pC = t * Math.PI * 11.0 + T * 1.6 + td.phase * 0.7;
-
-        const curlA = Math.sin(pA) * td.curlAmp1;
-        const curlB = Math.sin(pB) * td.curlAmp2;
-        const curlC = Math.sin(pC) * td.curlAmp2 * 0.28;
-        const totalCurl = curlA + curlB + curlC;
-
-        // Vertical rise with gentle oscillation
-        const rise = t * 1.6;
-        const vOsc = Math.sin(pA * 0.7) * 0.35 + Math.sin(pB * 0.4) * 0.12;
-        const py = td.baseH + rise + vOsc;
-
-        // Slight depth twist so trails aren't flat
-        const twistZ = Math.sin(pB * 0.6 + td.phase) * 0.28;
-
-        positions[i * 3 + 0] = wx + perp.x * totalCurl;
-        positions[i * 3 + 1] = Math.max(0.05, py);
-        positions[i * 3 + 2] = wz + perp.z * totalCurl + twistZ;
-      }
-      geo.attributes.position.needsUpdate = true;
-      geo.computeBoundingSphere();
-
-      // Bell-curve fade so trail head/tail dissolve smoothly
-      const fade = Math.pow(Math.sin(scroll * Math.PI), 0.65);
-      mat.opacity = fade * td.opacity;
-
-      // Near-white at peak, cooler grey at fade
-      (mat.color as THREE.Color).setHSL(
-        td.hue + fade * 0.02,
-        Math.max(0, td.sat - fade * 0.03),
-        td.lit - (1 - fade) * 0.16
-      );
+    particles.forEach((p, i) => {
+      const t = ((T * p.speed + p.phase) % (Math.PI * 2)) / (Math.PI * 2);
+      const wb = Math.sin(t * Math.PI * p.wfreq * 4 + p.phase) * p.wobble;
+      posArr[i*3+0] = cx - v.x * travelD * 0.5 + v.x * travelD * t + perp.x * (p.lane + wb);
+      posArr[i*3+1] = p.baseY + t * 0.8 + Math.sin(t * Math.PI * 3 + p.phase) * 0.18;
+      posArr[i*3+2] = cz - v.z * travelD * 0.5 + v.z * travelD * t + perp.z * (p.lane + wb);
+      // Cyan → white gradient by altitude, faded by bell curve
+      const fade = Math.sin(t * Math.PI);
+      const alt  = Math.min(1, posArr[i*3+1] / 4);
+      colArr[i*3+0] = (0.2 + alt * 0.5) * fade;
+      colArr[i*3+1] = (0.85 + alt * 0.15) * fade;
+      colArr[i*3+2] = 1.0 * fade;
     });
+    if (geoRef.current) {
+      (geoRef.current.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      (geoRef.current.attributes.color    as THREE.BufferAttribute).needsUpdate = true;
+      geoRef.current.computeBoundingSphere();
+    }
   });
 
-  return <group ref={groupRef} />;
+  // Floating compass arrow above model — bobbing gently
+  const arrowAngle = Math.atan2(v.x, v.z);
+  const arrowRef   = useRef<THREE.Group>(null!);
+  useFrame(({ clock }) => {
+    if (arrowRef.current) arrowRef.current.position.y = 6 + Math.sin(clock.elapsedTime * 1.2) * 0.25;
+  });
+
+  return (
+    <group>
+      {/* Particle cloud */}
+      <points ref={ptsRef}>
+        <bufferGeometry ref={geoRef}>
+          <bufferAttribute attach="attributes-position" args={[posArr, 3]} />
+          <bufferAttribute attach="attributes-color"    args={[colArr, 3]} />
+        </bufferGeometry>
+        <pointsMaterial size={0.22} vertexColors transparent opacity={0.9} sizeAttenuation depthWrite={false} />
+      </points>
+
+      {/* Floating 3D compass arrow */}
+      <group ref={arrowRef} position={[cx, 6, cz]} rotation={[0, arrowAngle, 0]}>
+        {/* Shaft */}
+        <mesh position={[0, 0, -1.2]}>
+          <cylinderGeometry args={[0.09, 0.09, 2.4, 8]} />
+          <meshStandardMaterial color="#38bdf8" emissive="#0ea5e9" emissiveIntensity={1.8} transparent opacity={0.9} />
+        </mesh>
+        {/* Head (cone) */}
+        <mesh position={[0, 0, 0.4]} rotation={[Math.PI/2, 0, 0]}>
+          <coneGeometry args={[0.32, 0.9, 8]} />
+          <meshStandardMaterial color="#7dd3fc" emissive="#38bdf8" emissiveIntensity={2.5} transparent opacity={0.95} />
+        </mesh>
+        {/* Tail feathers */}
+        <mesh position={[0, 0, -2.5]}>
+          <boxGeometry args={[0.06, 0.7, 0.5]} />
+          <meshStandardMaterial color="#0ea5e9" emissive="#0284c7" emissiveIntensity={1.5} transparent opacity={0.8} />
+        </mesh>
+        <mesh position={[0, 0, -2.5]} rotation={[0, Math.PI/2, 0]}>
+          <boxGeometry args={[0.06, 0.7, 0.5]} />
+          <meshStandardMaterial color="#0ea5e9" emissive="#0284c7" emissiveIntensity={1.5} transparent opacity={0.8} />
+        </mesh>
+      </group>
+
+      {/* Compass ring at base of arrow */}
+      <mesh position={[cx, 5.8, cz]} rotation={[Math.PI/2, 0, 0]}>
+        <torusGeometry args={[1.1, 0.05, 8, 32]} />
+        <meshStandardMaterial color="#38bdf8" emissive="#0ea5e9" emissiveIntensity={1.0} transparent opacity={0.4} />
+      </mesh>
+    </group>
+  );
 }
-
-
 // ── Furniture (2D top-down view approach for open-top house) ──────────────────
 function Furniture({ type, w, d }: { type: string; w: number; d: number }) {
   const t = type.toLowerCase();
@@ -344,8 +383,9 @@ function Furniture({ type, w, d }: { type: string; w: number; d: number }) {
 //   3. Render interior walls (thin dividers) between rooms
 //   4. Put floor + furniture inside each room
 //   5. NO ceiling / NO roof → open top view exactly matching the floor plan
-function UnifiedHouse({ rooms, showWind, showSun, windDir }: {
+function UnifiedHouse({ rooms, showWind, showSun, windDir, editMode, selectedId, colorOverrides, onSelect }: {
   rooms: any[]; showWind: boolean; showSun: boolean; windDir: string;
+  editMode?: boolean; selectedId?: string; colorOverrides?: Record<string,string>; onSelect?: (info:any)=>void;
 }) {
   const floor1 = rooms.filter(r => (r.floor ?? 1) === 1);
   if (floor1.length === 0) return null;
@@ -419,6 +459,7 @@ function UnifiedHouse({ rooms, showWind, showSun, windDir }: {
 
   return (
     <group>
+
       {/* ── FOUNDATION SLAB ─────────────────────────────────────────────── */}
       <mesh position={[cx, -0.12, cz]} receiveShadow>
         <boxGeometry args={[totalW + OWT*2 + 0.4, 0.22, totalD + OWT*2 + 0.4]} />
@@ -427,61 +468,203 @@ function UnifiedHouse({ rooms, showWind, showSun, windDir }: {
 
       {/* ── OUTER PERIMETER WALLS (4 sides, full FH) ─────────────────────── */}
       {/* North wall */}
-      <mesh position={[cx, FH/2, offZ - OWT/2]} castShadow receiveShadow>
+      <mesh position={[cx, FH/2, offZ - OWT/2]} castShadow receiveShadow
+        onClick={(e:any)=>{e.stopPropagation();onSelect?.({id:"wall-N",label:"North Wall",type:"wall",color:colorOverrides?.["wall-N"]??"#dde8ee"});}}
+        onPointerOver={(e:any)=>{e.stopPropagation();document.body.style.cursor=editMode?"pointer":"auto";}}
+        onPointerOut={(e:any)=>{e.stopPropagation();document.body.style.cursor="auto";}}>
         <boxGeometry args={[totalW + OWT*2, FH, OWT]} />
-        <primitive object={wallMat} />
+        <meshStandardMaterial color={colorOverrides?.["wall-N"]??"#dde8ee"} roughness={0.65} metalness={0.05}
+          emissive={selectedId==="wall-N"?"#0044aa":"#000000"} emissiveIntensity={selectedId==="wall-N"?0.3:0}/>
       </mesh>
-      {/* South wall */}
-      <mesh position={[cx, FH/2, offZ + totalD + OWT/2]} castShadow receiveShadow>
-        <boxGeometry args={[totalW + OWT*2, FH, OWT]} />
-        <primitive object={wallMat} />
+      {/* ── MAIN ENTRANCE — south wall split precisely around door ──────── */}
+      {/* Door opening = 1.1m centered at cx. Half-width of each panel = (totalW - 1.1) / 2  */}
+      {(() => {
+        const doorW = 1.1;
+        const panelW = (totalW - doorW) / 2;
+        const southZ = offZ + totalD + OWT / 2;
+        const doorH  = FH * 0.76;
+        return (
+          <>
+            {/* Left panel — goes from west edge to left door jamb */}
+            <mesh position={[offX + panelW/2, FH/2, southZ]} castShadow receiveShadow>
+              <boxGeometry args={[panelW, FH, OWT]} />
+              <primitive object={wallMat} />
+            </mesh>
+            {/* Right panel — goes from right door jamb to east edge */}
+            <mesh position={[offX + totalW - panelW/2, FH/2, southZ]} castShadow receiveShadow>
+              <boxGeometry args={[panelW, FH, OWT]} />
+              <primitive object={wallMat} />
+            </mesh>
+            {/* Transom — fills wall above door up to full height */}
+            <mesh position={[cx, FH - (FH - doorH)/2, southZ]} castShadow>
+              <boxGeometry args={[doorW, FH - doorH, OWT + 0.01]} />
+              <primitive object={wallMat} />
+            </mesh>
+          </>
+        );
+      })()}
+
+      {/* Main door — dark wood, double panel */}
+      {/* Left leaf */}
+      <mesh position={[cx - 0.28, FH*0.37, offZ + totalD + OWT/2 + 0.01]}>
+        <boxGeometry args={[0.52, FH*0.74, 0.055]} />
+        <meshStandardMaterial color="#5a3015" roughness={0.75} metalness={0.05} />
       </mesh>
-      {/* West wall */}
-      <mesh position={[offX - OWT/2, FH/2, cz]} castShadow receiveShadow>
-        <boxGeometry args={[OWT, FH, totalD + OWT*2]} />
-        <primitive object={wallMat} />
+      {/* Left panel detail */}
+      <mesh position={[cx - 0.28, FH*0.42, offZ + totalD + OWT/2 + 0.04]}>
+        <boxGeometry args={[0.34, FH*0.28, 0.02]} />
+        <meshStandardMaterial color="#4a2510" roughness={0.8} />
       </mesh>
-      {/* East wall */}
-      <mesh position={[offX + totalW + OWT/2, FH/2, cz]} castShadow receiveShadow>
-        <boxGeometry args={[OWT, FH, totalD + OWT*2]} />
-        <primitive object={wallMat} />
+      {/* Right leaf */}
+      <mesh position={[cx + 0.28, FH*0.37, offZ + totalD + OWT/2 + 0.01]}>
+        <boxGeometry args={[0.52, FH*0.74, 0.055]} />
+        <meshStandardMaterial color="#5a3015" roughness={0.75} metalness={0.05} />
+      </mesh>
+      <mesh position={[cx + 0.28, FH*0.42, offZ + totalD + OWT/2 + 0.04]}>
+        <boxGeometry args={[0.34, FH*0.28, 0.02]} />
+        <meshStandardMaterial color="#4a2510" roughness={0.8} />
+      </mesh>
+      {/* Door handles (gold) */}
+      <mesh position={[cx + 0.52, FH*0.42, offZ + totalD + OWT/2 + 0.08]}>
+        <boxGeometry args={[0.06, 0.22, 0.05]} />
+        <meshStandardMaterial color="#c8a020" metalness={0.85} roughness={0.15} />
+      </mesh>
+      <mesh position={[cx - 0.52, FH*0.42, offZ + totalD + OWT/2 + 0.08]}>
+        <boxGeometry args={[0.06, 0.22, 0.05]} />
+        <meshStandardMaterial color="#c8a020" metalness={0.85} roughness={0.15} />
       </mesh>
 
-      {/* ── WINDOWS on outer walls ──────────────────────────────────────── */}
+      {/* Porch canopy above door */}
+      <mesh position={[cx, FH*0.93, offZ + totalD + OWT + 0.6]} castShadow>
+        <boxGeometry args={[2.4, 0.12, 1.2]} />
+        <meshStandardMaterial color="#e8eef0" roughness={0.5} metalness={0.1} />
+      </mesh>
+      {/* Canopy support columns */}
+      {[-0.9, 0.9].map((ox, i) => (
+        <mesh key={`col-${i}`} position={[cx + ox, FH*0.5, offZ + totalD + OWT + 1.1]} castShadow>
+          <boxGeometry args={[0.14, FH*0.93, 0.14]} />
+          <meshStandardMaterial color="#e8eef0" roughness={0.55} />
+        </mesh>
+      ))}
+      {/* Porch floor */}
+      <mesh position={[cx, 0.07, offZ + totalD + OWT + 0.65]} receiveShadow>
+        <boxGeometry args={[2.4, 0.13, 1.2]} />
+        <meshStandardMaterial color="#4a5555" roughness={0.9} />
+      </mesh>
+      {/* Entry path to door */}
+      <mesh position={[cx, 0.03, offZ + totalD + OWT + 2.2]} receiveShadow rotation={[-Math.PI/2,0,0]}>
+        <planeGeometry args={[1.4, 2.6]} />
+        <meshStandardMaterial color="#3a4a4a" roughness={0.95} />
+      </mesh>
+      {/* West wall */}
+      <mesh position={[offX - OWT/2, FH/2, cz]} castShadow receiveShadow
+        onClick={(e:any)=>{e.stopPropagation();onSelect?.({id:"wall-W",label:"West Wall",type:"wall",color:colorOverrides?.["wall-W"]??"#dde8ee"});}}
+        onPointerOver={(e:any)=>{e.stopPropagation();document.body.style.cursor=editMode?"pointer":"auto";}}
+        onPointerOut={(e:any)=>{e.stopPropagation();document.body.style.cursor="auto";}}>
+        <boxGeometry args={[OWT, FH, totalD + OWT*2]} />
+        <meshStandardMaterial color={colorOverrides?.["wall-W"]??"#dde8ee"} roughness={0.65} metalness={0.05}
+          emissive={selectedId==="wall-W"?"#0044aa":"#000000"} emissiveIntensity={selectedId==="wall-W"?0.3:0}/>
+      </mesh>
+      {/* East wall */}
+      <mesh position={[offX + totalW + OWT/2, FH/2, cz]} castShadow receiveShadow
+        onClick={(e:any)=>{e.stopPropagation();onSelect?.({id:"wall-E",label:"East Wall",type:"wall",color:colorOverrides?.["wall-E"]??"#dde8ee"});}}
+        onPointerOver={(e:any)=>{e.stopPropagation();document.body.style.cursor=editMode?"pointer":"auto";}}
+        onPointerOut={(e:any)=>{e.stopPropagation();document.body.style.cursor="auto";}}>
+        <boxGeometry args={[OWT, FH, totalD + OWT*2]} />
+        <meshStandardMaterial color={colorOverrides?.["wall-E"]??"#dde8ee"} roughness={0.65} metalness={0.05}
+          emissive={selectedId==="wall-E"?"#0044aa":"#000000"} emissiveIntensity={selectedId==="wall-E"?0.3:0}/>
+      </mesh>
+
+      {/* ── WINDOWS on outer walls — clearly visible from outside ──────── */}
       {laid.map(({ room, px, py, pw, ph }, idx) => {
         const t = room.type?.toLowerCase() ?? "";
-        if (t.includes("bathroom")||t.includes("utility")) return null;
+        if (t.includes("bathroom")||t.includes("utility")||t.includes("garage")) return null;
         const rx = offX + px + pw/2; const rz = offZ + py + ph/2;
-        const ww = Math.min(pw*0.42, 1.4); const wh = FH*0.36;
-        const isTopRow = py < 0.1;
-        const isBotRow = py + ph > totalD - 0.1;
-        const isLeftCol = px < 0.1;
+        const ww = Math.min(pw*0.44, 1.5); const wh = FH*0.38;
+        const winY = FH*0.54;   // window centre height
+        const isTopRow   = py < 0.1;
+        const isBotRow   = py + ph > totalD - 0.1;
+        const isLeftCol  = px < 0.1;
         const isRightCol = px + pw > totalW - 0.1;
+        // Windows sit proud of wall outer face — positive offset pushes them OUT of the wall
+        // North wall outer face = offZ.  Window group pos z = offZ - wallFace (negative = outward)
+        // South wall outer face = offZ+totalD.  Window group pos z = offZ+totalD + wallFace
+        const wallFace = OWT / 2 + 0.01;  // just proud of the outer wall surface
+
+        const WindowUnit = ({ pos, rot, wide, tall }: { pos:[number,number,number]; rot:[number,number,number]; wide:number; tall:number }) => (
+          <group position={pos} rotation={rot}>
+            {/* Wall cutout filler — same colour as wall, sits BEHIND the frame to kill z-fighting */}
+            <mesh position={[0, 0, -OWT/2 + 0.001]}>
+              <boxGeometry args={[wide + 0.22, tall + 0.22, OWT]}/>
+              <meshStandardMaterial color="#dde8ee" roughness={0.65}/>
+            </mesh>
+            {/* Outer white PVC frame — flush with outer wall face (z≈0) */}
+            <mesh position={[0, 0, 0.026]}>
+              <boxGeometry args={[wide + 0.18, tall + 0.18, 0.05]}/>
+              <meshStandardMaterial color="#f0f4f4" roughness={0.25} metalness={0.05}/>
+            </mesh>
+            {/* Blue reflective glass — recessed 3cm behind frame */}
+            <mesh position={[0, 0, 0.01]}>
+              <boxGeometry args={[wide - 0.02, tall - 0.02, 0.05]}/>
+              <meshStandardMaterial
+                color="#40b8f0"
+                transparent opacity={0.65}
+                metalness={0.92} roughness={0.02}
+                emissive="#0a4a88" emissiveIntensity={0.4}
+              />
+            </mesh>
+            {/* Vertical glazing bar */}
+            <mesh position={[0, 0, 0.04]}>
+              <boxGeometry args={[0.04, tall - 0.04, 0.025]}/>
+              <meshStandardMaterial color="#d0e4ee" roughness={0.2} metalness={0.2}/>
+            </mesh>
+            {/* Horizontal glazing bar */}
+            <mesh position={[0, 0, 0.04]}>
+              <boxGeometry args={[wide - 0.04, 0.04, 0.025]}/>
+              <meshStandardMaterial color="#d0e4ee" roughness={0.2} metalness={0.2}/>
+            </mesh>
+            {/* Stone sill — protruding below */}
+            <mesh position={[0, -(tall/2 + 0.08), 0.12]}>
+              <boxGeometry args={[wide + 0.36, 0.12, 0.26]}/>
+              <meshStandardMaterial color="#b8c8c4" roughness={0.75}/>
+            </mesh>
+            {/* Lintel above */}
+            <mesh position={[0, (tall/2 + 0.07), 0.08]}>
+              <boxGeometry args={[wide + 0.26, 0.10, 0.20]}/>
+              <meshStandardMaterial color="#b8c8c4" roughness={0.75}/>
+            </mesh>
+          </group>
+        );
+
         return (
           <group key={`win-${idx}`}>
             {isTopRow && (
-              <group position={[rx, FH*0.55, offZ]}>
-                <mesh><boxGeometry args={[ww, wh, OWT+0.02]}/><meshStandardMaterial color="#88ccee" transparent opacity={0.45} metalness={0.9} roughness={0}/></mesh>
-                <mesh><boxGeometry args={[ww+0.06, wh+0.06, OWT-0.02]}/><meshStandardMaterial color="#b8ccd8" metalness={0.3} roughness={0.4}/></mesh>
-              </group>
+              <WindowUnit
+                pos={[rx, winY, offZ - wallFace]}
+                rot={[0, Math.PI, 0]}
+                wide={ww} tall={wh}
+              />
             )}
             {isBotRow && (
-              <group position={[rx, FH*0.55, offZ+totalD]}>
-                <mesh><boxGeometry args={[ww, wh, OWT+0.02]}/><meshStandardMaterial color="#88ccee" transparent opacity={0.45} metalness={0.9} roughness={0}/></mesh>
-                <mesh><boxGeometry args={[ww+0.06, wh+0.06, OWT-0.02]}/><meshStandardMaterial color="#b8ccd8" metalness={0.3} roughness={0.4}/></mesh>
-              </group>
+              <WindowUnit
+                pos={[rx, winY, offZ + totalD + wallFace]}
+                rot={[0, 0, 0]}
+                wide={ww} tall={wh}
+              />
             )}
             {isLeftCol && (
-              <group position={[offX, FH*0.55, rz]}>
-                <mesh><boxGeometry args={[OWT+0.02, wh, Math.min(ph*0.38,1.2)]}/><meshStandardMaterial color="#88ccee" transparent opacity={0.45} metalness={0.9} roughness={0}/></mesh>
-                <mesh><boxGeometry args={[OWT-0.02, wh+0.06, Math.min(ph*0.38,1.2)+0.06]}/><meshStandardMaterial color="#b8ccd8" metalness={0.3} roughness={0.4}/></mesh>
-              </group>
+              <WindowUnit
+                pos={[offX - wallFace, winY, rz]}
+                rot={[0, Math.PI/2, 0]}
+                wide={Math.min(ph*0.40, 1.2)} tall={wh}
+              />
             )}
             {isRightCol && (
-              <group position={[offX+totalW, FH*0.55, rz]}>
-                <mesh><boxGeometry args={[OWT+0.02, wh, Math.min(ph*0.38,1.2)]}/><meshStandardMaterial color="#88ccee" transparent opacity={0.45} metalness={0.9} roughness={0}/></mesh>
-                <mesh><boxGeometry args={[OWT-0.02, wh+0.06, Math.min(ph*0.38,1.2)+0.06]}/><meshStandardMaterial color="#b8ccd8" metalness={0.3} roughness={0.4}/></mesh>
-              </group>
+              <WindowUnit
+                pos={[offX + totalW + wallFace, winY, rz]}
+                rot={[0, -Math.PI/2, 0]}
+                wide={Math.min(ph*0.40, 1.2)} tall={wh}
+              />
             )}
           </group>
         );
@@ -546,10 +729,14 @@ function UnifiedHouse({ rooms, showWind, showSun, windDir }: {
         const rx = offX + px + pw/2; const rz = offZ + py + ph/2;
         return (
           <group key={`room-${idx}`} position={[rx, 0, rz]}>
-            {/* Floor */}
-            <mesh position={[0, 0.06, 0]} receiveShadow>
+            {/* Floor — selectable */}
+            <mesh position={[0, 0.06, 0]} receiveShadow
+              onClick={(e:any)=>{e.stopPropagation();onSelect?.({id:`floor-${idx}`,label:`${t.toUpperCase()} Floor`,type:"floor",color:colorOverrides?.[`floor-${idx}`]??floorColor});}}
+              onPointerOver={(e:any)=>{e.stopPropagation();document.body.style.cursor=editMode?"pointer":"auto";}}
+              onPointerOut={(e:any)=>{e.stopPropagation();document.body.style.cursor="auto";}}>
               <boxGeometry args={[pw - IWT, 0.12, ph - IWT]} />
-              <meshStandardMaterial color={floorColor} roughness={0.9} />
+              <meshStandardMaterial color={colorOverrides?.[`floor-${idx}`]??floorColor} roughness={0.9}
+                emissive={selectedId===`floor-${idx}`?"#002244":"#000000"} emissiveIntensity={selectedId===`floor-${idx}`?0.4:0}/>
             </mesh>
             {/* Tint overlay */}
             <mesh position={[0, 0.14, 0]} rotation={[-Math.PI/2,0,0]}>
@@ -624,7 +811,22 @@ export default function Model3DPage() {
   const [showWind, setShowWind] = useState(false);
   const [showSun,  setShowSun]  = useState(true);
   const [showGrid, setShowGrid] = useState(true);
+  const [nightLight, setNightLight] = useState(false);
+  const autoNight = (() => { const h = new Date().getHours(); return h < 6 || h > 19; })();
   const [camMode,  setCamMode]  = useState<"iso"|"top"|"interior">("iso");
+  // Edit mode
+  const [editMode, setEditMode] = useState(false);
+  const [selectedId, setSelectedId] = useState("");
+  const [colorOverrides, setColorOverrides] = useState<Record<string,string>>({});
+  const [selectedInfo, setSelectedInfo] = useState<{id:string;label:string;color:string;type:string}|null>(null);
+  // Client-only time — prevents SSR hydration mismatch
+  const [timeStr, setTimeStr] = useState("");
+  useEffect(() => {
+    const update = () => setTimeStr(new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}));
+    update();
+    const id = setInterval(update, 30000);
+    return () => clearInterval(id);
+  }, []);
   const [fps, setFps] = useState(0);
 
   const handleExportBIM = () => {
@@ -715,7 +917,12 @@ export default function Model3DPage() {
               </Link>
             ))}
           </nav>
-          <div style={{display:"flex",gap:10}}>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setEditMode((p:boolean)=>!p)}
+              style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",background:editMode?"rgba(13,242,242,0.15)":"rgba(13,242,242,0.06)",border:`1px solid ${editMode?"rgba(13,242,242,0.5)":"rgba(13,242,242,0.15)"}`,borderRadius:8,color:editMode?"#0df2f2":"#64748b",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              <span className="material-symbols-outlined" style={{fontSize:14}}>edit</span>
+              {editMode ? "EDITING" : "EDIT MODE"}
+            </button>
             <button onClick={handleExportGLTF} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",background:"rgba(13,242,242,0.06)",border:"1px solid rgba(13,242,242,0.15)",borderRadius:8,color:"#0df2f2",fontSize:11,fontWeight:700,cursor:"pointer"}}>
               <span className="material-symbols-outlined" style={{fontSize:14}}>upload</span>IMPORT BIM
             </button>
@@ -771,9 +978,9 @@ export default function Model3DPage() {
                 key={camMode}
               >
                 <Suspense fallback={null}>
-                  <Lighting dir={windDir} sunOn={showSun} />
+                  <Lighting dir={windDir} sunOn={showSun} nightLightOn={nightLight} />
                   <Ground showGrid={showGrid} />
-                  <UnifiedHouse rooms={rooms} showWind={showWind} showSun={showSun} windDir={windDir} />
+                  <UnifiedHouse rooms={rooms} showWind={showWind} showSun={showSun} windDir={windDir} editMode={editMode} selectedId={selectedId} colorOverrides={colorOverrides} onSelect={(info:any)=>{if(editMode){setSelectedId(info.id);setSelectedInfo(info);}}} />
                   <OrbitControls
                     enablePan enableZoom enableRotate
                     target={[0,1.5,0]}
@@ -787,9 +994,10 @@ export default function Model3DPage() {
             {/* Right toolbar */}
             <div style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",display:"flex",flexDirection:"column",gap:6}}>
               {[
-                {l:"WIND", i:"air",      active:showWind, fn:()=>setShowWind(!showWind)},
-                {l:"SUN",  i:"wb_sunny", active:showSun,  fn:()=>setShowSun(!showSun)},
-                {l:"GRID", i:"grid_on",  active:showGrid, fn:()=>setShowGrid(!showGrid)},
+                {l:"WIND",  i:"air",        active:showWind,             fn:()=>setShowWind(!showWind)},
+                {l:"SUN",   i:"wb_sunny",   active:showSun,              fn:()=>setShowSun(!showSun)},
+                {l:"LIGHT", i:"lightbulb",  active:nightLight, fn:()=>setNightLight(p=>!p)},
+                {l:"GRID",  i:"grid_on",    active:showGrid,             fn:()=>setShowGrid(!showGrid)},
               ].map(({l,i,active,fn})=>(
                 <button key={l} onClick={fn} style={{width:44,height:44,background:active?"rgba(13,242,242,0.15)":"rgba(6,14,14,0.92)",border:`1px solid ${active?"rgba(13,242,242,0.4)":"rgba(255,255,255,0.06)"}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:1,cursor:"pointer",transition:"all 0.2s"}}>
                   <span className="material-symbols-outlined" style={{fontSize:16,color:active?"#0df2f2":"#475569"}}>{i}</span>
@@ -803,13 +1011,25 @@ export default function Model3DPage() {
               {showSun&&(
                 <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px",background:"rgba(245,158,11,0.12)",border:"1px solid rgba(245,158,11,0.25)",borderRadius:8}}>
                   <span className="material-symbols-outlined" style={{fontSize:14,color:"#f59e0b"}}>wb_sunny</span>
-                  <span style={{fontSize:10,color:"#fbbf24",fontFamily:"monospace"}}>SUN: {windDir} · {sunHours.toFixed(1)}h/day · {new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>
+                  <span style={{fontSize:10,color:"#fbbf24",fontFamily:"monospace"}}>SUN: {windDir} · {sunHours.toFixed(1)}h/day · {timeStr}</span>
                 </div>
               )}
               {showWind&&(
                 <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px",background:"rgba(59,130,246,0.12)",border:"1px solid rgba(59,130,246,0.25)",borderRadius:8}}>
                   <span className="material-symbols-outlined" style={{fontSize:14,color:"#60a5fa"}}>air</span>
                   <span style={{fontSize:10,color:"#93c5fd",fontFamily:"monospace"}}>WIND: Prevailing {windDir}</span>
+                </div>
+              )}
+              {nightLight&&(
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px",background:"rgba(250,230,50,0.10)",border:"1px solid rgba(250,230,50,0.25)",borderRadius:8}}>
+                  <span className="material-symbols-outlined" style={{fontSize:14,color:"#fde047"}}>lightbulb</span>
+                  <span style={{fontSize:10,color:"#fef08a",fontFamily:"monospace"}}>Studio Lighting ON</span>
+                </div>
+              )}
+              {!nightLight&&autoNight&&(
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px",background:"rgba(80,100,200,0.10)",border:"1px solid rgba(80,100,200,0.25)",borderRadius:8}}>
+                  <span className="material-symbols-outlined" style={{fontSize:14,color:"#818cf8"}}>nights_stay</span>
+                  <span style={{fontSize:10,color:"#a5b4fc",fontFamily:"monospace"}}>Night Mode — press LIGHT for studio</span>
                 </div>
               )}
             </div>
@@ -828,6 +1048,47 @@ export default function Model3DPage() {
             <div style={{position:"absolute",bottom:48,right:66,fontSize:10,fontFamily:"monospace",color:"#334155",textAlign:"right",lineHeight:1.6}}>
               Drag to orbit<br/>Scroll to zoom<br/>Right-drag to pan
             </div>
+
+            {/* Colour editor panel — shows when editMode is on and something is selected */}
+            {editMode && selectedInfo && (
+              <div style={{position:"absolute",bottom:60,right:60,width:210,background:"rgba(6,12,16,0.97)",border:"1px solid rgba(13,242,242,0.3)",borderRadius:12,padding:16,fontFamily:"'Space Grotesk',sans-serif",boxShadow:"0 8px 32px rgba(0,0,0,0.7)",zIndex:200}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <div style={{color:"#0df2f2",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.1em"}}>{selectedInfo.label}</div>
+                  <button onClick={()=>{setSelectedId("");setSelectedInfo(null);}} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>
+                </div>
+                <div style={{fontSize:9,color:"rgba(13,242,242,0.5)",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>Wall / Surface Colour</div>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                  <input type="color" value={(colorOverrides[selectedInfo.id]??selectedInfo.color)?.replace(/[^#0-9a-fA-F]/g,"")||"#dde8ee"}
+                    onChange={e=>{const c=e.target.value;setColorOverrides((p:any)=>({...p,[selectedInfo.id]:c}));}}
+                    style={{width:44,height:32,border:"none",borderRadius:6,cursor:"pointer",background:"none"}}/>
+                  <span style={{color:"#94a3b8",fontSize:11,fontFamily:"monospace"}}>{colorOverrides[selectedInfo.id]??selectedInfo.color}</span>
+                </div>
+                <div style={{fontSize:9,color:"rgba(13,242,242,0.5)",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>Preset Colours</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:12}}>
+                  {["#dde8ee","#f5f0e8","#e8d4c0","#c8dde8","#e0e8d0","#f0e4d0","#d8d0e8","#2a3a4a","#e8c07a","#c0d8c0"].map(c=>(
+                    <button key={c} onClick={()=>setColorOverrides((p:any)=>({...p,[selectedInfo.id]:c}))}
+                      style={{width:22,height:22,background:c,border:(colorOverrides[selectedInfo.id]??selectedInfo.color)===c?"2px solid #0df2f2":"2px solid transparent",borderRadius:4,cursor:"pointer"}}/>
+                  ))}
+                </div>
+                <div style={{fontSize:9,color:"rgba(13,242,242,0.5)",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>Material</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,marginBottom:10}}>
+                  {["Standard","Metallic","Matte","Concrete"].map(m=>(
+                    <button key={m} style={{padding:"4px 6px",fontSize:9,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:5,color:"#64748b",cursor:"pointer",fontFamily:"monospace"}} onClick={()=>{}}>{m}</button>
+                  ))}
+                </div>
+                <button onClick={()=>setColorOverrides((p:any)=>{const n={...p};delete n[selectedInfo.id];return n;})}
+                  style={{width:"100%",padding:"5px",background:"rgba(255,80,80,0.1)",border:"1px solid rgba(255,80,80,0.2)",borderRadius:6,color:"#ff8080",fontSize:9,cursor:"pointer",fontFamily:"monospace",textTransform:"uppercase"}}>
+                  Reset to Default
+                </button>
+              </div>
+            )}
+
+            {/* Edit mode tip in left corner */}
+            {editMode && !selectedInfo && (
+              <div style={{position:"absolute",bottom:60,left:160,padding:"8px 14px",background:"rgba(13,242,242,0.08)",border:"1px solid rgba(13,242,242,0.2)",borderRadius:8,fontSize:10,color:"#0df2f2",fontFamily:"monospace"}}>
+                ✏ Click any wall, window, or floor to change its colour
+              </div>
+            )}
 
             <RoomLegend rooms={rooms} />
           </div>

@@ -18,6 +18,40 @@ const MapComponent = dynamic(() => import("@/components/MapComponent"), {
   ),
 });
 
+// ── Indian States list ─────────────────────────────────────────────────────────
+const INDIAN_STATES = [
+  { id: "andhra_pradesh", name: "Andhra Pradesh" },
+  { id: "assam", name: "Assam" },
+  { id: "bihar", name: "Bihar" },
+  { id: "chhattisgarh", name: "Chhattisgarh" },
+  { id: "delhi", name: "Delhi" },
+  { id: "goa", name: "Goa" },
+  { id: "gujarat", name: "Gujarat" },
+  { id: "haryana", name: "Haryana" },
+  { id: "himachal_pradesh", name: "Himachal Pradesh" },
+  { id: "jharkhand", name: "Jharkhand" },
+  { id: "karnataka", name: "Karnataka" },
+  { id: "kerala", name: "Kerala" },
+  { id: "madhya_pradesh", name: "Madhya Pradesh" },
+  { id: "maharashtra", name: "Maharashtra" },
+  { id: "manipur", name: "Manipur" },
+  { id: "meghalaya", name: "Meghalaya" },
+  { id: "odisha", name: "Odisha" },
+  { id: "punjab", name: "Punjab" },
+  { id: "rajasthan", name: "Rajasthan" },
+  { id: "tamil_nadu", name: "Tamil Nadu" },
+  { id: "telangana", name: "Telangana" },
+  { id: "uttar_pradesh", name: "Uttar Pradesh" },
+  { id: "uttarakhand", name: "Uttarakhand" },
+  { id: "west_bengal", name: "West Bengal" },
+];
+
+// States with Bhu Naksha (better boundary data)
+const BHU_NAKSHA_STATES = new Set([
+  "bihar", "chhattisgarh", "jharkhand", "karnataka", "madhya_pradesh",
+  "maharashtra", "odisha", "rajasthan", "uttar_pradesh", "uttarakhand",
+]);
+
 export default function MapPage() {
   const router = useRouter();
   const {
@@ -30,6 +64,15 @@ export default function MapPage() {
   const [plotBoundary, setPlotBoundary] = useState<number[][] | null>(null);
   const [buildability, setBuildability] = useState<{ ok: boolean; reason: string } | null>(null);
   const [plotArea, setPlotArea] = useState<number | null>(null);
+
+  // ── Land Record lookup state ──
+  const [showLandPanel, setShowLandPanel] = useState(false);
+  const [lrState, setLrState] = useState("karnataka");
+  const [lrDistrict, setLrDistrict] = useState("");
+  const [lrSurvey, setLrSurvey] = useState("");
+  const [lrLoading, setLrLoading] = useState(false);
+  const [lrResult, setLrResult] = useState<any>(null);
+  const [lrError, setLrError] = useState("");
 
   const handleLocationSelect = useCallback(async (lat: number, lon: number) => {
     setSelectedLocation(lat, lon);
@@ -58,6 +101,45 @@ export default function MapPage() {
     setStage("ready");
     setStatusMsg("");
   }, [setSelectedLocation, setError]);
+
+  const handleLandLookup = async () => {
+    setLrLoading(true);
+    setLrError("");
+    setLrResult(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const params = new URLSearchParams({
+        state: lrState,
+        district: lrDistrict,
+        survey_number: lrSurvey,
+        ...(selectedLat ? { lat: String(selectedLat) } : {}),
+        ...(selectedLon ? { lon: String(selectedLon) } : {}),
+      });
+      const resp = await fetch(`${apiBase}/land-record/lookup?${params}`);
+      const data = await resp.json();
+      if (data.error) {
+        setLrError(data.error);
+      } else {
+        setLrResult(data);
+        // If we got a boundary back, use it as the plot boundary
+        if (data.boundary && data.boundary.length >= 3) {
+          // boundary is [[lon,lat],...] — convert to [[lat,lon]] for MapComponent
+          const converted = data.boundary.map((c: number[]) => [c[1], c[0]]);
+          setPlotBoundary(converted);
+          if (data.area_sqm) setPlotArea(data.area_sqm);
+          if (!selectedLat && data.boundary[0]) {
+            setSelectedLocation(data.boundary[0][1], data.boundary[0][0]);
+          }
+          setStage("ready");
+          setBuildability({ ok: true, reason: "Boundary loaded from land records." });
+        }
+      }
+    } catch (e) {
+      setLrError("Could not reach backend. Make sure the server is running.");
+    } finally {
+      setLrLoading(false);
+    }
+  };
 
   const runAnalysis = async () => {
     if (!selectedLat || !selectedLon || !currentPlotId) return;
@@ -110,20 +192,23 @@ export default function MapPage() {
   };
 
   const isOverlayVisible = stage === "locating" || stage === "analyzing" || stage === "done";
-
-  // Panel z-index must be > 800 (Leaflet control max) but we use pointer-events to keep map clickable
   const PANEL_Z = 1200;
+  const hasBhuNaksha = BHU_NAKSHA_STATES.has(lrState);
 
   return (
     <>
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes fadeUp { from { opacity:0; transform: translateY(12px); } to { opacity:1; transform: translateY(0); } }
+        .lr-input { background: rgba(13,242,242,0.04); border: 1px solid rgba(13,242,242,0.12); border-radius: 8px; padding: 8px 12px; color: white; font-size: 12px; font-family: inherit; width: 100%; outline: none; }
+        .lr-input:focus { border-color: rgba(13,242,242,0.35); }
+        .lr-input option { background: #0a1a1a; }
+        .lr-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
       `}</style>
 
       <div style={{ height: "100vh", width: "100vw", display: "flex", flexDirection: "column", overflow: "hidden", background: "#080e0e", fontFamily: "'Space Grotesk', sans-serif" }}>
 
-        {/* Header — sits above everything */}
+        {/* Header */}
         <header style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", borderBottom: "1px solid rgba(255,255,255,0.05)", background: "rgba(8,14,14,0.99)", position: "relative", zIndex: PANEL_Z + 100 }}>
           <Link href="/" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
             <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 24 }}>deployed_code</span>
@@ -132,21 +217,215 @@ export default function MapPage() {
             </span>
           </Link>
           <div style={{ fontSize: 11, color: "#64748b", textAlign: "center" }}>
-            Click anywhere on the map to begin real-time environmental analysis
+            Click anywhere on the map · or use the Land Record panel to locate by survey number
           </div>
-          <div style={{ width: 128 }} />
+          {/* Land Record toggle button */}
+          <button
+            onClick={() => setShowLandPanel(p => !p)}
+            style={{
+              display: "flex", alignItems: "center", gap: 8, padding: "8px 16px",
+              borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer",
+              background: showLandPanel ? "rgba(13,242,242,0.12)" : "rgba(13,242,242,0.04)",
+              border: `1px solid ${showLandPanel ? "rgba(13,242,242,0.4)" : "rgba(13,242,242,0.12)"}`,
+              color: showLandPanel ? "#0df2f2" : "#64748b",
+              transition: "all 0.2s",
+            }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>domain</span>
+            Land Records
+          </button>
         </header>
 
-        {/* Map container — fills remaining space */}
+        {/* Map container */}
         <div style={{ flex: 1, position: "relative", overflow: "hidden", minHeight: 0 }}>
 
-          {/* Map itself */}
           <MapComponent
             onLocationSelect={handleLocationSelect}
             plotBoundary={plotBoundary}
             selectedLat={selectedLat}
             selectedLon={selectedLon}
           />
+
+          {/* ── LAND RECORDS PANEL ── */}
+          {showLandPanel && (
+            <div style={{
+              position: "absolute", top: 16, left: 16,
+              width: 340, maxHeight: "calc(100vh - 120px)", overflowY: "auto",
+              borderRadius: 16, padding: 20,
+              background: "rgba(8,18,18,0.97)", backdropFilter: "blur(20px)",
+              border: "1px solid rgba(13,242,242,0.18)",
+              boxShadow: "0 8px 40px rgba(0,0,0,0.7)",
+              zIndex: PANEL_Z + 50, animation: "fadeUp 0.25s ease",
+              fontFamily: "'Space Grotesk', sans-serif",
+            }}>
+              {/* Panel header */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 20 }}>domain</span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "white" }}>Indian Land Records</div>
+                    <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: "0.15em" }}>Bhu Naksha / Bhulekh Lookup</div>
+                  </div>
+                </div>
+                <button onClick={() => setShowLandPanel(false)} style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", padding: 4 }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 18 }}>close</span>
+                </button>
+              </div>
+
+              {/* Info note */}
+              <div style={{ padding: "8px 12px", borderRadius: 8, background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.15)", marginBottom: 14 }}>
+                <div style={{ fontSize: 10, color: "#fbbf24", lineHeight: 1.5 }}>
+                  Enter your survey/khasra number and state to look up official plot boundaries. For states with Bhu Naksha, real cadastral boundaries are fetched. Others link to the official state portal.
+                </div>
+              </div>
+
+              {/* State select */}
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", display: "block", marginBottom: 5 }}>State</label>
+                <div style={{ position: "relative" }}>
+                  <select
+                    value={lrState}
+                    onChange={e => setLrState(e.target.value)}
+                    className="lr-input"
+                  >
+                    {INDIAN_STATES.map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+                {/* Bhu Naksha badge */}
+                <div style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span className="lr-tag" style={{
+                    background: hasBhuNaksha ? "rgba(13,242,242,0.1)" : "rgba(100,116,139,0.1)",
+                    color: hasBhuNaksha ? "#0df2f2" : "#64748b",
+                    border: `1px solid ${hasBhuNaksha ? "rgba(13,242,242,0.25)" : "rgba(100,116,139,0.25)"}`,
+                  }}>
+                    {hasBhuNaksha ? "Bhu Naksha" : "Bhulekh Portal"}
+                  </span>
+                  <span style={{ fontSize: 9, color: "#475569" }}>
+                    {hasBhuNaksha ? "Cadastral boundary available" : "Portal link — manual lookup"}
+                  </span>
+                </div>
+              </div>
+
+              {/* District */}
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", display: "block", marginBottom: 5 }}>District (optional)</label>
+                <input
+                  type="text"
+                  value={lrDistrict}
+                  onChange={e => setLrDistrict(e.target.value)}
+                  placeholder="e.g. Bengaluru Urban"
+                  className="lr-input"
+                />
+              </div>
+
+              {/* Survey / Khasra number */}
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", display: "block", marginBottom: 5 }}>Survey / Khasra Number</label>
+                <input
+                  type="text"
+                  value={lrSurvey}
+                  onChange={e => setLrSurvey(e.target.value)}
+                  placeholder="e.g. 45/A or 1234/2"
+                  className="lr-input"
+                />
+              </div>
+
+              {/* Tip: also click map */}
+              {selectedLat && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, padding: "6px 10px", borderRadius: 8, background: "rgba(13,242,242,0.05)", border: "1px solid rgba(13,242,242,0.1)" }}>
+                  <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 14 }}>location_on</span>
+                  <span style={{ fontSize: 10, color: "rgba(13,242,242,0.7)" }}>
+                    Using map pin: {selectedLat.toFixed(5)}°N, {selectedLon?.toFixed(5)}°E
+                  </span>
+                </div>
+              )}
+
+              {/* Lookup button */}
+              <button
+                onClick={handleLandLookup}
+                disabled={lrLoading}
+                style={{
+                  width: "100%", padding: "11px 0", borderRadius: 10, fontSize: 12,
+                  fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                  background: lrLoading ? "rgba(13,242,242,0.2)" : "#0df2f2",
+                  color: "#080e0e", border: "none", cursor: lrLoading ? "wait" : "pointer",
+                  boxShadow: lrLoading ? "none" : "0 0 16px rgba(13,242,242,0.2)",
+                  marginBottom: 14,
+                }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16, animation: lrLoading ? "spin 1s linear infinite" : "none" }}>
+                  {lrLoading ? "sync" : "search"}
+                </span>
+                {lrLoading ? "Fetching Records…" : "Lookup Land Record"}
+              </button>
+
+              {/* Error */}
+              {lrError && (
+                <div style={{ padding: "10px 12px", borderRadius: 8, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#fca5a5" }}>{lrError}</div>
+                </div>
+              )}
+
+              {/* Result */}
+              {lrResult && (
+                <div style={{ borderRadius: 10, border: "1px solid rgba(13,242,242,0.12)", overflow: "hidden" }}>
+                  {/* Result header */}
+                  <div style={{ padding: "10px 14px", background: "rgba(13,242,242,0.06)", borderBottom: "1px solid rgba(13,242,242,0.08)" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#0df2f2" }}>{lrResult.state}</div>
+                    <div style={{ fontSize: 9, color: "#64748b", marginTop: 2 }}>{lrResult.source}</div>
+                  </div>
+
+                  {/* Data rows */}
+                  {[
+                    { k: "Survey / Khasra", v: lrResult.survey_number },
+                    { k: "District", v: lrResult.district },
+                    { k: "Owner (Listed)", v: lrResult.owner_name },
+                    { k: "Land Type", v: lrResult.land_type },
+                    { k: "Area", v: lrResult.area_sqm ? `${lrResult.area_sqm.toLocaleString()} m²` : "—" },
+                    { k: "Boundary Pts", v: lrResult.boundary ? `${lrResult.boundary.length} coordinates` : "—" },
+                  ].map(({ k, v }) => (
+                    <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "7px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                      <span style={{ fontSize: 10, color: "#64748b" }}>{k}</span>
+                      <span style={{ fontSize: 10, color: "#e2e8f0", fontFamily: "monospace", maxWidth: 160, textAlign: "right", wordBreak: "break-all" }}>{v || "—"}</span>
+                    </div>
+                  ))}
+
+                  {/* Note */}
+                  {lrResult.note && (
+                    <div style={{ padding: "8px 14px", background: "rgba(251,191,36,0.04)" }}>
+                      <div style={{ fontSize: 9, color: "#a16207", lineHeight: 1.5 }}>{lrResult.note}</div>
+                    </div>
+                  )}
+
+                  {/* Portal link */}
+                  {lrResult.portal_url && (
+                    <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 10, color: "#64748b" }}>{lrResult.portal_name}</span>
+                      <a
+                        href={lrResult.portal_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: 10, color: "#0df2f2", textDecoration: "none", display: "flex", alignItems: "center", gap: 4 }}
+                      >
+                        Open Portal
+                        <span className="material-symbols-outlined" style={{ fontSize: 12 }}>open_in_new</span>
+                      </a>
+                    </div>
+                  )}
+
+                  {/* If we got a boundary, show Use This Plot button */}
+                  {lrResult.boundary && lrResult.boundary.length >= 3 && (
+                    <div style={{ padding: "10px 14px", borderTop: "1px solid rgba(13,242,242,0.08)" }}>
+                      <div style={{ fontSize: 9, color: "rgba(13,242,242,0.6)", marginBottom: 4 }}>Boundary loaded onto map. Ready to analyse.</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── LOCATING / ANALYZING overlay ── */}
           {isOverlayVisible && (
@@ -173,7 +452,7 @@ export default function MapPage() {
             </div>
           )}
 
-          {/* ── READY panel — appears after boundary loaded ── */}
+          {/* ── READY panel ── */}
           {stage === "ready" && selectedLat && (
             <div style={{
               position: "absolute", bottom: 32, left: "50%", transform: "translateX(-50%)",
@@ -188,7 +467,9 @@ export default function MapPage() {
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 22 }}>location_on</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.2em", color: "#0df2f2", fontWeight: 700, marginBottom: 2 }}>Plot Selected</div>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.2em", color: "#0df2f2", fontWeight: 700, marginBottom: 2 }}>
+                    {lrResult?.boundary ? "Plot from Land Records" : "Plot Selected"}
+                  </div>
                   <div style={{ fontSize: 12, fontFamily: "monospace", color: "white" }}>
                     {selectedLat.toFixed(5)}°N &nbsp;·&nbsp; {selectedLon?.toFixed(5)}°E
                   </div>
@@ -199,7 +480,7 @@ export default function MapPage() {
                   color: buildability?.ok === false ? "#f87171" : "#0df2f2",
                   border: `1px solid ${buildability?.ok === false ? "rgba(239,68,68,0.3)" : "rgba(13,242,242,0.2)"}`,
                 }}>
-                  {buildability?.ok === false ? "⚠ Restricted" : "✓ Buildable"}
+                  {buildability?.ok === false ? "Restricted" : "Buildable"}
                 </div>
               </div>
 
@@ -207,7 +488,7 @@ export default function MapPage() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                 {[
                   { label: "Plot Area", value: plotArea ? `${plotArea.toLocaleString()} m²` : "—" },
-                  { label: "Boundary", value: plotBoundary ? `${plotBoundary.length} pts` : "Auto" },
+                  { label: "Boundary", value: lrResult?.boundary ? "Land Records" : plotBoundary ? `${plotBoundary.length} pts` : "Auto" },
                   { label: "Plot ID", value: currentPlotId?.slice(0, 14) ?? "—" },
                 ].map(({ label, value }) => (
                   <div key={label} style={{ borderRadius: 10, padding: "8px 12px", background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)" }}>
@@ -217,6 +498,14 @@ export default function MapPage() {
                 ))}
               </div>
 
+              {/* Land record badge */}
+              {lrResult?.survey_number && lrResult.survey_number !== "—" && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8, background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.1)" }}>
+                  <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 14 }}>gavel</span>
+                  <span style={{ fontSize: 10, color: "#94a3b8" }}>Survey No. <span style={{ color: "white", fontFamily: "monospace" }}>{lrResult.survey_number}</span> · {lrResult.state}</span>
+                </div>
+              )}
+
               {/* Warning */}
               {buildability?.ok === false && (
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8, borderRadius: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
@@ -225,7 +514,6 @@ export default function MapPage() {
                 </div>
               )}
 
-              {/* Error */}
               {error && (
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8, borderRadius: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
                   <span className="material-symbols-outlined" style={{ color: "#f87171", fontSize: 16, marginTop: 1 }}>error</span>

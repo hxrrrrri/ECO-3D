@@ -167,7 +167,6 @@ def _generate_adaptive_layout(
 ) -> list:
     area_per_floor = max(area / num_floors, 50.0)
     cross_dir = _wind_cross_orientation(wind_dir)
-
     room_types = _rooms_for_house_type(house_type, area, room_preferences or {})
 
     if flood_risk > 0.6 and num_floors > 1:
@@ -180,15 +179,14 @@ def _generate_adaptive_layout(
         per = math.ceil(len(room_types) / num_floors)
         floor_assignments = [(r, min(i // per + 1, num_floors)) for i, r in enumerate(room_types)]
 
-    # Room dimension ranges (w_min, w_max, h_min, h_max)
     dim_ranges = {
-        "living":     (5.5, 8.5, 4.0, 6.5),
-        "bedroom":    (3.2, 5.2, 3.0, 4.8),
+        "living":     (5.0, 8.0, 4.0, 6.5),
+        "bedroom":    (3.2, 5.0, 3.0, 4.5),
         "kitchen":    (3.0, 5.0, 2.8, 4.2),
-        "bathroom":   (2.0, 3.2, 2.0, 3.0),
+        "bathroom":   (1.8, 3.0, 1.8, 3.0),
         "office":     (3.0, 4.5, 3.0, 4.2),
         "garage":     (5.0, 7.5, 4.5, 6.0),
-        "utility":    (2.5, 4.0, 2.5, 3.5),
+        "utility":    (2.5, 3.5, 2.5, 3.5),
         "dining":     (3.0, 5.0, 2.5, 4.0),
         "puja_room":  (2.0, 3.0, 2.0, 3.0),
     }
@@ -197,80 +195,131 @@ def _generate_adaptive_layout(
         r = dim_ranges.get(rtype, (3.0, 5.0, 3.0, 4.5))
         return round(rng.uniform(r[0], r[1]), 1), round(rng.uniform(r[2], r[3]), 1)
 
-    # Generate plot polygon
-    poly = _make_plot_boundary(plot_shape, area)
-    bx0, by0, bx1, by1 = _bbox_of_polygon(poly)
-    max_w = bx1 - bx0
-    max_h_total = by1 - by0
+    # ── Shape-specific zone definitions ─────────────────────────────────────
+    # Each zone is (x_start, y_start, zone_width, zone_height)
+    # Rooms are packed into zones left-to-right, top-to-bottom
+    # This guarantees rooms NEVER go outside the shape boundary
+    s = math.sqrt(area)
+    shape = (plot_shape or "rectangle").lower().replace("-","").replace(" ","")
 
-    # Solar/wind-aware ordering: sun-facing rooms first (living, bedroom) for top row
-    sun_priority = {"living", "bedroom", "dining", "puja_room"}
-    wind_rooms = {"kitchen", "bathroom", "utility"}
+    def make_zones(shape: str, s: float):
+        if shape == "square":
+            w, h = s, s
+            return [(0, 0, w, h)]
+        elif shape == "rectangle":
+            w, h = s * 1.45, s * 0.70
+            return [(0, 0, w, h)]
+        elif shape == "lshape":
+            # L-shape: wide top bar + left stub at bottom
+            W, H = s * 1.35, s * 1.35
+            return [
+                (0, 0,          W,       H * 0.45),   # top horizontal bar
+                (0, H * 0.45,   W * 0.5, H * 0.55),   # bottom-left stub
+            ]
+        elif shape == "tshape":
+            # T-shape: wide top bar + narrow stem in center-bottom
+            W, H = s * 1.6, s * 1.1
+            stem_w = W * 0.38
+            stem_x = (W - stem_w) / 2
+            return [
+                (0,      0,        W,       H * 0.48),   # top bar
+                (stem_x, H * 0.48, stem_w,  H * 0.52),   # center stem
+            ]
+        elif shape == "irregular":
+            # Irregular: offset zones to create a non-rectangular silhouette
+            W, H = s * 1.25, s * 1.0
+            return [
+                (0,        0,        W * 0.85,  H * 0.45),
+                (W * 0.15, H * 0.45, W * 0.85,  H * 0.30),
+                (0,        H * 0.75, W * 0.70,  H * 0.25),
+            ]
+        else:
+            w, h = s * 1.45, s * 0.70
+            return [(0, 0, w, h)]
 
-    # Sort by eco priority: sun rooms first, then service rooms last
-    def eco_sort_key(rt):
-        if rt in sun_priority: return 0
-        if rt in wind_rooms: return 2
-        return 1
+    zones = make_zones(shape, s)
 
-    # Place rooms per floor respecting plot shape
+    # ── Pack rooms into zones ────────────────────────────────────────────────
+    # Distribute rooms proportionally across zones by area
+    zone_areas = [zw * zh for (_, _, zw, zh) in zones]
+    total_zone_area = sum(zone_areas)
+    total_rooms = len([fa for fa in floor_assignments if fa[1] == 1])
+    zone_room_counts = [max(1, round(za / total_zone_area * total_rooms)) for za in zone_areas]
+    # Adjust last zone to absorb rounding error
+    while sum(zone_room_counts) < total_rooms:
+        zone_room_counts[-1] += 1
+    while sum(zone_room_counts) > total_rooms:
+        zone_room_counts[-1] = max(1, zone_room_counts[-1] - 1)
+
     cursors: dict = {}
     rooms = []
     floor_type_counts: dict = {}
 
-    for rtype, floor in floor_assignments:
-        if floor not in cursors:
-            cursors[floor] = [0.0, 0.0, 0.0]  # cx, cy, row_h
-        if floor not in floor_type_counts:
-            floor_type_counts[floor] = {}
+    for floor_n in range(1, num_floors + 1):
+        floor_rooms = [(rt, fl) for rt, fl in floor_assignments if fl == floor_n]
+        zi = 0  # zone index
+        zone_placed = 0
 
-        w, h = dims(rtype)
-        cx, cy, row_h = cursors[floor]
+        for rtype, floor in floor_rooms:
+            if floor not in floor_type_counts:
+                floor_type_counts[floor] = {}
 
-        # Try to fit in current position; wrap to new row if needed
-        # Account for L-shape / T-shape: check if room fits in polygon
-        placed = False
-        for attempt in range(8):
-            if cx + w > max_w * 1.05:
-                cy += row_h
-                cx = 0.0
+            w, h = dims(rtype)
+            # Advance zone if current is full
+            if zi < len(zones) - 1 and zone_placed >= zone_room_counts[zi]:
+                zi += 1
+                zone_placed = 0
+
+            zx0, zy0, zw, zh = zones[zi % len(zones)]
+
+            # Get/init cursor for (floor, zone)
+            ck = (floor, zi)
+            if ck not in cursors:
+                cursors[ck] = [zx0, zy0, 0.0]  # cx, cy, row_h
+            cx2, cy2, row_h = cursors[ck]
+
+            # Clamp room dims to fit zone
+            w = min(w, zw - 0.2)
+            h = min(h, zh - 0.2)
+
+            # Wrap to next row if needed
+            if cx2 + w > zx0 + zw:
+                cy2 += row_h
+                cx2 = zx0
                 row_h = 0.0
-                cursors[floor] = [cx, cy, row_h]
 
-            # Check if this position is inside the plot polygon
-            if _room_fits_in_polygon(cx, cy, w, h, poly):
-                placed = True
-                break
-            else:
-                # Try shifting right/down
-                cx += w * 0.3
-                if cx + w > max_w:
-                    cy += row_h * 0.5
-                    cx = 0.0
-                    row_h = 0.0
-                cursors[floor] = [cx, cy, row_h]
+            # If we've run out of vertical space in this zone, move to next
+            if cy2 + h > zy0 + zh:
+                if zi < len(zones) - 1:
+                    zi += 1
+                    zone_placed = 0
+                    zx0, zy0, zw, zh = zones[zi]
+                    ck = (floor, zi)
+                    if ck not in cursors:
+                        cursors[ck] = [zx0, zy0, 0.0]
+                    cx2, cy2, row_h = cursors[ck]
+                    w = min(w, zw - 0.2)
+                    h = min(h, zh - 0.2)
 
-        if not placed:
-            # Force fit in bbox with slight adjustment
-            cx = min(cx, max_w - w)
-            cy = min(cy, max_h_total - h)
+            # Final position
+            px = round(cx2, 1)
+            py = round(cy2, 1)
 
-        orient = _orient_for_eco(rtype, sun_dir, cross_dir, maximize_sunlight, natural_ventilation, rng)
+            orient = _orient_for_eco(rtype, sun_dir, cross_dir, maximize_sunlight, natural_ventilation, rng)
 
-        # Count duplicates for ID
-        cnt = floor_type_counts[floor].get(rtype, 0)
-        floor_type_counts[floor][rtype] = cnt + 1
-        rid = f"{rtype}_{floor}_{cnt+1}"
+            cnt = floor_type_counts[floor].get(rtype, 0)
+            floor_type_counts[floor][rtype] = cnt + 1
+            rid = f"{rtype}_{floor}_{cnt+1}"
 
-        rooms.append(Room(
-            id=rid,
-            type=rtype, width=w, height=h,
-            x=round(cx, 1), y=round(cy, 1),
-            floor=floor, orientation=orient,
-        ))
-        row_h = max(row_h, h)
-        cx += w
-        cursors[floor] = [cx, cy, row_h]
+            rooms.append(Room(
+                id=rid, type=rtype, width=w, height=h,
+                x=px, y=py, floor=floor, orientation=orient,
+            ))
+
+            row_h = max(row_h, h)
+            cx2 += w
+            cursors[ck] = [cx2, cy2, row_h]
+            zone_placed += 1
 
     return rooms
 

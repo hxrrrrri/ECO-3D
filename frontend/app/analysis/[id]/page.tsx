@@ -189,255 +189,484 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
     canvas.width = W; canvas.height = H;
     timeRef.current = t / 1000;
 
-    // Background
-    ctx.fillStyle = "#080f0f";
+    // ── Background + grid ──
+    ctx.fillStyle = "#f4f0e8";  // warm white like drafting paper
     ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = "rgba(13,242,242,0.06)"; ctx.lineWidth = 0.5;
-    for(let x=0;x<W;x+=25){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
-    for(let y=0;y<H;y+=25){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+    ctx.strokeStyle = "rgba(100,140,160,0.18)"; ctx.lineWidth = 0.5;
+    const GRID = 20;
+    for(let x=0;x<W;x+=GRID){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+    for(let y=0;y<H;y+=GRID){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
 
     if (rooms.length === 0) {
-      ctx.fillStyle = "rgba(13,242,242,0.5)";
-      ctx.font = "bold 14px monospace"; ctx.textAlign = "center";
-      ctx.fillText("AWAITING FLOOR PLAN GENERATION", W/2, H/2-12);
-      ctx.fillStyle = "rgba(13,242,242,0.3)"; ctx.font = "10px monospace";
-      ctx.fillText("Select a plot and run analysis", W/2, H/2+10);
+      ctx.fillStyle = "#2a3a4a"; ctx.font = "bold 14px 'Space Grotesk', sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("AWAITING FLOOR PLAN GENERATION", W/2, H/2-10);
+      ctx.fillStyle = "#64748b"; ctx.font = "11px sans-serif";
+      ctx.fillText("Select a plot and run analysis", W/2, H/2+14);
       return;
     }
 
     const SCALE = zoom;
-    const WALL_T = Math.max(5, zoom * 0.28);
-    const INT_T = Math.max(3, zoom * 0.14);
+    const OWT = Math.max(8, zoom * 0.45);   // outer wall thickness px
+    const IWT = Math.max(4, zoom * 0.2);    // inner wall thickness px
 
-    const laid = layoutRooms(rooms);
-    if(laid.length === 0) return;
+    // ── Shape-specific layout: different arrangement per shape ──
+    const shape = plotShape.toLowerCase().replace(/[-\s]/g,"");
 
-    const maxPX = Math.max(...laid.map(r => r.px + r.pw));
-    const maxPY = Math.max(...laid.map(r => r.py + r.ph));
-    const bw = maxPX * SCALE; const bh = maxPY * SCALE;
-    const offX = (W - bw) / 2; const offY = (H - bh) / 2 + 10;
+    // Lay out rooms into a grid matching the plot shape
+    const floor1 = rooms.filter(r => (r.floor ?? 1) === 1);
+    const ORDER = ["living","kitchen","dining","bedroom","bedroom","bedroom","bathroom","puja_room","office","utility","garage"];
+    const sorted = [...floor1].sort((a,b)=>{
+      const ai=ORDER.findIndex(o=>a.type.toLowerCase().includes(o.replace("_","")));
+      const bi=ORDER.findIndex(o=>b.type.toLowerCase().includes(o.replace("_","")));
+      return (ai<0?99:ai)-(bi<0?99:bi);
+    });
 
-    // ── Draw plot shape boundary ──
-    const poly = makePlotPolygon(plotShape, plotArea);
-    if(poly.length > 2) {
-      const polyMaxX = Math.max(...poly.map(p=>p[0]));
-      const polyMaxY = Math.max(...poly.map(p=>p[1]));
-      const pScaleX = bw / polyMaxX;
-      const pScaleY = bh / polyMaxY;
-      ctx.save();
-      ctx.strokeStyle = "rgba(255,200,50,0.5)";
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([6,4]);
-      ctx.beginPath();
-      poly.forEach(([px,py], i) => {
-        const sx = offX + px * pScaleX;
-        const sy = offY + py * pScaleY;
-        i === 0 ? ctx.moveTo(sx,sy) : ctx.lineTo(sx,sy);
+    // ── NORMALIZE room sizes to be realistic and proportional ──
+    const normalizeSize = (r: Room) => {
+      const t = r.type.toLowerCase();
+      if(t.includes("living"))   return {w:Math.max(5.0,Math.min(8.0,r.width)),  h:Math.max(4.0,Math.min(6.5,r.height))};
+      if(t.includes("kitchen"))  return {w:Math.max(3.2,Math.min(5.0,r.width)),  h:Math.max(3.0,Math.min(4.5,r.height))};
+      if(t.includes("dining"))   return {w:Math.max(3.0,Math.min(5.0,r.width)),  h:Math.max(3.0,Math.min(4.5,r.height))};
+      if(t.includes("bedroom"))  return {w:Math.max(3.2,Math.min(5.0,r.width)),  h:Math.max(3.0,Math.min(4.5,r.height))};
+      if(t.includes("bathroom")) return {w:Math.max(1.8,Math.min(3.0,r.width)),  h:Math.max(1.8,Math.min(3.0,r.height))};
+      if(t.includes("puja"))     return {w:Math.max(2.0,Math.min(3.0,r.width)),  h:Math.max(2.0,Math.min(3.0,r.height))};
+      if(t.includes("office"))   return {w:Math.max(3.0,Math.min(4.5,r.width)),  h:Math.max(3.0,Math.min(4.0,r.height))};
+      if(t.includes("garage"))   return {w:Math.max(5.0,Math.min(7.5,r.width)),  h:Math.max(4.5,Math.min(6.5,r.height))};
+      if(t.includes("utility"))  return {w:Math.max(2.0,Math.min(3.5,r.width)),  h:Math.max(2.0,Math.min(3.5,r.height))};
+      return {w:Math.max(2.5,Math.min(4.5,r.width)), h:Math.max(2.5,Math.min(4.0,r.height))};
+    };
+
+    // ── Shape-driven row arrangement ──
+    // Different shapes use different row splits so the layout actually varies
+    let rowDef: number[];  // how many rooms per row
+    const n = sorted.length;
+    if(shape==="lshape") {
+      // L: top row has ~60% of rooms (the long bar), bottom-left has rest
+      const topN = Math.ceil(n * 0.58);
+      rowDef = [topN, n - topN];
+    } else if(shape==="tshape") {
+      // T: top row full width, then 2 narrower middle rows
+      const topN = Math.min(3, Math.ceil(n*0.35));
+      const midN = Math.min(3, Math.ceil(n*0.35));
+      rowDef = [topN, midN, n - topN - midN];
+    } else if(shape==="irregular") {
+      // Irregular: stagger rows unevenly (2, 3, 2, remainder)
+      const r0=Math.min(2,n); const r1=Math.min(3,n-r0); const r2=Math.min(2,n-r0-r1);
+      rowDef = [r0,r1,r2,n-r0-r1-r2].filter(x=>x>0);
+    } else if(shape==="square") {
+      // Square: roughly equal rows
+      const cols = Math.round(Math.sqrt(n));
+      rowDef = Array.from({length:Math.ceil(n/cols)},(_,i)=>Math.min(cols,n-i*cols)).filter(x=>x>0);
+    } else {
+      // Rectangle (default): public row + private row + service row
+      const pubRooms = sorted.filter(r=>["living","kitchen","dining"].some(t=>r.type.toLowerCase().includes(t)));
+      const prvRooms = sorted.filter(r=>["bedroom","bathroom","puja"].some(t=>r.type.toLowerCase().includes(t.replace("_",""))));
+      const svcRooms = sorted.filter(r=>["office","utility","garage","corridor"].some(t=>r.type.toLowerCase().includes(t)));
+      const rows2: Room[][] = [pubRooms,prvRooms,svcRooms].filter(r=>r.length>0);
+      // Use row sizes
+      const rowData2 = rows2.map(row => {
+        const totalW2 = row.reduce((s,r)=>s+normalizeSize(r).w,0);
+        const maxH2 = Math.max(...row.map(r=>normalizeSize(r).h));
+        return {totalW:totalW2, maxH:maxH2, rooms:row};
       });
-      ctx.closePath(); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = "rgba(255,200,50,0.03)";
-      ctx.fill();
-      ctx.restore();
-      // Plot shape label
-      ctx.fillStyle = "rgba(255,200,50,0.55)";
-      ctx.font = "8px monospace"; ctx.textAlign = "left";
-      ctx.fillText(`PLOT: ${plotShape.toUpperCase()} — ${plotArea}m²`, offX+2, offY - WALL_T - 14);
+      const maxW2 = Math.max(...rowData2.map(r=>r.totalW));
+      const laid2: Array<Room & {pw:number;ph:number;px:number;py:number}> = [];
+      let curY2=0;
+      rowData2.forEach(({totalW:tw,maxH:mh,rooms:row})=>{
+        const scale = tw < maxW2 ? maxW2/tw : 1;
+        let curX2=0;
+        row.forEach(r=>{
+          const sz=normalizeSize(r);
+          laid2.push({...r,pw:sz.w*scale,ph:sz.h,px:curX2,py:curY2});
+          curX2+=sz.w*scale;
+        });
+        curY2+=mh;
+      });
+      // Use laid2 directly
+      const maxPX2 = Math.max(...laid2.map(r=>r.px+r.pw));
+      const maxPY2 = Math.max(...laid2.map(r=>r.py+r.ph));
+      const bw2 = maxPX2*SCALE; const bh2 = maxPY2*SCALE;
+      const offX2 = (W-bw2)/2; const offY2 = (H-bh2)/2+10;
+      renderFloorPlan(ctx, laid2, maxPX2, maxPY2, offX2, offY2, SCALE, OWT, IWT, W, H, t);
+      return;
     }
+
+    // Build rows from rowDef
+    const rows3: Room[][] = [];
+    let ri=0;
+    rowDef.forEach(count=>{
+      rows3.push(sorted.slice(ri,ri+count));
+      ri+=count;
+    });
+
+    const rowData3 = rows3.filter(r=>r.length>0).map(row=>{
+      const tw=row.reduce((s,r)=>s+normalizeSize(r).w,0);
+      const mh=Math.max(...row.map(r=>normalizeSize(r).h));
+      return {totalW:tw, maxH:mh, rooms:row};
+    });
+    const maxW3 = Math.max(...rowData3.map(r=>r.totalW));
+    const laid3: Array<Room & {pw:number;ph:number;px:number;py:number}> = [];
+    let curY3=0;
+
+    // Shape-specific x offsets to create actual shape variation
+    rowData3.forEach(({totalW:tw,maxH:mh,rooms:row},ri2)=>{
+      const scale = tw < maxW3 ? maxW3/tw : 1;
+      // L-shape: indent second row to the right
+      // T-shape: center the narrower rows
+      // Irregular: alternate left/center
+      let startX = 0;
+      if(shape==="lshape" && ri2>=1) startX = maxW3 * 0.5;
+      if(shape==="tshape" && ri2>=1) startX = (maxW3 - tw*scale) / 2;
+      if(shape==="irregular") startX = [0, maxW3*0.15, 0, maxW3*0.1][ri2] ?? 0;
+
+      let curX3=startX;
+      row.forEach(r=>{
+        const sz=normalizeSize(r);
+        laid3.push({...r,pw:sz.w*scale,ph:sz.h,px:curX3,py:curY3});
+        curX3+=sz.w*scale;
+      });
+      curY3+=mh;
+    });
+
+    const maxPX3 = Math.max(...laid3.map(r=>r.px+r.pw));
+    const maxPY3 = Math.max(...laid3.map(r=>r.py+r.ph));
+    const bw3 = maxPX3*SCALE; const bh3 = maxPY3*SCALE;
+    const offX3 = (W-bw3)/2; const offY3 = (H-bh3)/2+10;
+    renderFloorPlan(ctx, laid3, maxPX3, maxPY3, offX3, offY3, SCALE, OWT, IWT, W, H, t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rooms, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, layoutRooms, windVec]);
+
+  // ── renderFloorPlan: the actual drawing ────────────────────────────────────
+  const renderFloorPlan = useCallback((
+    ctx: CanvasRenderingContext2D,
+    laid: Array<Room & {pw:number;ph:number;px:number;py:number}>,
+    maxPX: number, maxPY: number,
+    offX: number, offY: number,
+    SCALE: number, OWT: number, IWT: number,
+    W: number, H: number, t: number
+  ) => {
+    if(laid.length===0) return;
+    const bw = maxPX*SCALE; const bh = maxPY*SCALE;
+    timeRef.current = t / 1000;
+
+    const ROOM_CFG: Record<string,{bg:string;border:string;label:string}> = {
+      living:    {bg:"#f0f8f0",border:"#2a8a6a",label:"LIVING ROOM"},
+      bedroom:   {bg:"#f0f4ff",border:"#3a6aaa",label:"BEDROOM"},
+      kitchen:   {bg:"#f8f4e8",border:"#8a6a2a",label:"KITCHEN"},
+      bathroom:  {bg:"#f4f0ff",border:"#7a5a9a",label:"BATHROOM"},
+      office:    {bg:"#fffff0",border:"#8a8a2a",label:"STUDY"},
+      garage:    {bg:"#f2f2f2",border:"#6a7a7a",label:"GARAGE"},
+      utility:   {bg:"#fff8f4",border:"#9a6a3a",label:"UTILITY"},
+      dining:    {bg:"#fff4f0",border:"#aa4444",label:"DINING"},
+      puja_room: {bg:"#fffce8",border:"#c8900a",label:"PUJA ROOM"},
+    };
+    const getStyle=(t:string)=>{
+      const k=Object.keys(ROOM_CFG).find(k=>t.toLowerCase().includes(k.replace("_","")));
+      return k?ROOM_CFG[k]:{bg:"#f8f8f8",border:"#555",label:t.toUpperCase()};
+    };
+
+    const windVecLocal = (() => {
+      const M: Record<string,[number,number]> = {N:[0,-1],NE:[1,-1],E:[1,0],SE:[1,1],S:[0,1],SW:[-1,1],W:[-1,0],NW:[-1,-1]};
+      const key=Object.keys(M).find(k=>windDir.startsWith(k))??"SW";
+      const [x,z]=M[key]; const l=Math.sqrt(x*x+z*z)||1;
+      return {x:x/l,y:z/l};
+    })();
 
     // ── Solar arc ──
     if(showSolarPath) {
-      const now = new Date();
-      const hourAngle = ((now.getHours() + now.getMinutes()/60) - 12) * 15 * (Math.PI/180);
-      const solarElev = Math.sin(hourAngle);
+      const now2=new Date(); const h2=now2.getHours()+now2.getMinutes()/60;
       ctx.save();
-      ctx.strokeStyle = "rgba(210,120,20,0.4)"; ctx.lineWidth = 1.5; ctx.setLineDash([5,5]);
+      ctx.strokeStyle="rgba(200,110,20,0.35)"; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
       ctx.beginPath();
-      for(let i=0;i<=30;i++){
-        const a = (Math.PI * i) / 30;
-        const sx = offX - 40 + (bw + 80) * (i/30);
-        const sy = offY - 50 - Math.sin(a) * 40;
-        i === 0 ? ctx.moveTo(sx,sy) : ctx.lineTo(sx,sy);
+      for(let i2=0;i2<=30;i2++){
+        const a2=(Math.PI*i2)/30;
+        const sx2=offX-40+(bw+80)*(i2/30);
+        const sy2=offY-55-Math.sin(a2)*42;
+        i2===0?ctx.moveTo(sx2,sy2):ctx.lineTo(sx2,sy2);
       }
       ctx.stroke(); ctx.setLineDash([]);
-      // Real-time sun position
-      const sunX = offX + bw * ((now.getHours() - 6) / 12);
-      const sunY = offY - 50 - Math.max(0, Math.sin(Math.max(0, (now.getHours()-6)*Math.PI/12))) * 40;
-      ctx.fillStyle = "rgba(255,200,30,0.9)";
-      ctx.beginPath(); ctx.arc(sunX, sunY, 7, 0, Math.PI*2); ctx.fill();
-      ctx.strokeStyle = "rgba(255,200,30,0.5)"; ctx.lineWidth = 2;
-      for(let i=0;i<8;i++){
-        const a = (i/8)*Math.PI*2;
-        ctx.beginPath();
-        ctx.moveTo(sunX+Math.cos(a)*9,sunY+Math.sin(a)*9);
-        ctx.lineTo(sunX+Math.cos(a)*13,sunY+Math.sin(a)*13);
-        ctx.stroke();
-      }
-      // Sun time label
-      ctx.fillStyle = "rgba(255,200,30,0.75)"; ctx.font = "8px monospace"; ctx.textAlign = "center";
-      ctx.fillText(`☀ ${now.getHours().toString().padStart(2,"0")}:${now.getMinutes().toString().padStart(2,"0")}`, sunX, sunY - 14);
+      const sunX2=offX+bw*((h2-6)/12);
+      const sunY2=offY-55-Math.max(0,Math.sin(Math.max(0,(h2-6)*Math.PI/12)))*42;
+      ctx.fillStyle="#f59e0b"; ctx.beginPath(); ctx.arc(sunX2,sunY2,6,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="rgba(245,158,11,0.5)"; ctx.lineWidth=1.5;
+      for(let i3=0;i3<8;i3++){const a3=(i3/8)*Math.PI*2; ctx.beginPath(); ctx.moveTo(sunX2+Math.cos(a3)*8,sunY2+Math.sin(a3)*8); ctx.lineTo(sunX2+Math.cos(a3)*12,sunY2+Math.sin(a3)*12); ctx.stroke();}
+      ctx.fillStyle="rgba(245,158,11,0.8)"; ctx.font="8px monospace"; ctx.textAlign="center";
+      ctx.fillText(`${now2.getHours().toString().padStart(2,"0")}:${now2.getMinutes().toString().padStart(2,"0")}`,sunX2,sunY2-15);
       ctx.restore();
     }
 
-    // ── Outer boundary wall ──
-    ctx.fillStyle = "#c8d4da";
-    ctx.fillRect(offX - WALL_T, offY - WALL_T, bw + WALL_T*2, bh + WALL_T*2);
-    ctx.fillStyle = "#080f0f";
-    ctx.fillRect(offX, offY, bw, bh);
-
-    // ── Room fills ──
-    laid.forEach(room => {
-      const rx = offX + room.px*SCALE; const ry = offY + room.py*SCALE;
-      const rw = room.pw*SCALE; const rh = room.ph*SCALE;
-      const s = getStyle(room.type);
-      ctx.fillStyle = s.bg; ctx.fillRect(rx,ry,rw,rh);
-    });
-
-    // ── Interior walls ──
-    ctx.fillStyle = "#2a3540";
-    laid.forEach(room => {
-      const rx = offX + room.px*SCALE; const ry = offY + room.py*SCALE;
-      const rw = room.pw*SCALE; const rh = room.ph*SCALE;
-      if(room.px + room.pw < maxPX - 0.01) ctx.fillRect(rx+rw - INT_T/2, ry, INT_T, rh);
-      if(room.py + room.ph < maxPY - 0.01) ctx.fillRect(rx, ry+rh - INT_T/2, rw, INT_T);
-    });
-
-    // ── Doors ──
-    laid.forEach((room, idx) => {
-      const rx = offX + room.px*SCALE; const ry = offY + room.py*SCALE;
-      const rw = room.pw*SCALE; const rh = room.ph*SCALE;
-      const dw = Math.min(rw*0.38, SCALE*0.85);
-      const dh = Math.min(rh*0.38, SCALE*0.85);
-      const hasBottomDoor = room.py + room.ph < maxPY - 0.01;
-      const hasRightDoor = room.px + room.pw < maxPX - 0.01 && idx % 2 === 0;
-      if(hasBottomDoor){
-        const dx = rx + (rw-dw)/2; const dy = ry + rh - INT_T/2;
-        ctx.fillStyle = "#f8f4ee"; ctx.fillRect(dx, dy-1, dw, INT_T+2);
-        ctx.strokeStyle = "#c8d4da"; ctx.lineWidth = 1.6;
-        ctx.beginPath(); ctx.moveTo(dx, ry+rh); ctx.lineTo(dx+dw, ry+rh); ctx.stroke();
-        ctx.strokeStyle = "rgba(200,212,218,0.35)"; ctx.lineWidth = 0.8; ctx.setLineDash([2,2]);
-        ctx.beginPath(); ctx.arc(dx, ry+rh, dw, 0, Math.PI/2); ctx.stroke(); ctx.setLineDash([]);
-      }
-      if(hasRightDoor){
-        const dy2 = ry + (rh-dh)/2; const dx2 = rx + rw - INT_T/2;
-        ctx.fillStyle = "#f8f4ee"; ctx.fillRect(dx2-1, dy2, INT_T+2, dh);
-        ctx.strokeStyle = "#c8d4da"; ctx.lineWidth = 1.6;
-        ctx.beginPath(); ctx.moveTo(rx+rw, dy2); ctx.lineTo(rx+rw, dy2+dh); ctx.stroke();
-        ctx.strokeStyle = "rgba(200,212,218,0.35)"; ctx.lineWidth = 0.8; ctx.setLineDash([2,2]);
-        ctx.beginPath(); ctx.arc(rx+rw, dy2, dh, Math.PI/2, Math.PI); ctx.stroke(); ctx.setLineDash([]);
-      }
-    });
-
-    // ── Windows ──
-    laid.forEach(room => {
-      const rx = offX + room.px*SCALE; const ry = offY + room.py*SCALE;
-      const rw = room.pw*SCALE; const rh = room.ph*SCALE;
-      const t = room.type.toLowerCase();
-      if(t.includes("bathroom")||t.includes("utility")||t.includes("corridor")) return;
-      if(room.py < 0.01){
-        const ww = rw*0.45; const wx = rx+(rw-ww)/2;
-        ctx.fillStyle = "#080f0f"; ctx.fillRect(wx, offY-WALL_T, ww, WALL_T);
-        ctx.fillStyle = "rgba(140,200,220,0.4)"; ctx.fillRect(wx+1, offY-WALL_T+1, ww-2, WALL_T-2);
-        ctx.strokeStyle = "#0bc8c8"; ctx.lineWidth = 1.3; ctx.strokeRect(wx, offY-WALL_T, ww, WALL_T);
-      }
-      if(room.py + room.ph > maxPY - 0.01 && !t.includes("garage")){
-        const ww = rw*0.42; const wx = rx+(rw-ww)/2;
-        ctx.fillStyle = "#080f0f"; ctx.fillRect(wx, offY+bh, ww, WALL_T);
-        ctx.fillStyle = "rgba(140,200,220,0.4)"; ctx.fillRect(wx+1, offY+bh+1, ww-2, WALL_T-2);
-        ctx.strokeStyle = "#0bc8c8"; ctx.lineWidth = 1.3; ctx.strokeRect(wx, offY+bh, ww, WALL_T);
-      }
-    });
-
-    // ── Room labels ──
-    laid.forEach(room => {
-      const rx = offX + room.px*SCALE; const ry = offY + room.py*SCALE;
-      const rw = room.pw*SCALE; const rh = room.ph*SCALE;
-      const s = getStyle(room.type);
-      const cx = rx+rw/2; const cy = ry+rh/2;
-      const fz = Math.max(7, Math.min(10, rw/9));
-      ctx.fillStyle = s.border;
-      ctx.font = `bold ${fz}px 'Space Grotesk', sans-serif`;
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(s.label, cx, cy-6);
-      ctx.fillStyle = "rgba(200,220,230,0.7)"; ctx.font = `${Math.max(6,fz-2)}px monospace`;
-      ctx.fillText(`${room.pw.toFixed(1)}m × ${room.ph.toFixed(1)}m`, cx, cy+6);
-      // Orientation badge (eco-indicator)
-      ctx.fillStyle = "rgba(13,242,242,0.45)"; ctx.font = `${Math.max(5,fz-3)}px monospace`;
-      ctx.fillText(room.orientation || "", cx, cy+15);
-    });
-
-    // ── Animated Wind Flow ──
-    if(showWindFlow) {
-      const T = timeRef.current;
-      // Spawn new particles
-      if(windParticles.current.length < 40) {
-        for(let i=0;i<2;i++){
-          // Spawn from edge opposite to wind direction
-          const spawnX = windVec.x > 0 ? offX - 20 : windVec.x < 0 ? offX + bw + 20 : offX + Math.random()*bw;
-          const spawnY = windVec.y > 0 ? offY - 20 : windVec.y < 0 ? offY + bh + 20 : offY + Math.random()*bh;
-          windParticles.current.push({x:spawnX, y:spawnY, life:0, speed:1.5+Math.random()*1.5, alpha:0});
-        }
-      }
-      // Draw and update particles
-      windParticles.current = windParticles.current.filter(p => p.life < 120);
-      windParticles.current.forEach(p => {
-        p.life++;
-        p.x += windVec.x * p.speed * 1.8;
-        p.y += windVec.y * p.speed * 1.8;
-        const fade = Math.sin(p.life / 120 * Math.PI);
-        p.alpha = fade * 0.85;
-        // Draw wind arrow / streak
-        const len = p.speed * 10;
-        const ex = p.x - windVec.x * len;
-        const ey = p.y - windVec.y * len;
-        ctx.save();
-        ctx.strokeStyle = `rgba(80,160,255,${p.alpha})`;
-        ctx.lineWidth = 1.2;
-        ctx.lineCap = "round";
-        ctx.beginPath(); ctx.moveTo(ex,ey); ctx.lineTo(p.x,p.y); ctx.stroke();
-        // Arrowhead
-        const angle = Math.atan2(windVec.y, windVec.x);
-        ctx.fillStyle = `rgba(100,180,255,${p.alpha})`;
-        ctx.beginPath();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(angle);
-        ctx.moveTo(0,0); ctx.lineTo(-5,-3); ctx.lineTo(-5,3);
-        ctx.closePath(); ctx.fill();
-        ctx.restore();
+    // ── Outer boundary fill (plot shape) ──
+    const poly=makePlotPolygon(plotShape,plotArea);
+    if(poly.length>2){
+      const polyMaxX=Math.max(...poly.map(p=>p[0]));
+      const polyMaxY=Math.max(...poly.map(p=>p[1]));
+      const pSX=bw/polyMaxX; const pSY=bh/polyMaxY;
+      ctx.save();
+      ctx.beginPath();
+      poly.forEach(([px,py],i)=>{
+        const sx=offX+px*pSX; const sy=offY+py*pSY;
+        i===0?ctx.moveTo(sx,sy):ctx.lineTo(sx,sy);
       });
-      // Wind label
-      ctx.fillStyle = "rgba(100,180,255,0.8)";
-      ctx.font = "bold 9px monospace"; ctx.textAlign = "left";
-      ctx.fillText(`↳ WIND: ${windDir} (animated)`, offX+4, offY - WALL_T - 2);
+      ctx.closePath();
+      ctx.fillStyle="rgba(180,200,190,0.12)"; ctx.fill();
+      ctx.strokeStyle="rgba(100,140,100,0.45)"; ctx.lineWidth=1.5; ctx.setLineDash([8,5]); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle="rgba(80,110,90,0.5)"; ctx.font="8px monospace"; ctx.textAlign="left";
+      ctx.fillText(`PLOT: ${plotShape.toUpperCase()} — ${plotArea}m²`, offX+2, offY-OWT-12);
+      ctx.restore();
     }
 
-    // ── Trees ──
-    trees.slice(0,3).forEach((_,i) => {
-      const tx = offX - 30 - i*18; const ty = offY + bh*0.2 + i*22;
-      ctx.beginPath(); ctx.arc(tx, ty, 10, 0, Math.PI*2);
-      ctx.fillStyle = "rgba(46,180,80,0.25)"; ctx.fill();
-      ctx.strokeStyle = "#2eb450"; ctx.lineWidth = 1.2; ctx.stroke();
-      ctx.fillStyle = "#2eb450"; ctx.font = "7px monospace"; ctx.textAlign = "center";
-      ctx.fillText(`T${i+1}`, tx, ty+3);
+    // ── Outer wall — shape-aware clipping mask ──
+    // For L/T/Irregular: instead of a plain rectangle, we clip the rooms to the plot shape
+    const buildClipPath = (ctx: CanvasRenderingContext2D) => {
+      const shapeKey = plotShape.toLowerCase().replace(/[-\s]/g,"");
+      if(["lshape","l"].includes(shapeKey)) {
+        // L = full top half, bottom-left only
+        ctx.beginPath();
+        ctx.moveTo(offX, offY);
+        ctx.lineTo(offX+bw, offY);
+        ctx.lineTo(offX+bw, offY+bh*0.5);
+        ctx.lineTo(offX+bw*0.5, offY+bh*0.5);
+        ctx.lineTo(offX+bw*0.5, offY+bh);
+        ctx.lineTo(offX, offY+bh);
+        ctx.closePath();
+      } else if(["tshape","t"].includes(shapeKey)) {
+        // T = full top bar, central stem
+        const stemW = bw * 0.4; const stemX = offX + (bw-stemW)/2;
+        ctx.beginPath();
+        ctx.moveTo(offX, offY);
+        ctx.lineTo(offX+bw, offY);
+        ctx.lineTo(offX+bw, offY+bh*0.45);
+        ctx.lineTo(stemX+stemW, offY+bh*0.45);
+        ctx.lineTo(stemX+stemW, offY+bh);
+        ctx.lineTo(stemX, offY+bh);
+        ctx.lineTo(stemX, offY+bh*0.45);
+        ctx.lineTo(offX, offY+bh*0.45);
+        ctx.closePath();
+      } else if(["irregular"].includes(shapeKey)) {
+        // Irregular = slight offset on corners
+        ctx.beginPath();
+        ctx.moveTo(offX+bw*0.08, offY);
+        ctx.lineTo(offX+bw*0.92, offY);
+        ctx.lineTo(offX+bw, offY+bh*0.12);
+        ctx.lineTo(offX+bw, offY+bh*0.88);
+        ctx.lineTo(offX+bw*0.85, offY+bh);
+        ctx.lineTo(offX+bw*0.15, offY+bh);
+        ctx.lineTo(offX, offY+bh*0.85);
+        ctx.lineTo(offX, offY+bh*0.12);
+        ctx.closePath();
+      } else {
+        // Rectangle / Square
+        ctx.beginPath();
+        ctx.rect(offX, offY, bw, bh);
+      }
+    };
+
+    // Draw white outer wall fill (clipped to shape)
+    ctx.save();
+    buildClipPath(ctx);
+    ctx.clip();
+    ctx.fillStyle="#ffffff";
+    ctx.fillRect(offX-OWT, offY-OWT, bw+OWT*2, bh+OWT*2);
+    // Room fills inside clip
+    laid.forEach(room=>{
+      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
+      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
+      const s=getStyle(room.type);
+      ctx.fillStyle=s.bg; ctx.fillRect(rx,ry,rw,rh);
+    });
+    ctx.restore();
+
+    // Outer wall border (shape outline — thick)
+    ctx.save();
+    buildClipPath(ctx);
+    ctx.strokeStyle="#1a2530"; ctx.lineWidth=OWT*0.9; ctx.stroke();
+    ctx.restore();
+
+    // ── Interior walls (thin lines) ──
+    ctx.strokeStyle="#1a2530"; ctx.lineWidth=IWT*0.8;
+    laid.forEach(room=>{
+      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
+      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
+      if(room.px+room.pw<maxPX-0.01){ ctx.beginPath(); ctx.moveTo(rx+rw,ry); ctx.lineTo(rx+rw,ry+rh); ctx.stroke(); }
+      if(room.py+room.ph<maxPY-0.01){ ctx.beginPath(); ctx.moveTo(rx,ry+rh); ctx.lineTo(rx+rw,ry+rh); ctx.stroke(); }
     });
 
+    // ── Doors (swing arcs) ──
+    laid.forEach((room,idx)=>{
+      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
+      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
+      const dw=Math.min(rw*0.38,SCALE*0.85);
+      ctx.strokeStyle="#1a2530"; ctx.lineWidth=1.5;
+      // Bottom door
+      if(room.py+room.ph<maxPY-0.01){
+        const dx=rx+(rw-dw)/2; const dy=ry+rh;
+        // Gap in wall
+        ctx.fillStyle=laid.find(r2=>r2.py===room.py+room.ph && Math.abs(r2.px-room.px)<room.pw)?laid.find(r2=>r2.py===room.py+room.ph && Math.abs(r2.px-room.px)<room.pw)!.type?getStyle(laid.find(r2=>r2.py===room.py+room.ph && Math.abs(r2.px-room.px)<room.pw)!.type).bg:"#fff":"#fff";
+        ctx.fillRect(dx, dy-IWT/2, dw, IWT+1);
+        ctx.strokeStyle="rgba(26,37,48,0.7)"; ctx.lineWidth=1.2; ctx.setLineDash([2,2]);
+        ctx.beginPath(); ctx.arc(dx, dy, dw, 0, Math.PI/2); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // Right door (alternating rooms)
+      if(room.px+room.pw<maxPX-0.01 && idx%3===1){
+        const dh=Math.min(rh*0.38,SCALE*0.75);
+        const dy2=ry+(rh-dh)/2; const dx2=rx+rw;
+        ctx.fillStyle="#fff"; ctx.fillRect(dx2-IWT/2, dy2, IWT+1, dh);
+        ctx.strokeStyle="rgba(26,37,48,0.7)"; ctx.lineWidth=1.2; ctx.setLineDash([2,2]);
+        ctx.beginPath(); ctx.arc(dx2, dy2, dh, Math.PI/2, Math.PI); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    });
+
+    // ── Windows (architectural style — blue fills with frame marks in outer walls) ──
+    laid.forEach(room=>{
+      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
+      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
+      const t2=room.type.toLowerCase();
+      if(t2.includes("bathroom")||t2.includes("utility")) return;
+      const ww=Math.min(rw*0.52,SCALE*1.05);
+      // Helper: draw a window slot
+      const drawWin = (wx: number, wy: number, wWidth: number, wHeight: number, horiz: boolean) => {
+        // Blue glass fill
+        ctx.fillStyle="#b8d8f4"; ctx.fillRect(wx, wy, wWidth, wHeight);
+        // Frame lines
+        ctx.strokeStyle="#1a4a7a"; ctx.lineWidth=1.8;
+        ctx.strokeRect(wx, wy, wWidth, wHeight);
+        // Centre divider
+        if(horiz) {
+          ctx.beginPath(); ctx.moveTo(wx+wWidth/2,wy); ctx.lineTo(wx+wWidth/2,wy+wHeight); ctx.stroke();
+        } else {
+          ctx.beginPath(); ctx.moveTo(wx,wy+wHeight/2); ctx.lineTo(wx+wWidth,wy+wHeight/2); ctx.stroke();
+        }
+        // Side tick marks for window reveal
+        ctx.strokeStyle="#1a2530"; ctx.lineWidth=1.2;
+        if(horiz){
+          ctx.beginPath(); ctx.moveTo(wx,wy); ctx.lineTo(wx,wy-2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(wx+wWidth,wy); ctx.lineTo(wx+wWidth,wy-2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(wx,wy+wHeight); ctx.lineTo(wx,wy+wHeight+2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(wx+wWidth,wy+wHeight); ctx.lineTo(wx+wWidth,wy+wHeight+2); ctx.stroke();
+        }
+      };
+      // Top window (north-facing rooms)
+      if(room.py<0.01){
+        drawWin(rx+(rw-ww)/2, offY-OWT, ww, OWT, true);
+      }
+      // Bottom window (south-facing)
+      if(room.py+room.ph>maxPY-0.01){
+        drawWin(rx+(rw-ww)/2, offY+bh, ww, OWT, true);
+      }
+      // Left window
+      if(room.px<0.01){
+        const wh2=Math.min(rh*0.5,SCALE*1.0);
+        drawWin(offX-OWT, ry+(rh-wh2)/2, OWT, wh2, false);
+      }
+      // Right window
+      if(room.px+room.pw>maxPX-0.01){
+        const wh2=Math.min(rh*0.5,SCALE*1.0);
+        drawWin(offX+bw, ry+(rh-wh2)/2, OWT, wh2, false);
+      }
+    });
+
+    // ── Main entrance (bottom center — with proper door swing arc) ──
+    const entrW=SCALE*1.0;
+    const entrX=offX+bw/2-entrW/2;
+    // Clear the wall section
+    ctx.fillStyle="#f4f0e8"; ctx.fillRect(entrX, offY+bh, entrW, OWT+2);
+    // Frame lines
+    ctx.strokeStyle="#1a2530"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(entrX, offY+bh); ctx.lineTo(entrX, offY+bh+OWT); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(entrX+entrW, offY+bh); ctx.lineTo(entrX+entrW, offY+bh+OWT); ctx.stroke();
+    // Door leaf (single 90-degree swing shown as dashed quarter circle)
+    ctx.strokeStyle="rgba(26,37,48,0.7)"; ctx.lineWidth=1.5; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.arc(entrX+entrW, offY+bh, entrW, Math.PI, Math.PI*1.5); ctx.stroke();
+    ctx.setLineDash([]);
+    // Door leaf solid line
+    ctx.strokeStyle="#1a2530"; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(entrX+entrW, offY+bh); ctx.lineTo(entrX+entrW, offY+bh-entrW); ctx.stroke();
+    // Entry step (double lines below)
+    ctx.strokeStyle="rgba(26,37,48,0.35)"; ctx.lineWidth=0.8;
+    ctx.strokeRect(entrX-4, offY+bh+OWT+2, entrW+8, 5);
+    ctx.strokeRect(entrX-8, offY+bh+OWT+9, entrW+16, 5);
+    // Label
+    ctx.fillStyle="#1a2530"; ctx.font=`bold ${Math.max(7,SCALE*0.55)}px 'Space Grotesk', monospace`;
+    ctx.textAlign="center";
+    ctx.fillText("ENTRANCE", offX+bw/2, offY+bh+OWT+22);
+
+    // ── Room labels + dimensions (like the reference image) ──
+    laid.forEach(room=>{
+      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
+      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
+      const s=getStyle(room.type);
+      const cx2=rx+rw/2; const cy2=ry+rh/2;
+      const fz=Math.max(8,Math.min(12,rw/8));
+      // Room name
+      ctx.fillStyle=s.border; ctx.font=`bold ${fz}px 'Space Grotesk',sans-serif`;
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(s.label, cx2, cy2-fz*0.7);
+      // Dimensions below name (e.g. "4.50 x 3.20")
+      ctx.fillStyle="#546070"; ctx.font=`${Math.max(6,fz-2)}px monospace`;
+      ctx.fillText(`${room.pw.toFixed(2)} x ${room.ph.toFixed(2)}`, cx2, cy2+fz*0.5);
+      // Eco orientation badge
+      if(room.orientation){
+        ctx.fillStyle="rgba(40,100,80,0.55)"; ctx.font=`${Math.max(5,fz-3)}px monospace`;
+        ctx.fillText(room.orientation, cx2, cy2+fz*1.5);
+      }
+    });
+
+    // ── Animated wind particles (if enabled) ──
+    if(showWindFlow){
+      const T=timeRef.current;
+      if(windParticles.current.length<50){
+        for(let i=0;i<2;i++){
+          const spawnX=windVecLocal.x>0?offX-20:windVecLocal.x<0?offX+bw+20:offX+Math.random()*bw;
+          const spawnY=windVecLocal.y>0?offY-20:windVecLocal.y<0?offY+bh+20:offY+Math.random()*bh;
+          windParticles.current.push({x:spawnX,y:spawnY,life:0,speed:1.5+Math.random()*1.5,alpha:0});
+        }
+      }
+      windParticles.current=windParticles.current.filter(p=>p.life<120);
+      windParticles.current.forEach(p=>{
+        p.life++; p.x+=windVecLocal.x*p.speed*1.8; p.y+=windVecLocal.y*p.speed*1.8;
+        const fade=Math.sin(p.life/120*Math.PI); p.alpha=fade*0.8;
+        const len=p.speed*10; const ex=p.x-windVecLocal.x*len; const ey=p.y-windVecLocal.y*len;
+        ctx.save(); ctx.strokeStyle=`rgba(30,120,200,${p.alpha})`; ctx.lineWidth=1.5; ctx.lineCap="round";
+        ctx.beginPath(); ctx.moveTo(ex,ey); ctx.lineTo(p.x,p.y); ctx.stroke();
+        const angle=Math.atan2(windVecLocal.y,windVecLocal.x);
+        ctx.fillStyle=`rgba(60,140,220,${p.alpha})`; ctx.beginPath();
+        ctx.translate(p.x,p.y); ctx.rotate(angle);
+        ctx.moveTo(0,0); ctx.lineTo(-6,-3); ctx.lineTo(-6,3); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      });
+      ctx.fillStyle="rgba(30,100,180,0.7)"; ctx.font="bold 9px monospace"; ctx.textAlign="left";
+      ctx.fillText(`WIND: ${windDir}`, offX+4, offY-OWT-2);
+    }
+
     // ── North arrow ──
-    const nx = W - 36; const ny = H - 52;
-    ctx.fillStyle = "#c0d4e0"; ctx.font = "bold 9px monospace"; ctx.textAlign = "center";
-    ctx.fillText("N", nx, ny-18);
-    ctx.beginPath(); ctx.moveTo(nx,ny-14); ctx.lineTo(nx-5,ny+4); ctx.lineTo(nx,ny+2); ctx.lineTo(nx+5,ny+4); ctx.closePath();
-    ctx.fillStyle = "rgba(192,212,224,0.9)"; ctx.fill();
-    ctx.strokeStyle = "#c0d4e0"; ctx.lineWidth = 1; ctx.stroke();
+    const nx=W-38; const ny=H-58;
+    ctx.fillStyle="#1a2530"; ctx.font="bold 10px monospace"; ctx.textAlign="center";
+    ctx.fillText("N", nx, ny-22);
+    ctx.beginPath(); ctx.moveTo(nx,ny-18); ctx.lineTo(nx-6,ny+4); ctx.lineTo(nx,ny+2); ctx.lineTo(nx+6,ny+4); ctx.closePath();
+    ctx.fillStyle="#1a2530"; ctx.fill(); ctx.strokeStyle="#1a2530"; ctx.lineWidth=1; ctx.stroke();
 
     // ── Scale bar ──
-    const sbPx = SCALE * 5;
-    ctx.fillStyle = "#c0d4e0"; ctx.fillRect(20, H-22, sbPx, 3);
-    ctx.fillRect(20, H-24, 2, 7); ctx.fillRect(20+sbPx-2, H-24, 2, 7);
-    ctx.font = "7px monospace"; ctx.textAlign = "left"; ctx.fillStyle = "rgba(192,212,224,0.7)";
-    ctx.fillText("0", 20, H-6); ctx.fillText("5m", 20+sbPx+2, H-6);
-    ctx.textAlign = "right"; ctx.fillText(`${lat.toFixed(4)}°N  ${lon.toFixed(4)}°E`, W-20, H-20);
+    const sbPx=SCALE*5;
+    ctx.fillStyle="#1a2530"; ctx.fillRect(20,H-18,sbPx,2);
+    ctx.fillRect(20,H-22,2,6); ctx.fillRect(20+sbPx-2,H-22,2,6);
+    ctx.font="7px monospace"; ctx.textAlign="left"; ctx.fillStyle="#546070";
+    ctx.fillText("0",20,H-5); ctx.fillText("5m",20+sbPx+2,H-5);
+    ctx.textAlign="right"; ctx.fillText(`${lat.toFixed(4)}°N  ${lon.toFixed(4)}°E`,W-20,H-18);
 
-  }, [rooms, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, layoutRooms, windVec]);
+    // ── Trees ──
+    trees.slice(0,3).forEach((_,i)=>{
+      const tx=offX-35-i*20; const ty=offY+bh*0.25+i*24;
+      ctx.beginPath(); ctx.arc(tx,ty,11,0,Math.PI*2);
+      ctx.fillStyle="rgba(40,160,80,0.22)"; ctx.fill();
+      ctx.strokeStyle="#28a050"; ctx.lineWidth=1.5; ctx.stroke();
+      ctx.fillStyle="#28a050"; ctx.font="7px monospace"; ctx.textAlign="center";
+      ctx.fillText(`T${i+1}`,tx,ty+3);
+    });
+  }, [rooms, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, windParticles]);
 
   useEffect(() => {
     let running = true;

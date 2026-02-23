@@ -8,7 +8,7 @@ import logging
 
 sys.path.insert(0, os.path.dirname(__file__))
 from database.connection import init_db
-from routes import analysis, floorplan, plots, report, boundary, auth, notifications
+from routes import analysis, floorplan, plots, report, boundary, auth, notifications, land_records
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ app.include_router(floorplan.router, tags=["Floor Plan"])
 app.include_router(plots.router,     prefix="/plots",  tags=["Plots"])
 app.include_router(report.router,    prefix="/report", tags=["Report"])
 app.include_router(boundary.router,  tags=["Boundary"])
+app.include_router(land_records.router, tags=["Land Records"])
 app.include_router(auth.router)
 app.include_router(notifications.router)
 
