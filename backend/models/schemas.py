@@ -76,6 +76,13 @@ class GenerateFloorPlanRequest(BaseModel):
     num_floors: int = 2
     style: str = "sustainable"
     preserve_trees: bool = True
+    # New fields for plot shape and room preferences
+    plot_shape: str = "rectangle"   # rectangle, L-shape, T-shape, irregular, square
+    house_type: str = "Eco-Villa (Single Story)"
+    room_preferences: Optional[dict] = None  # {"bedrooms":3,"bathrooms":2,"puja_room":True,...}
+    maximize_sunlight: bool = True
+    natural_ventilation: bool = True
+    sustainability_priority: bool = True
 
 
 class Room(BaseModel):

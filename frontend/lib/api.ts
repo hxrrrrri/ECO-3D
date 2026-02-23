@@ -46,6 +46,12 @@ export interface GenerateFloorPlanRequest {
   num_floors?: number;
   style?: string;
   preserve_trees?: boolean;
+  plot_shape?: string;
+  house_type?: string;
+  room_preferences?: Record<string, number | boolean>;
+  maximize_sunlight?: boolean;
+  natural_ventilation?: boolean;
+  sustainability_priority?: boolean;
 }
 
 export interface FloorPlanResponse {

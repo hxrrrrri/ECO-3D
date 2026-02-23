@@ -35,17 +35,22 @@ const getAccent = (t: string) => Object.entries(ACCENTS).find(([k]) => t.toLower
 
 // ── Lighting ──────────────────────────────────────────────────────────────────
 function Lighting({ dir, sunOn }: { dir: string; sunOn: boolean }) {
-  const P: Record<string,[number,number,number]> = {
-    N:[0,15,-14],NE:[10,15,-10],E:[15,15,0],SE:[10,15,10],
-    S:[0,15,14],SW:[-10,15,10],W:[-15,15,0],NW:[-10,15,-10],
-  };
-  const pos = P[dir.slice(0,2)] ?? P["SE"];
+  // Real-time sun position
+  const now = new Date();
+  const h = now.getHours() + now.getMinutes()/60;
+  const hourAngle = ((h - 12) / 12) * Math.PI;
+  const elev = Math.max(0.1, Math.cos(hourAngle) * 0.85);
+  const azimX = Math.sin(hourAngle) * 14;
+  const azimZ = Math.cos(hourAngle) * 8;
+  const posY = Math.max(3, elev * 16 + 4);
+  const isDaytime = h >= 6 && h <= 19;
+
   return (
     <>
-      <ambientLight intensity={sunOn ? 0.6 : 1.0} color="#e8f4ff" />
-      <hemisphereLight args={["#c8e4ff","#182020", 0.4]} />
-      {sunOn
-        ? <directionalLight position={pos} intensity={2.8} castShadow color="#fff5d0"
+      <ambientLight intensity={sunOn && isDaytime ? 0.5 : 0.9} color={isDaytime ? "#e8f4ff" : "#304060"} />
+      <hemisphereLight args={isDaytime ? ["#c8e4ff","#1a2820", 0.5] : ["#2a3050","#0a1010",0.4]} />
+      {sunOn && isDaytime
+        ? <directionalLight position={[azimX, posY, azimZ]} intensity={2.8} castShadow color="#fff5d0"
             shadow-mapSize-width={2048} shadow-mapSize-height={2048}
             shadow-camera-near={0.5} shadow-camera-far={120}
             shadow-camera-left={-35} shadow-camera-right={35}
@@ -60,51 +65,146 @@ function Lighting({ dir, sunOn }: { dir: string; sunOn: boolean }) {
   );
 }
 
-// ── Sun sphere ────────────────────────────────────────────────────────────────
-function SunSphere({ dir }: { dir: string }) {
-  const P: Record<string,[number,number,number]> = {
-    N:[0,15,-14],NE:[10,15,-10],E:[15,15,0],SE:[10,15,10],
-    S:[0,15,14],SW:[-10,15,10],W:[-15,15,0],NW:[-10,15,-10],
-  };
-  const pos = P[dir.slice(0,2)] ?? P["SE"];
+// ── Sun sphere with real-time position ───────────────────────────────────────
+function SunSphere({ dir, lat }: { dir: string; lat?: number }) {
+  const sunRef = useRef<THREE.Group>(null);
   const ringRef = useRef<THREE.Mesh>(null);
-  useFrame((s) => { if (ringRef.current) ringRef.current.rotation.z = s.clock.elapsedTime * 0.6; });
+
+  // Real-time sun position based on hour angle
+  const getSunPos = (): [number, number, number] => {
+    const now = new Date();
+    const h = now.getHours() + now.getMinutes()/60;
+    // Hour angle: -90° at sunrise(6am), 0° at noon, +90° at sunset(18am)
+    const hourAngle = ((h - 12) / 12) * Math.PI;
+    const elev = Math.cos(hourAngle) * 0.8; // elevation factor
+    const azim = hourAngle; // simplified azimuth
+
+    // Cardinal direction bias from wind_dir
+    const D: Record<string,[number,number]> = {
+      N:[0,-1],NE:[0.7,-0.7],E:[1,0],SE:[0.7,0.7],
+      S:[0,1],SW:[-0.7,0.7],W:[-1,0],NW:[-0.7,-0.7],
+    };
+    const k = Object.keys(D).find(k => dir.startsWith(k)) ?? "S";
+    const [dx, dz] = D[k];
+    const radius = 18;
+    const x = Math.sin(azim) * radius * 0.8 + dx * 4;
+    const y = Math.max(2, elev * 16 + 6);
+    const z = Math.cos(azim) * radius * 0.4 + dz * 4;
+    return [x, y, z];
+  };
+
+  const pos = getSunPos();
+
+  useFrame((s) => {
+    if (ringRef.current) ringRef.current.rotation.z = s.clock.elapsedTime * 0.6;
+    // Slowly update sun position in real time
+    if (sunRef.current) {
+      const np = getSunPos();
+      sunRef.current.position.lerp(new THREE.Vector3(...np), 0.002);
+    }
+  });
+
+  const isDaytime = () => {
+    const h = new Date().getHours();
+    return h >= 6 && h <= 18;
+  };
+
+  if (!isDaytime()) return null; // Hide sun at night
+
   return (
-    <group position={pos}>
-      <mesh><sphereGeometry args={[0.55,16,16]} /><meshStandardMaterial color="#fcd34d" emissive="#f59e0b" emissiveIntensity={1.5} /></mesh>
-      <mesh ref={ringRef}><torusGeometry args={[0.85, 0.05, 8, 32]} /><meshStandardMaterial color="#f59e0b" emissive="#f59e0b" emissiveIntensity={1.2} /></mesh>
-      <pointLight intensity={3.5} color="#fcd34d" distance={50} />
+    <group ref={sunRef} position={pos}>
+      <mesh><sphereGeometry args={[0.65,20,20]} /><meshStandardMaterial color="#fcd34d" emissive="#f59e0b" emissiveIntensity={2.0} /></mesh>
+      <mesh ref={ringRef}><torusGeometry args={[1.0, 0.06, 8, 32]} /><meshStandardMaterial color="#f59e0b" emissive="#f59e0b" emissiveIntensity={1.5} /></mesh>
+      {/* Corona rays */}
+      {Array.from({length:8}).map((_,i) => {
+        const a = (i/8)*Math.PI*2;
+        return <mesh key={i} position={[Math.cos(a)*1.3,Math.sin(a)*1.3,0]} rotation={[0,0,a]}>
+          <boxGeometry args={[0.5,0.04,0.04]} />
+          <meshStandardMaterial color="#fcd34d" emissive="#fbbf24" emissiveIntensity={1.5} />
+        </mesh>;
+      })}
+      <pointLight intensity={4.0} color="#fcd34d" distance={60} decay={1.5} />
     </group>
   );
 }
 
-// ── Wind arrows ───────────────────────────────────────────────────────────────
-function WindArrows({ dir, cx, cz }: { dir: string; cx: number; cz: number }) {
-  const ref = useRef<THREE.Group>(null);
-  const t = useRef(0);
+// ── Enhanced Wind Flow covering entire model ──────────────────────────────────
+function WindArrows({ dir, cx, cz, modelW, modelD }: { dir: string; cx: number; cz: number; modelW: number; modelD: number }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const particles = useRef<Array<{x:number,y:number,z:number,life:number,maxLife:number,speed:number,row:number}>>([]);
+  const timeRef = useRef(0);
+
   const v = useMemo(() => {
-    const M: Record<string,[number,number]> = { N:[0,1],NE:[-1,1],E:[-1,0],SE:[-1,-1],S:[0,-1],SW:[1,-1],W:[1,0],NW:[1,1] };
+    const M: Record<string,[number,number]> = { N:[0,-1],NE:[0.7,-0.7],E:[1,0],SE:[0.7,0.7],S:[0,1],SW:[-0.7,0.7],W:[-1,0],NW:[-0.7,-0.7] };
     const k = Object.keys(M).find(k => dir.startsWith(k)) ?? "NW";
     const [x,z] = M[k]; const l = Math.sqrt(x*x+z*z);
     return { x:x/l, z:z/l };
   }, [dir]);
 
+  // Build particle mesh references
+  const PARTICLE_COUNT = 60;
+  const particleMeshes = useRef<THREE.Mesh[]>([]);
+
   useFrame((_, dt) => {
-    t.current = (t.current + dt * 0.9) % 3;
-    ref.current?.children.forEach((c, i) => {
-      const off = (t.current + i * 0.55) % 3 - 1.5;
-      c.position.set(cx + v.x * off * 6 + (i % 3 - 1) * 1.8, 0.5, cz + v.z * off * 6 + (Math.floor(i / 3) - 1) * 1.8);
-      const fade = 1 - Math.abs(off) / 1.5;
-      ((c as THREE.Mesh).material as THREE.MeshStandardMaterial).opacity = Math.max(0, fade * 0.65);
+    timeRef.current += dt;
+    const T = timeRef.current;
+
+    // Spawn particles if needed
+    while(particles.current.length < PARTICLE_COUNT) {
+      const row = Math.floor(Math.random() * 5);
+      const across = (Math.random() - 0.5) * Math.max(modelW, modelD) * 1.4;
+      // Spawn at windward edge
+      const spawnX = v.x > 0 ? cx - modelW*0.8 + (v.z !== 0 ? across : 0) : v.x < 0 ? cx + modelW*0.8 + (v.z !== 0 ? across : 0) : cx + across;
+      const spawnZ = v.z > 0 ? cz - modelD*0.8 + (v.x !== 0 ? across : 0) : v.z < 0 ? cz + modelD*0.8 + (v.x !== 0 ? across : 0) : cz + across;
+      const maxLife = 80 + Math.random() * 60;
+      particles.current.push({
+        x: spawnX, y: 0.5 + row * 0.8 + Math.random() * 0.4,
+        z: spawnZ, life: Math.random() * maxLife, maxLife,
+        speed: 0.12 + Math.random() * 0.1, row
+      });
+    }
+
+    particles.current.forEach((p, i) => {
+      p.life++;
+      p.x += v.x * p.speed * 1.6;
+      p.z += v.z * p.speed * 1.6;
+      // Slight wavy motion
+      p.y = 0.5 + p.row * 0.8 + Math.sin(p.life * 0.15 + i) * 0.12;
+
+      if(p.life > p.maxLife) {
+        // Respawn
+        const row2 = Math.floor(Math.random() * 5);
+        const across2 = (Math.random() - 0.5) * Math.max(modelW, modelD) * 1.4;
+        p.x = v.x > 0 ? cx - modelW*0.85 + (v.z !== 0 ? across2 : 0) : v.x < 0 ? cx + modelW*0.85 + (v.z !== 0 ? across2 : 0) : cx + across2;
+        p.z = v.z > 0 ? cz - modelD*0.85 + (v.x !== 0 ? across2 : 0) : v.z < 0 ? cz + modelD*0.85 + (v.x !== 0 ? across2 : 0) : cz + across2;
+        p.y = 0.5 + row2 * 0.8;
+        p.row = row2;
+        p.life = 0;
+        p.maxLife = 80 + Math.random() * 60;
+        p.speed = 0.12 + Math.random() * 0.1;
+      }
+
+      // Update mesh
+      const mesh = particleMeshes.current[i];
+      if(!mesh) return;
+      mesh.position.set(p.x, p.y, p.z);
+      const fade = Math.sin(p.life / p.maxLife * Math.PI);
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      mat.opacity = Math.max(0, fade * 0.85);
+      // Point mesh in wind direction
+      const angle = Math.atan2(v.x, v.z);
+      mesh.rotation.y = angle;
     });
   });
-  const angle = Math.atan2(v.z, v.x) + Math.PI/2;
+
+  const angle = Math.atan2(v.x, v.z);
+
   return (
-    <group ref={ref}>
-      {Array.from({length:9}).map((_,i) => (
-        <mesh key={i} position={[cx,0.5,cz]} rotation={[0, angle, 0]}>
-          <coneGeometry args={[0.12,0.45,6]} />
-          <meshStandardMaterial color="#3b82f6" transparent opacity={0.5} />
+    <group>
+      {Array.from({length: PARTICLE_COUNT}).map((_, i) => (
+        <mesh key={i} ref={el => { if(el) particleMeshes.current[i] = el; }} rotation={[0, angle, 0]} position={[cx, 0.5, cz]}>
+          <coneGeometry args={[0.08, 0.5, 6]} />
+          <meshStandardMaterial color="#60a5fa" emissive="#3b82f6" emissiveIntensity={0.6} transparent opacity={0.5} />
         </mesh>
       ))}
     </group>
@@ -280,9 +380,9 @@ function UnifiedHouse({ rooms, showWind, showSun, windDir }: {
   const cx = 0; const cz = 0;
 
   // ── Wall material ───────────────────────────────────────────────────────────
-  const wallMat    = useMemo(() => new THREE.MeshStandardMaterial({color:"#d8e2e8",roughness:0.82}),[]);
-  const intWallMat = useMemo(() => new THREE.MeshStandardMaterial({color:"#c8d4da",roughness:0.85}),[]);
-  const foundMat   = useMemo(() => new THREE.MeshStandardMaterial({color:"#3a4a4a",roughness:0.9}),[]);
+  const wallMat    = useMemo(() => new THREE.MeshStandardMaterial({color:"#dde8ee",roughness:0.65,metalness:0.05,envMapIntensity:0.8}),[]);
+  const intWallMat = useMemo(() => new THREE.MeshStandardMaterial({color:"#c8d4da",roughness:0.7,metalness:0.0}),[]);
+  const foundMat   = useMemo(() => new THREE.MeshStandardMaterial({color:"#3a4a4a",roughness:0.95,metalness:0.05}),[]);
 
   return (
     <group>
@@ -436,8 +536,8 @@ function UnifiedHouse({ rooms, showWind, showSun, windDir }: {
 
 
       {/* ── OVERLAYS ────────────────────────────────────────────────────── */}
-      {showSun && <SunSphere dir={windDir} />}
-      {showWind && <WindArrows dir={windDir} cx={cx} cz={cz} />}
+      {showSun && <SunSphere dir={windDir} lat={0} />}
+      {showWind && <WindArrows dir={windDir} cx={cx} cz={cz} modelW={totalW} modelD={totalD} />}
     </group>
   );
 }
@@ -494,6 +594,51 @@ export default function Model3DPage() {
   const [camMode,  setCamMode]  = useState<"iso"|"top"|"interior">("iso");
   const [fps, setFps] = useState(0);
 
+  const handleExportBIM = () => {
+    const bimData = {
+      meta: { version: "1.0", platform: "ECO-3D", exported: new Date().toISOString(), plot_id: plotId },
+      building: {
+        total_area_m2: totalArea,
+        floors: [...new Set(rooms.map(r => r.floor ?? 1))].length,
+        eco_scores: {
+          fitness: floorPlan?.fitness_score ?? 0,
+          sunlight: floorPlan?.sunlight_score ?? 0,
+          ventilation: floorPlan?.ventilation_score ?? 0,
+          trees_preserved: floorPlan?.tree_preserved_count ?? 0,
+        },
+        environmental: { wind_direction: windDir, sun_hours: sunHours },
+      },
+      rooms: rooms.map(r => ({
+        id: r.type, type: r.type,
+        dimensions_m: { width: r.width, depth: r.height },
+        position_m: { x: r.x, y: r.y },
+        floor: r.floor, orientation: r.orientation,
+        area_m2: parseFloat((r.width * r.height).toFixed(2)),
+      })),
+    };
+    const blob = new Blob([JSON.stringify(bimData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `ECO3D_BIM_${plotId}_${Date.now()}.json`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  const handleExportGLTF = () => {
+    // Export as a simple OBJ-like text for room geometry
+    let obj = `# ECO-3D Floor Plan Export\n# Plot: ${plotId}\n# Rooms: ${rooms.length}\n\n`;
+    rooms.forEach((r, i) => {
+      obj += `# Room ${i+1}: ${r.type}\n`;
+      obj += `# Dimensions: ${r.width}m x ${r.height}m\n`;
+      obj += `# Position: (${r.x}, ${r.y})\n`;
+      obj += `# Floor: ${r.floor}, Orientation: ${r.orientation}\n\n`;
+    });
+    const blob = new Blob([obj], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `ECO3D_${plotId}.obj`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
   useEffect(()=>{
     let frames=0; let last=performance.now();
     const id=setInterval(()=>{
@@ -538,10 +683,10 @@ export default function Model3DPage() {
             ))}
           </nav>
           <div style={{display:"flex",gap:10}}>
-            <button style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",background:"rgba(13,242,242,0.06)",border:"1px solid rgba(13,242,242,0.15)",borderRadius:8,color:"#0df2f2",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            <button onClick={handleExportGLTF} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",background:"rgba(13,242,242,0.06)",border:"1px solid rgba(13,242,242,0.15)",borderRadius:8,color:"#0df2f2",fontSize:11,fontWeight:700,cursor:"pointer"}}>
               <span className="material-symbols-outlined" style={{fontSize:14}}>upload</span>IMPORT BIM
             </button>
-            <button style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",background:"#0df2f2",borderRadius:8,color:"#060e0e",fontSize:11,fontWeight:700,cursor:"pointer",border:"none"}}>
+            <button onClick={handleExportBIM} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",background:"#0df2f2",borderRadius:8,color:"#060e0e",fontSize:11,fontWeight:700,cursor:"pointer",border:"none"}}>
               <span className="material-symbols-outlined" style={{fontSize:14}}>download</span>EXPORT BIM
             </button>
           </div>
@@ -585,10 +730,11 @@ export default function Model3DPage() {
           <div style={{flex:1,position:"relative"}}>
             <ThreeErrorBoundary>
               <Canvas
-                shadows
+                shadows={{ type: THREE.PCFSoftShadowMap, enabled: true }}
                 camera={{position:cam.pos, fov:cam.fov, near:0.1, far:250}}
                 style={{background:"linear-gradient(160deg,#0c1e1e 0%,#060e0e 100%)"}}
-                gl={{antialias:true,alpha:false}}
+                gl={{antialias:true, alpha:false, powerPreference:"high-performance", toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.2}}
+                dpr={[1, 2]}
                 key={camMode}
               >
                 <Suspense fallback={null}>
@@ -624,7 +770,7 @@ export default function Model3DPage() {
               {showSun&&(
                 <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px",background:"rgba(245,158,11,0.12)",border:"1px solid rgba(245,158,11,0.25)",borderRadius:8}}>
                   <span className="material-symbols-outlined" style={{fontSize:14,color:"#f59e0b"}}>wb_sunny</span>
-                  <span style={{fontSize:10,color:"#fbbf24",fontFamily:"monospace"}}>SUN: {windDir} · {sunHours.toFixed(1)}h/day</span>
+                  <span style={{fontSize:10,color:"#fbbf24",fontFamily:"monospace"}}>SUN: {windDir} · {sunHours.toFixed(1)}h/day · {new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>
                 </div>
               )}
               {showWind&&(

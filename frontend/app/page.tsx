@@ -117,6 +117,9 @@ export default function HomePage() {
   const [mounted, setMounted] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [contactOpen, setContactOpen] = useState(false);
+  const [contactSent, setContactSent] = useState(false);
+  const [contactForm, setContactForm] = useState({ name: "", email: "", company: "", message: "" });
   const bioIntegrity = useCountUp(98.4, 2500, 1);
 
   useEffect(() => {
@@ -293,7 +296,7 @@ export default function HomePage() {
                   </span>
                 </Link>
                 <a
-                  href="#features"
+                  href="/docs"
                   className="glass-panel text-white px-10 py-5 rounded-sm font-bold text-sm uppercase tracking-[0.15em] hover:bg-white/5 transition-all duration-200 hover:border-primary/30"
                 >
                   Documentation
@@ -521,7 +524,7 @@ export default function HomePage() {
               >
                 Get Started
               </Link>
-              <button className="border border-slate-700 hover:border-primary/50 px-12 py-4 rounded-sm font-bold text-sm uppercase tracking-widest transition-all duration-200 hover:bg-primary/5">
+              <button onClick={() => setContactOpen(true)} className="border border-slate-700 hover:border-primary/50 px-12 py-4 rounded-sm font-bold text-sm uppercase tracking-widest transition-all duration-200 hover:bg-primary/5">
                 Contact Sales
               </button>
             </div>
@@ -546,6 +549,73 @@ export default function HomePage() {
           </div>
         </footer>
       </div>
+
+      {/* Contact Sales Modal */}
+      {contactOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }}>
+          <div className="glass-panel rounded-xl p-8 w-full max-w-md border border-primary/20 relative">
+            <button onClick={() => { setContactOpen(false); setContactSent(false); }} className="absolute top-4 right-4 text-slate-400 hover:text-white">
+              <span className="material-symbols-outlined">close</span>
+            </button>
+            {contactSent ? (
+              <div className="text-center py-8">
+                <span className="material-symbols-outlined text-primary text-5xl mb-4 block">check_circle</span>
+                <h3 className="text-2xl font-bold text-white mb-2">Message Sent!</h3>
+                <p className="text-slate-400 text-sm">Our sales team will reach out within 24 hours.</p>
+                <button onClick={() => { setContactOpen(false); setContactSent(false); }} className="mt-6 bg-primary text-background-dark px-8 py-3 rounded-sm font-bold text-sm uppercase tracking-widest">
+                  Close
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-3 mb-6">
+                  <span className="material-symbols-outlined text-primary text-2xl">business</span>
+                  <div>
+                    <h3 className="text-xl font-bold text-white uppercase tracking-tight">Contact Sales</h3>
+                    <p className="text-[11px] text-slate-500 uppercase tracking-widest">ECO-3D Enterprise</p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-4">
+                  {[
+                    { label: "Full Name", key: "name", type: "text", placeholder: "Jane Smith" },
+                    { label: "Work Email", key: "email", type: "email", placeholder: "jane@company.com" },
+                    { label: "Company / Organization", key: "company", type: "text", placeholder: "Acme Architecture" },
+                  ].map(({ label, key, type, placeholder }) => (
+                    <div key={key}>
+                      <label className="text-[11px] text-slate-400 uppercase tracking-widest block mb-1.5">{label}</label>
+                      <input
+                        type={type}
+                        placeholder={placeholder}
+                        value={(contactForm as any)[key]}
+                        onChange={e => setContactForm(f => ({ ...f, [key]: e.target.value }))}
+                        className="w-full rounded-lg px-4 py-3 text-[13px] text-white focus:outline-none focus:border-primary/50 transition-all"
+                        style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.12)" }}
+                      />
+                    </div>
+                  ))}
+                  <div>
+                    <label className="text-[11px] text-slate-400 uppercase tracking-widest block mb-1.5">Message</label>
+                    <textarea
+                      rows={3}
+                      placeholder="Tell us about your project and requirements..."
+                      value={contactForm.message}
+                      onChange={e => setContactForm(f => ({ ...f, message: e.target.value }))}
+                      className="w-full rounded-lg px-4 py-3 text-[13px] text-white focus:outline-none resize-none"
+                      style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.12)" }}
+                    />
+                  </div>
+                  <button
+                    onClick={() => { if(contactForm.name && contactForm.email) setContactSent(true); }}
+                    className="w-full py-3.5 bg-primary text-background-dark font-bold text-sm uppercase tracking-widest rounded-sm hover:brightness-110 transition-all"
+                    style={{ boxShadow: "0 0 20px rgba(13,242,242,0.3)" }}>
+                    Send Message
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Material Symbols */}
       <link
