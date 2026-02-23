@@ -1,230 +1,351 @@
 "use client";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useState, useRef } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
-import { analyzePlot, generateFloorPlan } from "@/lib/api";
-import dynamic from "next/dynamic";
 
-const MapComponent = dynamic(() => import("@/components/MapComponent"), {
-  ssr: false,
-  loading: () => (
-    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#080e0e" }}>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
-        <div style={{ width: 32, height: 32, border: "2px solid #0df2f2", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.9s linear infinite" }}/>
-        <p style={{ fontSize: 10, color: "rgba(13,242,242,0.5)", textTransform: "uppercase", letterSpacing: "0.2em", fontFamily: "monospace" }}>Loading Map...</p>
+type ExportFormat = "json" | "csv" | "txt" | "bim";
+
+function ExportCard({
+  icon, title, desc, format, onExport, disabled,
+}: {
+  icon: string; title: string; desc: string; format: ExportFormat;
+  onExport: (f: ExportFormat) => void; disabled?: boolean;
+}) {
+  const [done, setDone] = useState(false);
+  const handle = () => {
+    if (disabled) return;
+    onExport(format);
+    setDone(true);
+    setTimeout(() => setDone(false), 2200);
+  };
+  return (
+    <div style={{
+      background: "rgba(13,242,242,0.03)", border: "1px solid rgba(13,242,242,0.1)",
+      borderRadius: 12, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 12,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 22 }}>{icon}</span>
+        <div>
+          <div style={{ color: "white", fontWeight: 700, fontSize: 13 }}>{title}</div>
+          <div style={{ color: "#64748b", fontSize: 11, marginTop: 2 }}>{desc}</div>
+        </div>
       </div>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <button
+        onClick={handle}
+        disabled={!!disabled}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          padding: "9px 16px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+          textTransform: "uppercase", letterSpacing: "0.1em", cursor: disabled ? "not-allowed" : "pointer",
+          background: done ? "rgba(34,197,94,0.15)" : disabled ? "rgba(255,255,255,0.03)" : "rgba(13,242,242,0.1)",
+          border: `1px solid ${done ? "rgba(34,197,94,0.4)" : disabled ? "rgba(255,255,255,0.06)" : "rgba(13,242,242,0.25)"}`,
+          color: done ? "#22c55e" : disabled ? "#334155" : "#0df2f2",
+          transition: "all 0.2s", fontFamily: "'Space Grotesk',sans-serif",
+        }}>
+        <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+          {done ? "check_circle" : disabled ? "lock" : "download"}
+        </span>
+        {done ? "Downloaded" : disabled ? "No data" : `Export .${format.toUpperCase()}`}
+      </button>
     </div>
-  ),
-});
+  );
+}
 
-const ANALYSIS_STEPS = [
-  "Querying OpenTopoData SRTM30m elevation...",
-  "Fetching SoilGrids 2.0 soil properties...",
-  "Verifying legal land status (OSM + WDPA + FEMA)...",
-  "Classifying seismic hazard zone (USGS ASCE 7-22)...",
-  "Computing NDVI vegetation proxy (Open-Meteo ET₀)...",
-  "Retrieving Open-Meteo wind & rainfall normals...",
-  "Running GloFAS flood discharge model...",
-  "Computing AHP-WLC buildability score (Saaty 1980)...",
-  "Generating wind/solar optimised floor plan (IRC 2021)...",
-];
+function DataRow({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+      <span style={{ fontSize: 11, color: "#64748b" }}>{label}</span>
+      <span style={{ fontSize: 11, fontFamily: "monospace", color: highlight ? "#0df2f2" : "#cbd5e1", fontWeight: highlight ? 700 : 400 }}>{value}</span>
+    </div>
+  );
+}
 
-export default function MapPage() {
-  const router = useRouter();
-  const {
-    selectedLat, selectedLon, currentPlotId, analysis, isAnalyzing, error,
-    setSelectedLocation, setAnalysis, setFloorPlan, setAnalyzing, setError,
-  } = useEco3DStore();
+function Section({ title }: { title: string }) {
+  return (
+    <div style={{ fontSize: 9, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.18em", fontWeight: 700, marginTop: 16, marginBottom: 6 }}>{title}</div>
+  );
+}
 
-  const [stage,         setStage]         = useState<"idle"|"locating"|"analyzing"|"done">("idle");
-  const [stepIdx,       setStepIdx]       = useState(0);
-  const [plotBoundary,  setPlotBoundary]  = useState<number[][]|null>(null);
-  const [buildability,  setBuildability]  = useState<{ok:boolean; reason:string}|null>(null);
-  const [legalData,     setLegalData]     = useState<any>(null);
-  const [drawnPolygon,  setDrawnPolygon]  = useState<number[][]|null>(null);
-  const analysisTriggered = useRef(false);
+export default function ExportPage() {
+  const params = useParams();
+  const plotId = params.id as string;
+  const { analysis, floorPlan } = useEco3DStore();
+  const [exportLog, setExportLog] = useState<string[]>([]);
 
-  const handleLocationSelect = useCallback(async (lat: number, lon: number, polygon?: number[][]) => {
-    analysisTriggered.current = false;
-    setSelectedLocation(lat, lon);
-    setDrawnPolygon(polygon || null);
-    setStage("locating");
-    setBuildability(null);
+  const log = (msg: string) => setExportLog(p => [`${new Date().toLocaleTimeString()} — ${msg}`, ...p].slice(0, 8));
 
-    try {
-      const resp = await fetch(`http://localhost:8000/plot-boundary?lat=${lat}&lon=${lon}`);
-      if (resp.ok) {
-        const data = await resp.json();
-        setPlotBoundary(polygon || data.boundary);
-        if (data.legal_verification) setLegalData(data.legal_verification);
-        if (!data.is_buildable) {
-          setBuildability({ ok: false, reason: data.reason });
-          setStage("idle");
-          return;
-        }
-        setBuildability({ ok: true, reason: data.reason });
-      }
-    } catch { /* silent */ }
-    setStage("idle");
-  }, [setSelectedLocation]);
+  const handleExport = (format: ExportFormat) => {
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `ECO3D_${plotId}_${ts}`;
 
-  useEffect(() => {
-    if (!selectedLat || !selectedLon || !currentPlotId) return;
-    if (analysisTriggered.current) return;
-    if (buildability && !buildability.ok) return;
-    analysisTriggered.current = true;
-    runAnalysis();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLat, selectedLon, currentPlotId, buildability]);
-
-  const runAnalysis = async () => {
-    if (!selectedLat || !selectedLon || !currentPlotId) return;
-    setAnalyzing(true);
-    setStage("analyzing");
-    setError(null);
-    setStepIdx(0);
-
-    // Animate through steps
-    let cancelled = false;
-    for (let i = 0; i < ANALYSIS_STEPS.length - 1; i++) {
-      if (cancelled) break;
-      setStepIdx(i);
-      await new Promise(r => setTimeout(r, 700));
+    if (format === "json" || format === "bim") {
+      const payload = {
+        meta: {
+          version: "1.0", platform: "ECO-3D",
+          exported: new Date().toISOString(), plot_id: plotId,
+        },
+        analysis: analysis ? {
+          buildability_score: analysis.buildability_score,
+          flood_probability: analysis.flood_probability,
+          status: analysis.status,
+          environmental: analysis.environmental,
+          segmentation: analysis.segmentation,
+          tree_count: analysis.tree_coordinates?.length ?? 0,
+        } : null,
+        floor_plan: floorPlan ? {
+          total_area_m2: floorPlan.total_area,
+          fitness_score: floorPlan.fitness_score,
+          sunlight_score: floorPlan.sunlight_score,
+          ventilation_score: floorPlan.ventilation_score,
+          tree_preserved_count: floorPlan.tree_preserved_count,
+          generation_count: floorPlan.generation_count,
+          rooms: floorPlan.layout.map(r => ({
+            type: r.type, floor: r.floor, orientation: r.orientation,
+            width_m: r.width, depth_m: r.height,
+            area_m2: parseFloat((r.width * r.height).toFixed(2)),
+            position: { x: r.x, y: r.y },
+          })),
+        } : null,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url;
+      a.download = `${filename}.${format === "bim" ? "bim.json" : "json"}`;
+      a.click(); URL.revokeObjectURL(url);
+      log(`Exported ${format.toUpperCase()} — ${filename}`);
     }
 
-    try {
-      const result = await analyzePlot({
-        plot_id: currentPlotId,
-        lat: selectedLat,
-        lon: selectedLon,
-        polygon: drawnPolygon || plotBoundary || undefined,
-      });
-      setAnalysis(result);
-      setStepIdx(ANALYSIS_STEPS.length - 1);
+    if (format === "csv") {
+      if (!floorPlan) return;
+      const header = "Room Type,Floor,Width (m),Depth (m),Area (m²),Orientation,X,Y\n";
+      const rows = floorPlan.layout.map(r =>
+        `${r.type},${r.floor},${r.width},${r.height},${(r.width * r.height).toFixed(2)},${r.orientation},${r.x},${r.y}`
+      ).join("\n");
+      const blob = new Blob([header + rows], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = `${filename}.csv`;
+      a.click(); URL.revokeObjectURL(url);
+      log(`Exported CSV — ${floorPlan.layout.length} rooms`);
+    }
 
-      const fp = await generateFloorPlan({
-        plot_id: currentPlotId,
-        plot_area_sqm: 220,
-        num_floors: 2,
-        preserve_trees: true,
-      });
-      setFloorPlan(fp);
-      setStage("done");
-      await new Promise(r => setTimeout(r, 400));
-      router.push(`/analysis/${currentPlotId}`);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Analysis failed — is backend running on port 8000?";
-      setError(msg);
-      setStage("idle");
-    } finally {
-      setAnalyzing(false);
+    if (format === "txt") {
+      const lines: string[] = [
+        "═══════════════════════════════════════════════════",
+        `  ECO-3D SITE ANALYSIS REPORT`,
+        `  Plot ID : ${plotId}`,
+        `  Date    : ${new Date().toLocaleString()}`,
+        "═══════════════════════════════════════════════════",
+        "",
+      ];
+      if (analysis) {
+        lines.push("SITE SCORES");
+        lines.push(`  Buildability Score : ${analysis.buildability_score.toFixed(0)} / 100`);
+        lines.push(`  Flood Risk         : ${(analysis.flood_probability * 100).toFixed(0)}%`);
+        lines.push(`  Status             : ${analysis.status}`);
+        lines.push("");
+        lines.push("ENVIRONMENTAL DATA");
+        lines.push(`  Elevation          : ${analysis.environmental.elevation.toFixed(0)} m`);
+        lines.push(`  Slope              : ${analysis.environmental.slope?.toFixed(1) ?? "—"}°`);
+        lines.push(`  Rainfall           : ${analysis.environmental.rainfall_mm.toFixed(0)} mm/yr`);
+        lines.push(`  Wind               : ${analysis.environmental.wind_ms?.toFixed(1) ?? "—"} m/s ${analysis.environmental.wind_direction}`);
+        lines.push(`  Sun Hours          : ${analysis.environmental.sun_exposure_hours.toFixed(1)} h/day`);
+        lines.push(`  NDVI               : ${analysis.environmental.ndvi.toFixed(3)}`);
+        lines.push(`  Soil Type          : ${analysis.environmental.soil_type}`);
+        if (analysis.environmental.clay_pct != null) lines.push(`  Clay               : ${(analysis.environmental.clay_pct as number).toFixed(1)}%`);
+        if (analysis.environmental.sand_pct != null) lines.push(`  Sand               : ${(analysis.environmental.sand_pct as number).toFixed(1)}%`);
+        if (analysis.environmental.soil_ph != null) lines.push(`  Soil pH            : ${(analysis.environmental.soil_ph as number).toFixed(1)}`);
+        if (analysis.environmental.bulk_density != null) lines.push(`  Bulk Density       : ${(analysis.environmental.bulk_density as number).toFixed(2)} g/cm³`);
+        lines.push(`  Soil Buildable     : ${analysis.environmental.soil_buildable === false ? "No" : "Yes"}`);
+        lines.push("");
+      }
+      if (floorPlan) {
+        lines.push("FLOOR PLAN SUMMARY");
+        lines.push(`  Total Area         : ${floorPlan.total_area.toFixed(0)} m²`);
+        lines.push(`  Fitness Score      : ${(floorPlan.fitness_score * 100).toFixed(0)}%`);
+        lines.push(`  Sunlight Score     : ${(floorPlan.sunlight_score * 100).toFixed(0)}%`);
+        lines.push(`  Ventilation Score  : ${(floorPlan.ventilation_score * 100).toFixed(0)}%`);
+        lines.push(`  Trees Preserved    : ${floorPlan.tree_preserved_count}`);
+        lines.push(`  Rooms              : ${floorPlan.layout.length}`);
+        lines.push("");
+        lines.push("ROOM SCHEDULE");
+        floorPlan.layout.forEach((r, i) => {
+          lines.push(`  ${String(i + 1).padStart(2, "0")}. ${r.type.padEnd(14)} Floor ${r.floor}  ${r.width}m × ${r.height}m = ${(r.width * r.height).toFixed(1)}m²  [${r.orientation}]`);
+        });
+        lines.push("");
+      }
+      lines.push("═══════════════════════════════════════════════════");
+      lines.push("  Generated by ECO-3D Spatial Intelligence Platform");
+      lines.push("═══════════════════════════════════════════════════");
+      const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = `${filename}.txt`;
+      a.click(); URL.revokeObjectURL(url);
+      log(`Exported TXT report — ${lines.length} lines`);
     }
   };
 
+  const hasAnalysis = !!analysis;
+  const hasPlan = !!floorPlan;
+
   return (
     <>
-      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
-      <style>{`body{background:#080e0e;margin:0}*{box-sizing:border-box}.gl{background:rgba(8,20,20,0.85);backdrop-filter:blur(12px);border:1px solid rgba(13,242,242,0.1)}`}</style>
+      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+      <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
 
-      <div style={{ height:"100vh", width:"100vw", display:"flex", flexDirection:"column", overflow:"hidden", background:"#080e0e", fontFamily:"'Space Grotesk',sans-serif" }}>
+      <div style={{ minHeight: "100vh", background: "#080e0e", fontFamily: "'Space Grotesk',sans-serif", color: "white" }}>
 
-        <header style={{ flexShrink:0, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 20px", zIndex:50, borderBottom:"1px solid rgba(255,255,255,0.05)", background:"rgba(8,14,14,0.98)" }}>
-          <Link href="/" style={{ display:"flex", alignItems:"center", gap:8, textDecoration:"none" }}>
-            <span style={{ fontSize:22, color:"#0df2f2" }}>◈</span>
-            <span style={{ color:"#fff", fontWeight:700 }}>ECO-3D <span style={{ color:"rgba(13,242,242,0.5)", fontWeight:300 }}>Studio</span></span>
+        {/* Header */}
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", background: "rgba(8,14,14,0.98)", borderBottom: "1px solid rgba(13,242,242,0.08)", position: "sticky", top: 0, zIndex: 50 }}>
+          <Link href="/" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
+            <span className="material-symbols-outlined" style={{ color: "#0df2f2", fontSize: 22 }}>deployed_code</span>
+            <div>
+              <div style={{ color: "white", fontWeight: 700, fontSize: 15 }}>ECO-3D <span style={{ color: "rgba(13,242,242,0.5)", fontWeight: 300 }}>Studio</span></div>
+              <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: "0.15em" }}>AI GENERATIVE ARCHITECTURE</div>
+            </div>
           </Link>
-          <div style={{ fontSize:11, color:"#475569", textAlign:"center" }}>
-            Click on the map · or draw a boundary · or search for any place on Earth
-          </div>
-          <div style={{ display:"flex", alignItems:"center", gap:6, padding:"4px 10px", background:"rgba(13,242,242,0.06)", border:"1px solid rgba(13,242,242,0.15)", borderRadius:20 }}>
-            <span style={{ width:6, height:6, borderRadius:"50%", background:"#22c55e", animation:"pulse 2s infinite", display:"inline-block" }}/>
-            <span style={{ fontSize:10, color:"#22c55e", fontFamily:"monospace", textTransform:"uppercase", letterSpacing:"0.12em" }}>
-              {isAnalyzing ? "Analyzing…" : "Ready"}
-            </span>
-          </div>
+          <nav style={{ display: "flex", gap: 4 }}>
+            {[
+              { l: "Blueprint Generator", h: `/analysis/${plotId}` },
+              { l: "Environmental Data",  h: `/environment/${plotId}` },
+              { l: "3D Model",            h: `/model3d/${plotId}` },
+              { l: "Export",              h: `/report/${plotId}`, a: true },
+            ].map(item => (
+              <Link key={item.l} href={item.h} style={{
+                padding: "8px 14px", fontSize: 12, fontWeight: 500, textDecoration: "none",
+                color: (item as any).a ? "#0df2f2" : "#64748b",
+                borderBottom: (item as any).a ? "2px solid #0df2f2" : "2px solid transparent",
+              }}>{item.l}</Link>
+            ))}
+          </nav>
+          <span style={{ fontSize: 11, fontFamily: "monospace", color: "#475569" }}>{plotId}</span>
         </header>
 
-        <div style={{ flex:1, position:"relative", overflow:"hidden", minHeight:0 }}>
-          <MapComponent onLocationSelect={handleLocationSelect} plotBoundary={plotBoundary} selectedLat={selectedLat} selectedLon={selectedLon}/>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 24px", display: "grid", gridTemplateColumns: "1fr 320px", gap: 32 }}>
 
-          {/* Non-buildable warning */}
-          {buildability && !buildability.ok && (
-            <div className="gl" style={{ position:"absolute", top:16, left:"50%", transform:"translateX(-50%)", padding:"10px 18px", borderRadius:12, display:"flex", alignItems:"center", gap:12, zIndex:50 }}>
-              <span style={{ fontSize:20 }}>⚠</span>
-              <div>
-                <div style={{ fontSize:12, fontWeight:700, color:"#f87171" }}>Not Suitable for Construction</div>
-                <div style={{ fontSize:11, color:"#64748b", marginTop:2 }}>{buildability.reason}</div>
-              </div>
+          {/* Left — export options + preview */}
+          <div>
+            <div style={{ marginBottom: 28 }}>
+              <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>Export Report</h1>
+              <p style={{ color: "#64748b", fontSize: 13, marginTop: 6 }}>
+                Download your full site analysis and floor plan in multiple formats.
+              </p>
             </div>
-          )}
 
-          {/* Legal verification quick-info badge (bottom-right of map) */}
-          {legalData && buildability?.ok && (
-            <div className="gl" style={{ position:"absolute", bottom:90, right:16, padding:"10px 14px", borderRadius:10, zIndex:50, minWidth:200 }}>
-              <div style={{ fontSize:9, textTransform:"uppercase", letterSpacing:"0.15em", color:"#0df2f2", marginBottom:6 }}>Legal Status</div>
-              <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
-                <span>{legalData.is_legally_buildable ? "✅" : "🚫"}</span>
-                <span style={{ fontSize:11, fontWeight:700, color:legalData.is_legally_buildable ? "#22c55e" : "#ef4444" }}>
-                  {legalData.is_legally_buildable ? "Buildable" : "Restricted"}
-                </span>
-                <span style={{ marginLeft:"auto", fontSize:14, fontWeight:900, color:legalData.legal_score > 70 ? "#22c55e" : "#f59e0b" }}>
-                  {Math.round(legalData.legal_score)}
-                </span>
-              </div>
-              {legalData.flood_zone && (
-                <div style={{ fontSize:10, color:"#64748b" }}>Flood: <span style={{ color:"#e2e8f0" }}>{legalData.flood_zone}</span></div>
-              )}
-              {legalData.seismic_zone && (
-                <div style={{ fontSize:10, color:"#64748b" }}>Seismic: <span style={{ color:"#e2e8f0" }}>{legalData.seismic_zone}</span></div>
-              )}
-              {legalData.warnings?.length > 0 && (
-                <div style={{ fontSize:9, color:"#f59e0b", marginTop:4 }}>⚠ {legalData.warnings.length} warning{legalData.warnings.length > 1 ? "s" : ""}</div>
-              )}
+            {/* Export cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 28 }}>
+              <ExportCard
+                icon="data_object" title="Full Report (JSON)"
+                desc="All analysis data, environmental readings, floor plan, and scores in structured JSON."
+                format="json" onExport={handleExport} disabled={!hasAnalysis && !hasPlan}
+              />
+              <ExportCard
+                icon="table_chart" title="Room Schedule (CSV)"
+                desc="Spreadsheet-ready room schedule with dimensions, area, floor, and orientation."
+                format="csv" onExport={handleExport} disabled={!hasPlan}
+              />
+              <ExportCard
+                icon="description" title="Site Report (TXT)"
+                desc="Human-readable plain text report with all site scores, environmental data, and room schedule."
+                format="txt" onExport={handleExport} disabled={!hasAnalysis && !hasPlan}
+              />
+              <ExportCard
+                icon="view_in_ar" title="BIM Export (JSON)"
+                desc="Building Information Model JSON with room geometry, eco-scores, and metadata for BIM tools."
+                format="bim" onExport={handleExport} disabled={!hasPlan}
+              />
             </div>
-          )}
 
-          {/* Analysis overlay */}
-          {(stage === "analyzing" || stage === "locating") && (
-            <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", zIndex:40, background:"rgba(6,14,14,0.82)" }}>
-              <div className="gl" style={{ borderRadius:20, padding:"36px 40px", display:"flex", flexDirection:"column", alignItems:"center", gap:18, minWidth:340 }}>
-                <div style={{ position:"relative", width:64, height:64 }}>
-                  <div style={{ position:"absolute", inset:0, border:"2px solid rgba(13,242,242,0.12)", borderRadius:"50%" }}/>
-                  <div style={{ position:"absolute", inset:0, border:"2px solid #0df2f2", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 1s linear infinite" }}/>
-                  <span style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", fontSize:24 }}>🛰</span>
-                </div>
-                <div style={{ textAlign:"center" }}>
-                  <div style={{ fontSize:14, fontWeight:700, color:"#fff", marginBottom:4 }}>Analysing Plot</div>
-                  <div style={{ fontSize:11, color:"rgba(13,242,242,0.7)", fontFamily:"monospace", maxWidth:260, textAlign:"center" }}>
-                    {ANALYSIS_STEPS[Math.min(stepIdx, ANALYSIS_STEPS.length-1)]}
+            {/* Export activity log */}
+            {exportLog.length > 0 && (
+              <div style={{ background: "rgba(13,242,242,0.02)", border: "1px solid rgba(13,242,242,0.08)", borderRadius: 10, padding: "14px 16px" }}>
+                <div style={{ fontSize: 9, color: "rgba(13,242,242,0.4)", textTransform: "uppercase", letterSpacing: "0.16em", marginBottom: 8 }}>Export Activity</div>
+                {exportLog.map((entry, i) => (
+                  <div key={i} style={{ fontSize: 11, color: i === 0 ? "#0df2f2" : "#475569", fontFamily: "monospace", padding: "3px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                    {entry}
                   </div>
-                </div>
-                <div style={{ width:"100%", background:"rgba(255,255,255,0.05)", borderRadius:4, height:4, overflow:"hidden" }}>
-                  <div style={{ height:"100%", background:"#0df2f2", borderRadius:4, transition:"width 0.7s ease", width:`${Math.round((stepIdx / (ANALYSIS_STEPS.length-1)) * 100)}%` }}/>
-                </div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, width:"100%" }}>
-                  {["SoilGrids 2.0", "OpenTopoData", "Open-Meteo", "OSM Overpass"].map(src => (
-                    <div key={src} style={{ fontSize:9, color:"#334155", textAlign:"center", padding:"4px 8px", background:"rgba(255,255,255,0.03)", borderRadius:6, fontFamily:"monospace" }}>{src}</div>
-                  ))}
+                ))}
+              </div>
+            )}
+
+            {/* No data notice */}
+            {!hasAnalysis && !hasPlan && (
+              <div style={{ background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 10, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14, marginTop: 16 }}>
+                <span className="material-symbols-outlined" style={{ color: "#f59e0b", fontSize: 22 }}>info</span>
+                <div>
+                  <div style={{ color: "#fbbf24", fontWeight: 700, fontSize: 13 }}>No analysis data found</div>
+                  <div style={{ color: "#64748b", fontSize: 12, marginTop: 3 }}>Run a site analysis first to generate data for export.</div>
+                  <Link href="/map" style={{ color: "#0df2f2", fontSize: 12, marginTop: 6, display: "inline-block" }}>Go to Map →</Link>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
-          {/* Coords HUD */}
-          {selectedLat && stage === "idle" && !isAnalyzing && (
-            <div className="gl" style={{ position:"absolute", bottom:24, left:"50%", transform:"translateX(-50%)", padding:"10px 20px", borderRadius:12, display:"flex", alignItems:"center", gap:14, zIndex:40 }}>
-              <span style={{ fontSize:16 }}>📍</span>
-              <span style={{ fontSize:12, fontFamily:"monospace", color:"#e2e8f0" }}>
-                {selectedLat.toFixed(5)}°,&nbsp;{selectedLon?.toFixed(5)}°
-              </span>
-              {error && <span style={{ fontSize:11, color:"#f87171", maxWidth:280 }}>{error}</span>}
+          {/* Right — data summary */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ background: "rgba(13,242,242,0.03)", border: "1px solid rgba(13,242,242,0.1)", borderRadius: 12, padding: "18px 20px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "white", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                Data Summary
+              </div>
+
+              {hasAnalysis && analysis ? (
+                <>
+                  <Section title="Site Scores" />
+                  <DataRow label="Buildability" value={`${analysis.buildability_score.toFixed(0)} / 100`} highlight />
+                  <DataRow label="Flood Risk" value={`${(analysis.flood_probability * 100).toFixed(0)}%`} />
+                  <DataRow label="Status" value={analysis.status} highlight />
+
+                  <Section title="Environmental" />
+                  <DataRow label="Elevation" value={`${analysis.environmental.elevation.toFixed(0)} m`} />
+                  <DataRow label="Slope" value={`${analysis.environmental.slope?.toFixed(1) ?? "—"}°`} />
+                  <DataRow label="Rainfall" value={`${analysis.environmental.rainfall_mm.toFixed(0)} mm/yr`} />
+                  <DataRow label="Wind" value={`${analysis.environmental.wind_ms?.toFixed(1) ?? "—"} m/s ${analysis.environmental.wind_direction}`} />
+                  <DataRow label="Sun Hours" value={`${analysis.environmental.sun_exposure_hours.toFixed(1)} h/day`} />
+                  <DataRow label="NDVI" value={analysis.environmental.ndvi.toFixed(3)} />
+
+                  <Section title="Soil (SoilGrids v2)" />
+                  <DataRow label="Type" value={analysis.environmental.soil_type} />
+                  <DataRow label="pH" value={analysis.environmental.soil_ph != null ? `${(analysis.environmental.soil_ph as number).toFixed(1)}` : "—"} />
+                  <DataRow label="Clay" value={analysis.environmental.clay_pct != null ? `${(analysis.environmental.clay_pct as number).toFixed(1)}%` : "—"} />
+                  <DataRow label="Sand" value={analysis.environmental.sand_pct != null ? `${(analysis.environmental.sand_pct as number).toFixed(1)}%` : "—"} />
+                  <DataRow label="Buildable" value={analysis.environmental.soil_buildable === false ? "No" : "Yes"} highlight />
+                </>
+              ) : (
+                <div style={{ color: "#334155", fontSize: 12, padding: "12px 0" }}>No analysis data</div>
+              )}
+
+              {hasPlan && floorPlan ? (
+                <>
+                  <Section title="Floor Plan" />
+                  <DataRow label="Total Area" value={`${floorPlan.total_area.toFixed(0)} m²`} highlight />
+                  <DataRow label="Rooms" value={`${floorPlan.layout.length}`} />
+                  <DataRow label="Fitness" value={`${(floorPlan.fitness_score * 100).toFixed(0)}%`} highlight />
+                  <DataRow label="Sunlight" value={`${(floorPlan.sunlight_score * 100).toFixed(0)}%`} />
+                  <DataRow label="Ventilation" value={`${(floorPlan.ventilation_score * 100).toFixed(0)}%`} />
+                  <DataRow label="Trees Saved" value={`${floorPlan.tree_preserved_count}`} />
+                </>
+              ) : (
+                <div style={{ color: "#334155", fontSize: 12, padding: "8px 0" }}>No floor plan data</div>
+              )}
             </div>
-          )}
+
+            {/* Quick nav */}
+            <div style={{ background: "rgba(13,242,242,0.02)", border: "1px solid rgba(13,242,242,0.08)", borderRadius: 10, padding: "14px 16px" }}>
+              <div style={{ fontSize: 9, color: "rgba(13,242,242,0.4)", textTransform: "uppercase", letterSpacing: "0.16em", marginBottom: 10 }}>Quick Navigation</div>
+              {[
+                { icon: "architecture", label: "Blueprint Generator", href: `/analysis/${plotId}` },
+                { icon: "view_in_ar",   label: "3D Model",            href: `/model3d/${plotId}` },
+                { icon: "map",          label: "Back to Map",         href: "/map" },
+              ].map(item => (
+                <Link key={item.label} href={item.href} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.04)", textDecoration: "none", color: "#64748b", fontSize: 12 }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 14, color: "#0df2f2" }}>{item.icon}</span>
+                  {item.label}
+                </Link>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
     </>
   );
 }

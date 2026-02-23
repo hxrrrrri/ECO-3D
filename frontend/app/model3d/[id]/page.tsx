@@ -128,88 +128,121 @@ function SunSphere({ dir, lat }: { dir: string; lat?: number }) {
   );
 }
 
-// ── Enhanced Wind Flow covering entire model ──────────────────────────────────
-function WindArrows({ dir, cx, cz, modelW, modelD }: { dir: string; cx: number; cz: number; modelW: number; modelD: number }) {
-  const groupRef = useRef<THREE.Group>(null);
-  const particles = useRef<Array<{x:number,y:number,z:number,life:number,maxLife:number,speed:number,row:number}>>([]);
-  const timeRef = useRef(0);
-
+// ── Organic Smoke-Swirl Wind Effect (wispy curling trails) ─────────────────────
+function WindSwirl({ dir, cx, cz, modelW, modelD }: { dir: string; cx: number; cz: number; modelW: number; modelD: number }) {
   const v = useMemo(() => {
-    const M: Record<string,[number,number]> = { N:[0,-1],NE:[0.7,-0.7],E:[1,0],SE:[0.7,0.7],S:[0,1],SW:[-0.7,0.7],W:[-1,0],NW:[-0.7,-0.7] };
+    const M: Record<string,[number,number]> = {
+      N:[0,-1],NE:[0.7,-0.7],E:[1,0],SE:[0.7,0.7],
+      S:[0,1],SW:[-0.7,0.7],W:[-1,0],NW:[-0.7,-0.7],
+    };
     const k = Object.keys(M).find(k => dir.startsWith(k)) ?? "NW";
-    const [x,z] = M[k]; const l = Math.sqrt(x*x+z*z);
+    const [x,z] = M[k]; const l = Math.sqrt(x*x+z*z)||1;
     return { x:x/l, z:z/l };
   }, [dir]);
 
-  // Build particle mesh references
-  const PARTICLE_COUNT = 60;
-  const particleMeshes = useRef<THREE.Mesh[]>([]);
+  const perp = useMemo(() => ({ x: -v.z, z: v.x }), [v]);
 
-  useFrame((_, dt) => {
-    timeRef.current += dt;
-    const T = timeRef.current;
+  // 12 staggered trails spread across the building footprint
+  const TRAIL_COUNT = 12;
+  const SEG = 64;
+  const spread = Math.max(modelW, modelD) * 1.1;
 
-    // Spawn particles if needed
-    while(particles.current.length < PARTICLE_COUNT) {
-      const row = Math.floor(Math.random() * 5);
-      const across = (Math.random() - 0.5) * Math.max(modelW, modelD) * 1.4;
-      // Spawn at windward edge
-      const spawnX = v.x > 0 ? cx - modelW*0.8 + (v.z !== 0 ? across : 0) : v.x < 0 ? cx + modelW*0.8 + (v.z !== 0 ? across : 0) : cx + across;
-      const spawnZ = v.z > 0 ? cz - modelD*0.8 + (v.x !== 0 ? across : 0) : v.z < 0 ? cz + modelD*0.8 + (v.x !== 0 ? across : 0) : cz + across;
-      const maxLife = 80 + Math.random() * 60;
-      particles.current.push({
-        x: spawnX, y: 0.5 + row * 0.8 + Math.random() * 0.4,
-        z: spawnZ, life: Math.random() * maxLife, maxLife,
-        speed: 0.12 + Math.random() * 0.1, row
-      });
-    }
+  const trailData = useMemo(() => Array.from({ length: TRAIL_COUNT }, (_, i) => {
+    const laneT = (i / (TRAIL_COUNT - 1) - 0.5) * spread;
+    return {
+      laneX: perp.x * laneT,
+      laneZ: perp.z * laneT,
+      baseH:    0.15 + (i % 5) * 0.65,
+      phase:    (i / TRAIL_COUNT) * Math.PI * 2.5,
+      curlFreq1: 0.30 + (i % 4) * 0.18,
+      curlFreq2: 1.10 + (i % 3) * 0.45,
+      curlAmp1:  1.20 + (i % 3) * 0.90,
+      curlAmp2:  0.30 + (i % 5) * 0.18,
+      speed:    0.28 + (i % 5) * 0.055,
+      hue:     0.57 + i * 0.006,
+      sat:     0.07 + (i % 3) * 0.04,
+      lit:     0.72 + (i % 4) * 0.06,
+      opacity: 0.38 + (i % 4) * 0.12,
+    };
+  }), [perp, spread]);
 
-    particles.current.forEach((p, i) => {
-      p.life++;
-      p.x += v.x * p.speed * 1.6;
-      p.z += v.z * p.speed * 1.6;
-      // Slight wavy motion
-      p.y = 0.5 + p.row * 0.8 + Math.sin(p.life * 0.15 + i) * 0.12;
+  const lineData = useMemo(() => trailData.map(td => {
+    const positions = new Float32Array(SEG * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.LineBasicMaterial({
+      color: new THREE.Color().setHSL(td.hue, td.sat, td.lit),
+      transparent: true, opacity: 0,
+    });
+    return { geo, mat, positions, td };
+  }), [trailData]);
 
-      if(p.life > p.maxLife) {
-        // Respawn
-        const row2 = Math.floor(Math.random() * 5);
-        const across2 = (Math.random() - 0.5) * Math.max(modelW, modelD) * 1.4;
-        p.x = v.x > 0 ? cx - modelW*0.85 + (v.z !== 0 ? across2 : 0) : v.x < 0 ? cx + modelW*0.85 + (v.z !== 0 ? across2 : 0) : cx + across2;
-        p.z = v.z > 0 ? cz - modelD*0.85 + (v.x !== 0 ? across2 : 0) : v.z < 0 ? cz + modelD*0.85 + (v.x !== 0 ? across2 : 0) : cz + across2;
-        p.y = 0.5 + row2 * 0.8;
-        p.row = row2;
-        p.life = 0;
-        p.maxLife = 80 + Math.random() * 60;
-        p.speed = 0.12 + Math.random() * 0.1;
+  const groupRef = useRef<THREE.Group>(null);
+
+  useEffect(() => {
+    const grp = groupRef.current;
+    if (!grp) return;
+    lineData.forEach(({ geo, mat }) => grp.add(new THREE.Line(geo, mat)));
+    return () => { lineData.forEach(({ geo, mat }) => { geo.dispose(); mat.dispose(); }); };
+  }, [lineData]);
+
+  useFrame(({ clock }) => {
+    const T = clock.elapsedTime;
+    const dist = Math.max(modelW, modelD) * 2.0;
+
+    lineData.forEach(({ geo, mat, positions, td }) => {
+      const scroll = (T * td.speed + td.phase * 0.18) % 1;
+
+      for (let i = 0; i < SEG; i++) {
+        const rawT = i / (SEG - 1);
+        const t = (rawT + scroll) % 1;
+
+        const wx = cx - v.x * dist * 0.5 + v.x * dist * t + td.laneX;
+        const wz = cz - v.z * dist * 0.5 + v.z * dist * t + td.laneZ;
+
+        // Large lazy primary sweep
+        const pA = t * Math.PI * 2.8 * td.curlFreq1 + T * 0.42 + td.phase;
+        // Tighter secondary loop for inner swirl detail
+        const pB = t * Math.PI * 6.5 * td.curlFreq2 + T * 0.95 + td.phase * 1.4;
+        // Fine tertiary wobble for irregular organic texture
+        const pC = t * Math.PI * 11.0 + T * 1.6 + td.phase * 0.7;
+
+        const curlA = Math.sin(pA) * td.curlAmp1;
+        const curlB = Math.sin(pB) * td.curlAmp2;
+        const curlC = Math.sin(pC) * td.curlAmp2 * 0.28;
+        const totalCurl = curlA + curlB + curlC;
+
+        // Vertical rise with gentle oscillation
+        const rise = t * 1.6;
+        const vOsc = Math.sin(pA * 0.7) * 0.35 + Math.sin(pB * 0.4) * 0.12;
+        const py = td.baseH + rise + vOsc;
+
+        // Slight depth twist so trails aren't flat
+        const twistZ = Math.sin(pB * 0.6 + td.phase) * 0.28;
+
+        positions[i * 3 + 0] = wx + perp.x * totalCurl;
+        positions[i * 3 + 1] = Math.max(0.05, py);
+        positions[i * 3 + 2] = wz + perp.z * totalCurl + twistZ;
       }
+      geo.attributes.position.needsUpdate = true;
+      geo.computeBoundingSphere();
 
-      // Update mesh
-      const mesh = particleMeshes.current[i];
-      if(!mesh) return;
-      mesh.position.set(p.x, p.y, p.z);
-      const fade = Math.sin(p.life / p.maxLife * Math.PI);
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.opacity = Math.max(0, fade * 0.85);
-      // Point mesh in wind direction
-      const angle = Math.atan2(v.x, v.z);
-      mesh.rotation.y = angle;
+      // Bell-curve fade so trail head/tail dissolve smoothly
+      const fade = Math.pow(Math.sin(scroll * Math.PI), 0.65);
+      mat.opacity = fade * td.opacity;
+
+      // Near-white at peak, cooler grey at fade
+      (mat.color as THREE.Color).setHSL(
+        td.hue + fade * 0.02,
+        Math.max(0, td.sat - fade * 0.03),
+        td.lit - (1 - fade) * 0.16
+      );
     });
   });
 
-  const angle = Math.atan2(v.x, v.z);
-
-  return (
-    <group>
-      {Array.from({length: PARTICLE_COUNT}).map((_, i) => (
-        <mesh key={i} ref={el => { if(el) particleMeshes.current[i] = el; }} rotation={[0, angle, 0]} position={[cx, 0.5, cz]}>
-          <coneGeometry args={[0.08, 0.5, 6]} />
-          <meshStandardMaterial color="#60a5fa" emissive="#3b82f6" emissiveIntensity={0.6} transparent opacity={0.5} />
-        </mesh>
-      ))}
-    </group>
-  );
+  return <group ref={groupRef} />;
 }
+
 
 // ── Furniture (2D top-down view approach for open-top house) ──────────────────
 function Furniture({ type, w, d }: { type: string; w: number; d: number }) {
@@ -537,7 +570,7 @@ function UnifiedHouse({ rooms, showWind, showSun, windDir }: {
 
       {/* ── OVERLAYS ────────────────────────────────────────────────────── */}
       {showSun && <SunSphere dir={windDir} lat={0} />}
-      {showWind && <WindArrows dir={windDir} cx={cx} cz={cz} modelW={totalW} modelD={totalD} />}
+      {showWind && <WindSwirl dir={windDir} cx={cx} cz={cz} modelW={totalW} modelD={totalD} />}
     </group>
   );
 }
