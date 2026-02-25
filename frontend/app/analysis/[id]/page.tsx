@@ -190,30 +190,34 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
     timeRef.current = t / 1000;
 
     // ── Background + grid ──
-    ctx.fillStyle = "#f4f0e8";  // warm white like drafting paper
+    // Dark ECO-3D blueprint background
+    ctx.fillStyle = "#0d1117";
     ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = "rgba(100,140,160,0.18)"; ctx.lineWidth = 0.5;
-    const GRID = 20;
+    // Blueprint grid
+    const GRID = 22;
+    ctx.strokeStyle = "rgba(13,242,242,0.06)"; ctx.lineWidth = 0.5;
     for(let x=0;x<W;x+=GRID){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
     for(let y=0;y<H;y+=GRID){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+    // Stronger major grid lines every 5
+    ctx.strokeStyle = "rgba(13,242,242,0.11)"; ctx.lineWidth = 0.8;
+    for(let x=0;x<W;x+=GRID*5){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+    for(let y=0;y<H;y+=GRID*5){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
 
     if (rooms.length === 0) {
-      ctx.fillStyle = "#2a3a4a"; ctx.font = "bold 14px 'Space Grotesk', sans-serif";
+      ctx.fillStyle = "#0df2f2"; ctx.font = "bold 14px 'Space Grotesk', sans-serif";
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText("AWAITING FLOOR PLAN GENERATION", W/2, H/2-10);
-      ctx.fillStyle = "#64748b"; ctx.font = "11px sans-serif";
+      ctx.fillStyle = "rgba(13,242,242,0.4)"; ctx.font = "11px sans-serif";
       ctx.fillText("Select a plot and run analysis", W/2, H/2+14);
       return;
     }
 
     const SCALE = zoom;
-    const OWT = Math.max(8, zoom * 0.45);   // outer wall thickness px
-    const IWT = Math.max(4, zoom * 0.2);    // inner wall thickness px
-
-    // ── Shape-specific layout: different arrangement per shape ──
+    const OWT = Math.max(8, zoom * 0.45);
+    const IWT = Math.max(4, zoom * 0.2);
     const shape = plotShape.toLowerCase().replace(/[-\s]/g,"");
 
-    // Lay out rooms into a grid matching the plot shape
+    // ── Sort rooms ────────────────────────────────────────────────────────────
     const floor1 = rooms.filter(r => (r.floor ?? 1) === 1);
     const ORDER = ["living","kitchen","dining","bedroom","bedroom","bedroom","bathroom","puja_room","office","utility","garage"];
     const sorted = [...floor1].sort((a,b)=>{
@@ -221,119 +225,77 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
       const bi=ORDER.findIndex(o=>b.type.toLowerCase().includes(o.replace("_","")));
       return (ai<0?99:ai)-(bi<0?99:bi);
     });
-
-    // ── NORMALIZE room sizes to be realistic and proportional ──
-    const normalizeSize = (r: Room) => {
+    // ── Standard room sizes ───────────────────────────────────────────────────
+    const normSz = (r: Room): {w:number;h:number} => {
       const t = r.type.toLowerCase();
-      if(t.includes("living"))   return {w:Math.max(5.0,Math.min(8.0,r.width)),  h:Math.max(4.0,Math.min(6.5,r.height))};
-      if(t.includes("kitchen"))  return {w:Math.max(3.2,Math.min(5.0,r.width)),  h:Math.max(3.0,Math.min(4.5,r.height))};
-      if(t.includes("dining"))   return {w:Math.max(3.0,Math.min(5.0,r.width)),  h:Math.max(3.0,Math.min(4.5,r.height))};
-      if(t.includes("bedroom"))  return {w:Math.max(3.2,Math.min(5.0,r.width)),  h:Math.max(3.0,Math.min(4.5,r.height))};
-      if(t.includes("bathroom")) return {w:Math.max(1.8,Math.min(3.0,r.width)),  h:Math.max(1.8,Math.min(3.0,r.height))};
-      if(t.includes("puja"))     return {w:Math.max(2.0,Math.min(3.0,r.width)),  h:Math.max(2.0,Math.min(3.0,r.height))};
-      if(t.includes("office"))   return {w:Math.max(3.0,Math.min(4.5,r.width)),  h:Math.max(3.0,Math.min(4.0,r.height))};
-      if(t.includes("garage"))   return {w:Math.max(5.0,Math.min(7.5,r.width)),  h:Math.max(4.5,Math.min(6.5,r.height))};
-      if(t.includes("utility"))  return {w:Math.max(2.0,Math.min(3.5,r.width)),  h:Math.max(2.0,Math.min(3.5,r.height))};
-      return {w:Math.max(2.5,Math.min(4.5,r.width)), h:Math.max(2.5,Math.min(4.0,r.height))};
+      if(t.includes("living"))   return {w:5.5, h:5.0};
+      if(t.includes("kitchen"))  return {w:4.0, h:3.5};
+      if(t.includes("dining"))   return {w:3.8, h:3.5};
+      if(t.includes("bedroom"))  return {w:4.0, h:3.8};
+      if(t.includes("bathroom")) return {w:2.4, h:2.2};
+      if(t.includes("puja"))     return {w:2.5, h:2.5};
+      if(t.includes("office"))   return {w:3.5, h:3.2};
+      if(t.includes("garage"))   return {w:5.5, h:5.0};
+      if(t.includes("utility"))  return {w:2.8, h:2.5};
+      return {w:3.5, h:3.2};
     };
 
-    // ── Shape-driven row arrangement ──
-    // Different shapes use different row splits so the layout actually varies
-    let rowDef: number[];  // how many rooms per row
+    // ── ZONE-BASED layout engine ──────────────────────────────────────────────
+    // Define rectangular zones per shape. Rooms packed left→right, top→bottom inside each zone.
+    // Zone = [x0, y0, zoneWidth, zoneHeight] in metres
+    type Zone = [number,number,number,number];
+    let shapZones: Zone[];
     const n = sorted.length;
     if(shape==="lshape") {
-      // L: top row has ~60% of rooms (the long bar), bottom-left has rest
-      const topN = Math.ceil(n * 0.58);
-      rowDef = [topN, n - topN];
+      shapZones = [[0,0,14,4.5],[0,4.5,7,5.5]];
     } else if(shape==="tshape") {
-      // T: top row full width, then 2 narrower middle rows
-      const topN = Math.min(3, Math.ceil(n*0.35));
-      const midN = Math.min(3, Math.ceil(n*0.35));
-      rowDef = [topN, midN, n - topN - midN];
+      shapZones = [[0,0,16,4.5],[5,4.5,6,5.5]];
     } else if(shape==="irregular") {
-      // Irregular: stagger rows unevenly (2, 3, 2, remainder)
-      const r0=Math.min(2,n); const r1=Math.min(3,n-r0); const r2=Math.min(2,n-r0-r1);
-      rowDef = [r0,r1,r2,n-r0-r1-r2].filter(x=>x>0);
+      shapZones = [[0,0,12,4],[1.5,4,10,4],[0,8,9,4]];
     } else if(shape==="square") {
-      // Square: roughly equal rows
-      const cols = Math.round(Math.sqrt(n));
-      rowDef = Array.from({length:Math.ceil(n/cols)},(_,i)=>Math.min(cols,n-i*cols)).filter(x=>x>0);
+      const S = Math.ceil(Math.sqrt(n+1))*4.5;
+      shapZones = [[0,0,S,S]];
     } else {
-      // Rectangle (default): public row + private row + service row
-      const pubRooms = sorted.filter(r=>["living","kitchen","dining"].some(t=>r.type.toLowerCase().includes(t)));
-      const prvRooms = sorted.filter(r=>["bedroom","bathroom","puja"].some(t=>r.type.toLowerCase().includes(t.replace("_",""))));
-      const svcRooms = sorted.filter(r=>["office","utility","garage","corridor"].some(t=>r.type.toLowerCase().includes(t)));
-      const rows2: Room[][] = [pubRooms,prvRooms,svcRooms].filter(r=>r.length>0);
-      // Use row sizes
-      const rowData2 = rows2.map(row => {
-        const totalW2 = row.reduce((s,r)=>s+normalizeSize(r).w,0);
-        const maxH2 = Math.max(...row.map(r=>normalizeSize(r).h));
-        return {totalW:totalW2, maxH:maxH2, rooms:row};
-      });
-      const maxW2 = Math.max(...rowData2.map(r=>r.totalW));
-      const laid2: Array<Room & {pw:number;ph:number;px:number;py:number}> = [];
-      let curY2=0;
-      rowData2.forEach(({totalW:tw,maxH:mh,rooms:row})=>{
-        const scale = tw < maxW2 ? maxW2/tw : 1;
-        let curX2=0;
-        row.forEach(r=>{
-          const sz=normalizeSize(r);
-          laid2.push({...r,pw:sz.w*scale,ph:sz.h,px:curX2,py:curY2});
-          curX2+=sz.w*scale;
-        });
-        curY2+=mh;
-      });
-      // Use laid2 directly
-      const maxPX2 = Math.max(...laid2.map(r=>r.px+r.pw));
-      const maxPY2 = Math.max(...laid2.map(r=>r.py+r.ph));
-      const bw2 = maxPX2*SCALE; const bh2 = maxPY2*SCALE;
-      const offX2 = (W-bw2)/2; const offY2 = (H-bh2)/2+10;
-      renderFloorPlan(ctx, laid2, maxPX2, maxPY2, offX2, offY2, SCALE, OWT, IWT, W, H, t);
-      return;
+      // Rectangle: 3 horizontal bands
+      shapZones = [[0,0,16,4.5],[0,4.5,16,4.5],[0,9,16,4]];
     }
 
-    // Build rows from rowDef
-    const rows3: Room[][] = [];
-    let ri=0;
-    rowDef.forEach(count=>{
-      rows3.push(sorted.slice(ri,ri+count));
-      ri+=count;
-    });
+    // Distribute rooms to zones by area proportion
+    const zAreas = shapZones.map(([,,w,h])=>w*h);
+    const totalZA = zAreas.reduce((a,b)=>a+b,0);
+    const zCounts = shapZones.map((z,i)=>Math.max(0,Math.round(n*zAreas[i]/totalZA)));
+    // Fix rounding
+    const cSum = zCounts.reduce((a,b)=>a+b,0);
+    if(cSum!==n) zCounts[zCounts.length-1]+=n-cSum;
 
-    const rowData3 = rows3.filter(r=>r.length>0).map(row=>{
-      const tw=row.reduce((s,r)=>s+normalizeSize(r).w,0);
-      const mh=Math.max(...row.map(r=>normalizeSize(r).h));
-      return {totalW:tw, maxH:mh, rooms:row};
-    });
-    const maxW3 = Math.max(...rowData3.map(r=>r.totalW));
-    const laid3: Array<Room & {pw:number;ph:number;px:number;py:number}> = [];
-    let curY3=0;
+    const zRooms: Room[][] = [];
+    let rIdx=0;
+    zCounts.forEach(cnt=>{ zRooms.push(sorted.slice(rIdx,rIdx+cnt)); rIdx+=cnt; });
+    if(rIdx<sorted.length) zRooms[zRooms.length-1].push(...sorted.slice(rIdx));
 
-    // Shape-specific x offsets to create actual shape variation
-    rowData3.forEach(({totalW:tw,maxH:mh,rooms:row},ri2)=>{
-      const scale = tw < maxW3 ? maxW3/tw : 1;
-      // L-shape: indent second row to the right
-      // T-shape: center the narrower rows
-      // Irregular: alternate left/center
-      let startX = 0;
-      if(shape==="lshape" && ri2>=1) startX = maxW3 * 0.5;
-      if(shape==="tshape" && ri2>=1) startX = (maxW3 - tw*scale) / 2;
-      if(shape==="irregular") startX = [0, maxW3*0.15, 0, maxW3*0.1][ri2] ?? 0;
-
-      let curX3=startX;
-      row.forEach(r=>{
-        const sz=normalizeSize(r);
-        laid3.push({...r,pw:sz.w*scale,ph:sz.h,px:curX3,py:curY3});
-        curX3+=sz.w*scale;
+    // Pack rooms into zones
+    const laidFinal: Array<Room & {pw:number;ph:number;px:number;py:number}> = [];
+    shapZones.forEach(([zx,zy,zw,zh],zi)=>{
+      const zr = zRooms[zi]??[];
+      if(zr.length===0) return;
+      let cx=zx,cy=zy,rowH=0;
+      zr.forEach(r=>{
+        let {w,h}=normSz(r);
+        w=Math.min(w,zw-0.05); h=Math.min(h,zh-0.05);
+        if(cx+w>zx+zw+0.01){ cy+=rowH; cx=zx; rowH=0; }
+        if(cy+h>zy+zh+0.01) cy=zy+zh-h;
+        laidFinal.push({...r,pw:w,ph:h,px:cx,py:cy});
+        cx+=w; rowH=Math.max(rowH,h);
       });
-      curY3+=mh;
     });
 
-    const maxPX3 = Math.max(...laid3.map(r=>r.px+r.pw));
-    const maxPY3 = Math.max(...laid3.map(r=>r.py+r.ph));
-    const bw3 = maxPX3*SCALE; const bh3 = maxPY3*SCALE;
-    const offX3 = (W-bw3)/2; const offY3 = (H-bh3)/2+10;
-    renderFloorPlan(ctx, laid3, maxPX3, maxPY3, offX3, offY3, SCALE, OWT, IWT, W, H, t);
+    if(laidFinal.length===0) return;
+    const maxPXF = Math.max(...laidFinal.map(r=>r.px+r.pw));
+    const maxPYF = Math.max(...laidFinal.map(r=>r.py+r.ph));
+    const bwF = maxPXF*SCALE; const bhF = maxPYF*SCALE;
+    const offXF = (W-bwF)/2; const offYF = (H-bhF)/2+10;
+    renderFloorPlan(ctx, laidFinal, maxPXF, maxPYF, offXF, offYF, SCALE, OWT, IWT, W, H, t);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, layoutRooms, windVec]);
 
@@ -351,15 +313,15 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
     timeRef.current = t / 1000;
 
     const ROOM_CFG: Record<string,{bg:string;border:string;label:string}> = {
-      living:    {bg:"#f0f8f0",border:"#2a8a6a",label:"LIVING ROOM"},
-      bedroom:   {bg:"#f0f4ff",border:"#3a6aaa",label:"BEDROOM"},
-      kitchen:   {bg:"#f8f4e8",border:"#8a6a2a",label:"KITCHEN"},
-      bathroom:  {bg:"#f4f0ff",border:"#7a5a9a",label:"BATHROOM"},
-      office:    {bg:"#fffff0",border:"#8a8a2a",label:"STUDY"},
-      garage:    {bg:"#f2f2f2",border:"#6a7a7a",label:"GARAGE"},
-      utility:   {bg:"#fff8f4",border:"#9a6a3a",label:"UTILITY"},
-      dining:    {bg:"#fff4f0",border:"#aa4444",label:"DINING"},
-      puja_room: {bg:"#fffce8",border:"#c8900a",label:"PUJA ROOM"},
+      living:    {bg:"rgba(11,200,200,0.12)", border:"#0bc8c8", label:"LIVING ROOM"},
+      bedroom:   {bg:"rgba(74,157,232,0.12)", border:"#4a9de8", label:"BEDROOM"},
+      kitchen:   {bg:"rgba(44,180,110,0.12)", border:"#2cb46e", label:"KITCHEN"},
+      bathroom:  {bg:"rgba(155,114,212,0.12)",border:"#9b72d4", label:"BATHROOM"},
+      office:    {bg:"rgba(232,195,58,0.12)", border:"#e8c33a", label:"STUDY"},
+      garage:    {bg:"rgba(143,160,160,0.12)",border:"#8fa0a0", label:"GARAGE"},
+      utility:   {bg:"rgba(224,128,80,0.12)", border:"#e08050", label:"UTILITY"},
+      dining:    {bg:"rgba(232,122,58,0.12)", border:"#e87a3a", label:"DINING"},
+      puja_room: {bg:"rgba(200,160,32,0.12)", border:"#c8a020", label:"PUJA ROOM"},
     };
     const getStyle=(t:string)=>{
       const k=Object.keys(ROOM_CFG).find(k=>t.toLowerCase().includes(k.replace("_","")));
@@ -377,7 +339,7 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
     if(showSolarPath) {
       const now2=new Date(); const h2=now2.getHours()+now2.getMinutes()/60;
       ctx.save();
-      ctx.strokeStyle="rgba(200,110,20,0.35)"; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
+      ctx.strokeStyle="rgba(250,160,20,0.55)"; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
       ctx.beginPath();
       for(let i2=0;i2<=30;i2++){
         const a2=(Math.PI*i2)/30;
@@ -391,7 +353,7 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
       ctx.fillStyle="#f59e0b"; ctx.beginPath(); ctx.arc(sunX2,sunY2,6,0,Math.PI*2); ctx.fill();
       ctx.strokeStyle="rgba(245,158,11,0.5)"; ctx.lineWidth=1.5;
       for(let i3=0;i3<8;i3++){const a3=(i3/8)*Math.PI*2; ctx.beginPath(); ctx.moveTo(sunX2+Math.cos(a3)*8,sunY2+Math.sin(a3)*8); ctx.lineTo(sunX2+Math.cos(a3)*12,sunY2+Math.sin(a3)*12); ctx.stroke();}
-      ctx.fillStyle="rgba(245,158,11,0.8)"; ctx.font="8px monospace"; ctx.textAlign="center";
+      ctx.fillStyle="rgba(255,185,30,0.95)"; ctx.font="8px monospace"; ctx.textAlign="center";
       ctx.fillText(`${now2.getHours().toString().padStart(2,"0")}:${now2.getMinutes().toString().padStart(2,"0")}`,sunX2,sunY2-15);
       ctx.restore();
     }
@@ -409,65 +371,73 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
         i===0?ctx.moveTo(sx,sy):ctx.lineTo(sx,sy);
       });
       ctx.closePath();
-      ctx.fillStyle="rgba(180,200,190,0.12)"; ctx.fill();
-      ctx.strokeStyle="rgba(100,140,100,0.45)"; ctx.lineWidth=1.5; ctx.setLineDash([8,5]); ctx.stroke();
+      ctx.fillStyle="rgba(13,242,242,0.05)"; ctx.fill();
+      ctx.strokeStyle="rgba(13,242,242,0.45)"; ctx.lineWidth=1.5; ctx.setLineDash([8,5]); ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle="rgba(80,110,90,0.5)"; ctx.font="8px monospace"; ctx.textAlign="left";
+      ctx.fillStyle="rgba(13,242,242,0.6)"; ctx.font="8px monospace"; ctx.textAlign="left";
       ctx.fillText(`PLOT: ${plotShape.toUpperCase()} — ${plotArea}m²`, offX+2, offY-OWT-12);
       ctx.restore();
     }
 
     // ── Outer wall — shape-aware clipping mask ──
-    // For L/T/Irregular: instead of a plain rectangle, we clip the rooms to the plot shape
+    // Clip paths EXACTLY match zone definitions from the layout engine
     const buildClipPath = (ctx: CanvasRenderingContext2D) => {
       const shapeKey = plotShape.toLowerCase().replace(/[-\s]/g,"");
-      if(["lshape","l"].includes(shapeKey)) {
-        // L = full top half, bottom-left only
+      const px = (x:number) => offX + x*SCALE;
+      const py2 = (y:number) => offY + y*SCALE;
+      if(shapeKey==="lshape") {
+        // L-shape: zones [[0,0,14,4.5],[0,4.5,7,5.5]]
+        // Top bar: (0,0)→(14,4.5), Bottom-left: (0,4.5)→(7,10)
         ctx.beginPath();
-        ctx.moveTo(offX, offY);
-        ctx.lineTo(offX+bw, offY);
-        ctx.lineTo(offX+bw, offY+bh*0.5);
-        ctx.lineTo(offX+bw*0.5, offY+bh*0.5);
-        ctx.lineTo(offX+bw*0.5, offY+bh);
-        ctx.lineTo(offX, offY+bh);
+        ctx.moveTo(px(0),  py2(0));
+        ctx.lineTo(px(14), py2(0));
+        ctx.lineTo(px(14), py2(4.5));
+        ctx.lineTo(px(7),  py2(4.5));
+        ctx.lineTo(px(7),  py2(10));
+        ctx.lineTo(px(0),  py2(10));
         ctx.closePath();
-      } else if(["tshape","t"].includes(shapeKey)) {
-        // T = full top bar, central stem
-        const stemW = bw * 0.4; const stemX = offX + (bw-stemW)/2;
+      } else if(shapeKey==="tshape") {
+        // T-shape: zones [[0,0,16,4.5],[5,4.5,6,5.5]]
+        // Top bar: (0,0)→(16,4.5), Stem: (5,4.5)→(11,10)
         ctx.beginPath();
-        ctx.moveTo(offX, offY);
-        ctx.lineTo(offX+bw, offY);
-        ctx.lineTo(offX+bw, offY+bh*0.45);
-        ctx.lineTo(stemX+stemW, offY+bh*0.45);
-        ctx.lineTo(stemX+stemW, offY+bh);
-        ctx.lineTo(stemX, offY+bh);
-        ctx.lineTo(stemX, offY+bh*0.45);
-        ctx.lineTo(offX, offY+bh*0.45);
+        ctx.moveTo(px(0),  py2(0));
+        ctx.lineTo(px(16), py2(0));
+        ctx.lineTo(px(16), py2(4.5));
+        ctx.lineTo(px(11), py2(4.5));
+        ctx.lineTo(px(11), py2(10));
+        ctx.lineTo(px(5),  py2(10));
+        ctx.lineTo(px(5),  py2(4.5));
+        ctx.lineTo(px(0),  py2(4.5));
         ctx.closePath();
-      } else if(["irregular"].includes(shapeKey)) {
-        // Irregular = slight offset on corners
+      } else if(shapeKey==="irregular") {
+        // Irregular: 3 zones with offsets — create asymmetric silhouette
+        // Zone 0: [0,0,12,4], Zone 1: [1.5,4,10,4], Zone 2: [0,8,9,4]
         ctx.beginPath();
-        ctx.moveTo(offX+bw*0.08, offY);
-        ctx.lineTo(offX+bw*0.92, offY);
-        ctx.lineTo(offX+bw, offY+bh*0.12);
-        ctx.lineTo(offX+bw, offY+bh*0.88);
-        ctx.lineTo(offX+bw*0.85, offY+bh);
-        ctx.lineTo(offX+bw*0.15, offY+bh);
-        ctx.lineTo(offX, offY+bh*0.85);
-        ctx.lineTo(offX, offY+bh*0.12);
+        ctx.moveTo(px(0),    py2(0));
+        ctx.lineTo(px(12),   py2(0));
+        ctx.lineTo(px(12),   py2(4));
+        ctx.lineTo(px(11.5), py2(4));
+        ctx.lineTo(px(11.5), py2(8));
+        ctx.lineTo(px(9),    py2(8));
+        ctx.lineTo(px(9),    py2(12));
+        ctx.lineTo(px(0),    py2(12));
+        ctx.lineTo(px(0),    py2(8));
+        ctx.lineTo(px(1.5),  py2(8));
+        ctx.lineTo(px(1.5),  py2(4));
+        ctx.lineTo(px(0),    py2(4));
         ctx.closePath();
       } else {
-        // Rectangle / Square
+        // Rectangle / Square: simple rect
         ctx.beginPath();
         ctx.rect(offX, offY, bw, bh);
       }
     };
 
-    // Draw white outer wall fill (clipped to shape)
+    // Draw dark blueprint wall fill (clipped to shape)
     ctx.save();
     buildClipPath(ctx);
     ctx.clip();
-    ctx.fillStyle="#ffffff";
+    ctx.fillStyle="#111820";  // dark blueprint interior
     ctx.fillRect(offX-OWT, offY-OWT, bw+OWT*2, bh+OWT*2);
     // Room fills inside clip
     laid.forEach(room=>{
@@ -478,14 +448,18 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
     });
     ctx.restore();
 
-    // Outer wall border (shape outline — thick)
+    // Outer wall border — glowing cyan like a blueprint
     ctx.save();
     buildClipPath(ctx);
-    ctx.strokeStyle="#1a2530"; ctx.lineWidth=OWT*0.9; ctx.stroke();
+    ctx.strokeStyle="#1a3040"; ctx.lineWidth=OWT*1.1; ctx.stroke();  // dark fill stroke
+    ctx.restore();
+    ctx.save();
+    buildClipPath(ctx);
+    ctx.strokeStyle="rgba(13,242,242,0.9)"; ctx.lineWidth=2.5; ctx.stroke();  // cyan outline
     ctx.restore();
 
-    // ── Interior walls (thin lines) ──
-    ctx.strokeStyle="#1a2530"; ctx.lineWidth=IWT*0.8;
+    // ── Interior walls (thin cyan lines) ──
+    ctx.strokeStyle="rgba(13,242,242,0.5)"; ctx.lineWidth=IWT*0.8;
     laid.forEach(room=>{
       const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
       const rw=room.pw*SCALE; const rh=room.ph*SCALE;
@@ -503,9 +477,9 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
       if(room.py+room.ph<maxPY-0.01){
         const dx=rx+(rw-dw)/2; const dy=ry+rh;
         // Gap in wall
-        ctx.fillStyle=laid.find(r2=>r2.py===room.py+room.ph && Math.abs(r2.px-room.px)<room.pw)?laid.find(r2=>r2.py===room.py+room.ph && Math.abs(r2.px-room.px)<room.pw)!.type?getStyle(laid.find(r2=>r2.py===room.py+room.ph && Math.abs(r2.px-room.px)<room.pw)!.type).bg:"#fff":"#fff";
+        ctx.fillStyle="#0d1117";
         ctx.fillRect(dx, dy-IWT/2, dw, IWT+1);
-        ctx.strokeStyle="rgba(26,37,48,0.7)"; ctx.lineWidth=1.2; ctx.setLineDash([2,2]);
+        ctx.strokeStyle="rgba(13,242,242,0.5)"; ctx.lineWidth=1.2; ctx.setLineDash([2,2]);
         ctx.beginPath(); ctx.arc(dx, dy, dw, 0, Math.PI/2); ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -513,8 +487,8 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
       if(room.px+room.pw<maxPX-0.01 && idx%3===1){
         const dh=Math.min(rh*0.38,SCALE*0.75);
         const dy2=ry+(rh-dh)/2; const dx2=rx+rw;
-        ctx.fillStyle="#fff"; ctx.fillRect(dx2-IWT/2, dy2, IWT+1, dh);
-        ctx.strokeStyle="rgba(26,37,48,0.7)"; ctx.lineWidth=1.2; ctx.setLineDash([2,2]);
+        ctx.fillStyle="#0d1117"; ctx.fillRect(dx2-IWT/2, dy2, IWT+1, dh);
+        ctx.strokeStyle="rgba(13,242,242,0.5)"; ctx.lineWidth=1.2; ctx.setLineDash([2,2]);
         ctx.beginPath(); ctx.arc(dx2, dy2, dh, Math.PI/2, Math.PI); ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -529,10 +503,10 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
       const ww=Math.min(rw*0.52,SCALE*1.05);
       // Helper: draw a window slot
       const drawWin = (wx: number, wy: number, wWidth: number, wHeight: number, horiz: boolean) => {
-        // Blue glass fill
-        ctx.fillStyle="#b8d8f4"; ctx.fillRect(wx, wy, wWidth, wHeight);
-        // Frame lines
-        ctx.strokeStyle="#1a4a7a"; ctx.lineWidth=1.8;
+        // Blue transparent glass fill
+        ctx.fillStyle="rgba(64,180,248,0.55)"; ctx.fillRect(wx, wy, wWidth, wHeight);
+        // Bright frame
+        ctx.strokeStyle="#40b8f8"; ctx.lineWidth=2.0;
         ctx.strokeRect(wx, wy, wWidth, wHeight);
         // Centre divider
         if(horiz) {
@@ -573,24 +547,22 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
     const entrW=SCALE*1.0;
     const entrX=offX+bw/2-entrW/2;
     // Clear the wall section
-    ctx.fillStyle="#f4f0e8"; ctx.fillRect(entrX, offY+bh, entrW, OWT+2);
+    ctx.fillStyle="#0d1117"; ctx.fillRect(entrX, offY+bh, entrW, OWT+2);
     // Frame lines
-    ctx.strokeStyle="#1a2530"; ctx.lineWidth=2;
+    ctx.strokeStyle="#0df2f2"; ctx.lineWidth=2;
     ctx.beginPath(); ctx.moveTo(entrX, offY+bh); ctx.lineTo(entrX, offY+bh+OWT); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(entrX+entrW, offY+bh); ctx.lineTo(entrX+entrW, offY+bh+OWT); ctx.stroke();
     // Door leaf (single 90-degree swing shown as dashed quarter circle)
-    ctx.strokeStyle="rgba(26,37,48,0.7)"; ctx.lineWidth=1.5; ctx.setLineDash([3,3]);
+    ctx.strokeStyle="rgba(13,242,242,0.6)"; ctx.lineWidth=1.5; ctx.setLineDash([3,3]);
     ctx.beginPath(); ctx.arc(entrX+entrW, offY+bh, entrW, Math.PI, Math.PI*1.5); ctx.stroke();
     ctx.setLineDash([]);
-    // Door leaf solid line
-    ctx.strokeStyle="#1a2530"; ctx.lineWidth=1.5;
+    ctx.strokeStyle="#0df2f2"; ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.moveTo(entrX+entrW, offY+bh); ctx.lineTo(entrX+entrW, offY+bh-entrW); ctx.stroke();
-    // Entry step (double lines below)
-    ctx.strokeStyle="rgba(26,37,48,0.35)"; ctx.lineWidth=0.8;
+    ctx.strokeStyle="rgba(13,242,242,0.25)"; ctx.lineWidth=0.8;
     ctx.strokeRect(entrX-4, offY+bh+OWT+2, entrW+8, 5);
     ctx.strokeRect(entrX-8, offY+bh+OWT+9, entrW+16, 5);
     // Label
-    ctx.fillStyle="#1a2530"; ctx.font=`bold ${Math.max(7,SCALE*0.55)}px 'Space Grotesk', monospace`;
+    ctx.fillStyle="#0df2f2"; ctx.font=`bold ${Math.max(7,SCALE*0.55)}px 'Space Grotesk', monospace`;
     ctx.textAlign="center";
     ctx.fillText("ENTRANCE", offX+bw/2, offY+bh+OWT+22);
 
@@ -605,12 +577,10 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
       ctx.fillStyle=s.border; ctx.font=`bold ${fz}px 'Space Grotesk',sans-serif`;
       ctx.textAlign="center"; ctx.textBaseline="middle";
       ctx.fillText(s.label, cx2, cy2-fz*0.7);
-      // Dimensions below name (e.g. "4.50 x 3.20")
-      ctx.fillStyle="#546070"; ctx.font=`${Math.max(6,fz-2)}px monospace`;
+      ctx.fillStyle="rgba(180,200,220,0.8)"; ctx.font=`${Math.max(6,fz-2)}px monospace`;
       ctx.fillText(`${room.pw.toFixed(2)} x ${room.ph.toFixed(2)}`, cx2, cy2+fz*0.5);
-      // Eco orientation badge
       if(room.orientation){
-        ctx.fillStyle="rgba(40,100,80,0.55)"; ctx.font=`${Math.max(5,fz-3)}px monospace`;
+        ctx.fillStyle="rgba(13,242,242,0.6)"; ctx.font=`${Math.max(5,fz-3)}px monospace`;
         ctx.fillText(room.orientation, cx2, cy2+fz*1.5);
       }
     });
@@ -638,22 +608,22 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
         ctx.moveTo(0,0); ctx.lineTo(-6,-3); ctx.lineTo(-6,3); ctx.closePath(); ctx.fill();
         ctx.restore();
       });
-      ctx.fillStyle="rgba(30,100,180,0.7)"; ctx.font="bold 9px monospace"; ctx.textAlign="left";
+      ctx.fillStyle="rgba(60,160,240,0.9)"; ctx.font="bold 9px monospace"; ctx.textAlign="left";
       ctx.fillText(`WIND: ${windDir}`, offX+4, offY-OWT-2);
     }
 
     // ── North arrow ──
     const nx=W-38; const ny=H-58;
-    ctx.fillStyle="#1a2530"; ctx.font="bold 10px monospace"; ctx.textAlign="center";
+    ctx.fillStyle="#0df2f2"; ctx.font="bold 10px monospace"; ctx.textAlign="center";
     ctx.fillText("N", nx, ny-22);
     ctx.beginPath(); ctx.moveTo(nx,ny-18); ctx.lineTo(nx-6,ny+4); ctx.lineTo(nx,ny+2); ctx.lineTo(nx+6,ny+4); ctx.closePath();
-    ctx.fillStyle="#1a2530"; ctx.fill(); ctx.strokeStyle="#1a2530"; ctx.lineWidth=1; ctx.stroke();
+    ctx.fillStyle="#0df2f2"; ctx.fill(); ctx.strokeStyle="#0df2f2"; ctx.lineWidth=1; ctx.stroke();
 
     // ── Scale bar ──
     const sbPx=SCALE*5;
-    ctx.fillStyle="#1a2530"; ctx.fillRect(20,H-18,sbPx,2);
+    ctx.fillStyle="rgba(13,242,242,0.7)"; ctx.fillRect(20,H-18,sbPx,2);
     ctx.fillRect(20,H-22,2,6); ctx.fillRect(20+sbPx-2,H-22,2,6);
-    ctx.font="7px monospace"; ctx.textAlign="left"; ctx.fillStyle="#546070";
+    ctx.font="7px monospace"; ctx.textAlign="left"; ctx.fillStyle="rgba(13,242,242,0.5)";
     ctx.fillText("0",20,H-5); ctx.fillText("5m",20+sbPx+2,H-5);
     ctx.textAlign="right"; ctx.fillText(`${lat.toFixed(4)}°N  ${lon.toFixed(4)}°E`,W-20,H-18);
 
@@ -661,9 +631,9 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
     trees.slice(0,3).forEach((_,i)=>{
       const tx=offX-35-i*20; const ty=offY+bh*0.25+i*24;
       ctx.beginPath(); ctx.arc(tx,ty,11,0,Math.PI*2);
-      ctx.fillStyle="rgba(40,160,80,0.22)"; ctx.fill();
-      ctx.strokeStyle="#28a050"; ctx.lineWidth=1.5; ctx.stroke();
-      ctx.fillStyle="#28a050"; ctx.font="7px monospace"; ctx.textAlign="center";
+      ctx.fillStyle="rgba(40,200,80,0.15)"; ctx.fill();
+      ctx.strokeStyle="#30d060"; ctx.lineWidth=1.5; ctx.stroke();
+      ctx.fillStyle="#30d060"; ctx.font="7px monospace"; ctx.textAlign="center";
       ctx.fillText(`T${i+1}`,tx,ty+3);
     });
   }, [rooms, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, windParticles]);

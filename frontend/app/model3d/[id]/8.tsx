@@ -1033,6 +1033,12 @@ const compositeFrag = `
     return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);
   }
 
+  // Film grain
+  float grain(vec2 uv, float t) {
+    float x = dot(uv, vec2(127.1,311.7)) + t*0.01;
+    return fract(sin(x)*43758.5453) - 0.5;
+  }
+
   void main() {
     vec2 uv = gl_FragCoord.xy / uResolution;
     vec2 dir = uv - 0.5;
@@ -1051,6 +1057,10 @@ const compositeFrag = `
 
     // ACES filmic tonemapping
     col = aces(col);
+
+    // Subtle film grain (barely visible — adds micro-detail)
+    float g2 = grain(uv, uResolution.x) * 0.018;
+    col += vec3(g2);
 
     // Smooth vignette (cosine falloff)
     float vig = 1.0 - smoothstep(0.45, 1.05, dist) * uVignette;

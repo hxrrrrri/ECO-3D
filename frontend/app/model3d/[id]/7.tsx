@@ -42,338 +42,51 @@ class ThreeErrorBoundary extends Component<{ children: React.ReactNode }, { erro
   }
 }
 
-// ─── Procedural texture system ────────────────────────────────────────────────
-// Generates high-quality 512px albedo + canvas-baked normal map for each material
-// All noise/detail is generated mathematically — no image files needed
-
-function _noise2d(x: number, y: number): number {
-  // Smooth value noise via dot products
-  const ix = Math.floor(x), iy = Math.floor(y);
-  const fx = x - ix, fy = y - iy;
-  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
-  const h = (a: number, b: number) => {
-    let n = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
-    return n - Math.floor(n);
-  };
-  return (
-    h(ix,iy)*(1-ux)*(1-uy) + h(ix+1,iy)*ux*(1-uy) +
-    h(ix,iy+1)*(1-ux)*uy   + h(ix+1,iy+1)*ux*uy
-  );
-}
-
-function _fbm(x: number, y: number, oct: number): number {
-  let v = 0, a = 0.5, fx = x, fy = y;
-  for (let i = 0; i < oct; i++) { v += a * _noise2d(fx, fy); fx *= 2.1; fy *= 2.1; a *= 0.5; }
-  return v;
-}
-
-// Build heightfield pixel array (used to derive normal maps)
-function _buildHeightfield(sz: number, fn: (x:number,y:number)=>number): Float32Array {
-  const h = new Float32Array(sz * sz);
-  for (let y = 0; y < sz; y++)
-    for (let x = 0; x < sz; x++)
-      h[y * sz + x] = fn(x / sz, y / sz);
-  return h;
-}
-
-// Convert heightfield to normal map canvas texture
-function _heightToNormal(h: Float32Array, sz: number, strength: number): THREE.CanvasTexture {
-  const cv = document.createElement("canvas"); cv.width = sz; cv.height = sz;
-  const ctx = cv.getContext("2d")!;
-  const img = ctx.createImageData(sz, sz);
-  for (let y = 0; y < sz; y++) {
-    for (let x = 0; x < sz; x++) {
-      const l = h[y*sz + Math.max(0, x-1)];
-      const r2 = h[y*sz + Math.min(sz-1, x+1)];
-      const u = h[Math.max(0,y-1)*sz + x];
-      const d = h[Math.min(sz-1,y+1)*sz + x];
-      const nx = (l - r2) * strength;
-      const ny = (u - d) * strength;
-      const nz = 1.0;
-      const len = Math.sqrt(nx*nx+ny*ny+nz*nz);
-      const i = (y*sz+x)*4;
-      img.data[i]   = Math.round((nx/len*0.5+0.5)*255);
-      img.data[i+1] = Math.round((ny/len*0.5+0.5)*255);
-      img.data[i+2] = Math.round((nz/len*0.5+0.5)*255);
-      img.data[i+3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(cv);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  return t;
-}
-
+// ─── Texture factory ──────────────────────────────────────────────────────────
 function makeTexture(type: TexType, color: string): THREE.CanvasTexture {
-  const sz = 512;
-  const cv = document.createElement("canvas"); cv.width = sz; cv.height = sz;
+  const sz = 256, cv = document.createElement("canvas"); cv.width = sz; cv.height = sz;
   const ctx = cv.getContext("2d")!;
   const c = new THREE.Color(color);
-  const R = c.r * 255, G = c.g * 255, B = c.b * 255;
-
+  const r = Math.round(c.r * 255), g = Math.round(c.g * 255), b = Math.round(c.b * 255);
+  ctx.fillStyle = `rgb(${r},${g},${b})`; ctx.fillRect(0, 0, sz, sz);
   if (type === "brick") {
-    const bw = 56, bh = 26, gap = 4;
-    // Mortar base
-    ctx.fillStyle = `rgb(${Math.round(R*0.55)},${Math.round(G*0.52)},${Math.round(B*0.48)})`; 
-    ctx.fillRect(0, 0, sz, sz);
-    for (let row = 0; row * (bh + gap) < sz + bh; row++) {
-      const off = (row % 2) * (bw * 0.5 + gap * 0.5);
+    const bw = 48, bh = 20, gap = 3;
+    for (let row = 0; row * (bh + gap) < sz; row++) {
+      const off = row % 2 === 0 ? 0 : bw / 2;
       for (let col = -1; col * (bw + gap) < sz + bw; col++) {
-        const bx = col * (bw + gap) + off + gap;
-        const by = row * (bh + gap) + gap;
-        // Brick face — slight per-brick color variation
-        const vr = (Math.random() - 0.5) * 22;
-        const vg = (Math.random() - 0.5) * 12;
-        const vb = (Math.random() - 0.5) * 10;
-        ctx.fillStyle = `rgb(${Math.round(Math.min(255,Math.max(0,R+vr)))},${Math.round(Math.min(255,Math.max(0,G+vg)))},${Math.round(Math.min(255,Math.max(0,B+vb)))})`;
-        ctx.fillRect(bx, by, bw - gap, bh - gap);
-        // Surface noise per brick
-        for (let k = 0; k < 60; k++) {
-          const kx = bx + Math.random()*(bw-gap), ky = by + Math.random()*(bh-gap);
-          const kv = (Math.random()-0.5)*18;
-          ctx.fillStyle = `rgba(${kv>0?255:0},${kv>0?255:0},${kv>0?255:0},${Math.abs(kv)/200})`;
-          ctx.fillRect(kx, ky, 2, 2);
-        }
-        // Subtle edge darkening (depth cue)
-        ctx.strokeStyle = `rgba(0,0,0,0.15)`; ctx.lineWidth = 1.5;
-        ctx.strokeRect(bx+0.75, by+0.75, bw-gap-1.5, bh-gap-1.5);
+        ctx.fillStyle = `rgba(0,0,0,0.22)`;
+        ctx.fillRect(col * (bw + gap) + off + gap, row * (bh + gap) + gap, bw - gap, bh - gap);
       }
     }
   } else if (type === "concrete") {
-    ctx.fillStyle = `rgb(${Math.round(R)},${Math.round(G)},${Math.round(B)})`; ctx.fillRect(0,0,sz,sz);
-    // Multi-scale noise layers
-    for (let scale = 1; scale <= 4; scale++) {
-      for (let y = 0; y < sz; y += scale) {
-        for (let x = 0; x < sz; x += scale) {
-          const n = _fbm(x*0.04*scale, y*0.04*scale, 3);
-          const v = (n - 0.5) * 28 / scale;
-          ctx.fillStyle = `rgba(${v>0?255:0},${v>0?255:0},${v>0?255:0},${Math.abs(v)/260})`;
-          ctx.fillRect(x, y, scale, scale);
-        }
-      }
-    }
-    // Hairline cracks
-    for (let c2 = 0; c2 < 4; c2++) {
-      ctx.strokeStyle = `rgba(0,0,0,${0.08 + Math.random()*0.07})`; ctx.lineWidth = 0.6 + Math.random()*0.8;
-      ctx.beginPath();
-      let cx2 = Math.random()*sz, cy2 = Math.random()*sz;
-      ctx.moveTo(cx2, cy2);
-      for (let s = 0; s < 6; s++) { cx2 += (Math.random()-0.5)*60; cy2 += (Math.random()-0.5)*60; ctx.lineTo(cx2, cy2); }
-      ctx.stroke();
-    }
+    for (let i = 0; i < 2000; i++) { const x = Math.random() * sz, y = Math.random() * sz, v = (Math.random() - 0.5) * 30; ctx.fillStyle = `rgba(${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${Math.abs(v) / 180})`; ctx.fillRect(x, y, 2, 2); }
   } else if (type === "wood") {
-    ctx.fillStyle = `rgb(${Math.round(R)},${Math.round(G)},${Math.round(B)})`; ctx.fillRect(0,0,sz,sz);
-    // Grain rings — concentric sinusoidal variation
-    for (let y = 0; y < sz; y++) {
-      for (let x = 0; x < sz; x++) {
-        const grain = Math.sin((x * 0.18) + Math.sin(y * 0.04) * 8 + _noise2d(x*0.02,y*0.015)*12) * 0.5 + 0.5;
-        const knot  = Math.exp(-((x-sz*0.3)*(x-sz*0.3)+(y-sz*0.45)*(y-sz*0.45))/3800) * 0.3;
-        const v = (grain * 0.7 + knot) * 34 - 17;
-        if (Math.abs(v) > 2) {
-          ctx.fillStyle = `rgba(${v>0?255:0},${v>0?200:0},${v>0?100:0},${Math.min(1,Math.abs(v)/80)})`;
-          ctx.fillRect(x, y, 1, 1);
-        }
-      }
-    }
-    // Pore lines
-    for (let p = 0; p < 80; p++) {
-      const px = Math.random()*sz;
-      ctx.strokeStyle = `rgba(0,0,0,${0.06+Math.random()*0.08})`; ctx.lineWidth = 0.4+Math.random()*0.6;
-      ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px + (Math.random()-0.5)*30, sz); ctx.stroke();
-    }
+    const grad = ctx.createLinearGradient(0, 0, sz, 0);
+    for (let i = 0; i <= 12; i++) { const d = (i % 2 === 0 ? -1 : 1) * 18; grad.addColorStop(i / 12, `rgb(${Math.max(0, Math.min(255, r + d))},${Math.max(0, Math.min(255, g + d))},${Math.max(0, Math.min(255, b + d))})`); }
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, sz, sz);
   } else if (type === "marble") {
-    ctx.fillStyle = `rgb(${Math.round(R)},${Math.round(G)},${Math.round(B)})`; ctx.fillRect(0,0,sz,sz);
-    // Subtle base cloudiness
-    for (let y = 0; y < sz; y += 2) {
-      for (let x = 0; x < sz; x += 2) {
-        const n = _fbm(x*0.012, y*0.012, 4);
-        const v = (n - 0.5) * 20;
-        ctx.fillStyle = `rgba(${v>0?255:220},${v>0?255:220},${v>0?255:220},${Math.abs(v)/300})`;
-        ctx.fillRect(x, y, 2, 2);
-      }
-    }
-    // Veins — multiple bezier curves with varying thickness
-    for (let i = 0; i < 9; i++) {
-      const alpha = 0.08 + Math.random() * 0.18;
-      const lw    = 0.5 + Math.random() * 1.8;
-      const gray  = Math.round(180 + Math.random() * 70);
-      ctx.strokeStyle = `rgba(${gray},${gray},${gray},${alpha})`; ctx.lineWidth = lw;
-      ctx.beginPath();
-      const sx = Math.random()*sz, sy = Math.random()*sz * 0.2;
-      ctx.moveTo(sx, sy);
-      ctx.bezierCurveTo(
-        Math.random()*sz, sy + Math.random()*sz*0.35,
-        Math.random()*sz, sy + Math.random()*sz*0.6,
-        Math.random()*sz, sy + sz * (0.8 + Math.random()*0.2)
-      );
-      ctx.stroke();
-      // Branch veins
-      if (Math.random() > 0.5) {
-        ctx.lineWidth = lw * 0.4;
-        ctx.beginPath(); ctx.moveTo(sx + (Math.random()-0.5)*60, sy + sz*0.3);
-        ctx.lineTo(sx + (Math.random()-0.5)*120, sy + sz*0.7); ctx.stroke();
-      }
-    }
-    // Highlight shimmer
-    for (let s = 0; s < 12; s++) {
-      const sx2 = Math.random()*sz, sy2 = Math.random()*sz;
-      const grd = ctx.createRadialGradient(sx2,sy2,0,sx2,sy2,30+Math.random()*50);
-      grd.addColorStop(0, `rgba(255,255,255,${0.04+Math.random()*0.08})`);
-      grd.addColorStop(1, `rgba(255,255,255,0)`);
-      ctx.fillStyle = grd; ctx.fillRect(sx2-80,sy2-80,160,160);
-    }
+    for (let i = 0; i < 6; i++) { ctx.strokeStyle = `rgba(255,255,255,0.15)`; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(Math.random() * sz, 0); ctx.bezierCurveTo(Math.random() * sz, Math.random() * sz, Math.random() * sz, Math.random() * sz, Math.random() * sz, sz); ctx.stroke(); }
   } else if (type === "tile") {
-    const ts = 52, gap2 = 3;
-    ctx.fillStyle = `rgb(${Math.round(R*0.5)},${Math.round(G*0.5)},${Math.round(B*0.5)})`; ctx.fillRect(0,0,sz,sz);
-    for (let ty = 0; ty * (ts + gap2) < sz + ts; ty++) {
-      for (let tx = 0; tx * (ts + gap2) < sz + ts; tx++) {
-        const ttx = tx*(ts+gap2), tty = ty*(ts+gap2);
-        // Tile face with subtle gloss gradient
-        const grd = ctx.createLinearGradient(ttx, tty, ttx+ts, tty+ts);
-        const vr = (Math.random()-0.5)*12, vg = (Math.random()-0.5)*12, vb = (Math.random()-0.5)*12;
-        grd.addColorStop(0, `rgb(${Math.round(Math.min(255,R+vr+15))},${Math.round(Math.min(255,G+vg+15))},${Math.round(Math.min(255,B+vb+15))})`);
-        grd.addColorStop(1, `rgb(${Math.round(Math.max(0,R+vr-15))},${Math.round(Math.max(0,G+vg-15))},${Math.round(Math.max(0,B+vb-15))})`);
-        ctx.fillStyle = grd; ctx.fillRect(ttx+gap2, tty+gap2, ts-gap2, ts-gap2);
-        // Specular highlight dot
-        ctx.fillStyle = `rgba(255,255,255,0.12)`; ctx.beginPath();
-        ctx.arc(ttx + ts*0.3, tty + ts*0.28, ts*0.09, 0, Math.PI*2); ctx.fill();
-      }
-    }
-  } else if (type === "plaster") {
-    ctx.fillStyle = `rgb(${Math.round(R)},${Math.round(G)},${Math.round(B)})`; ctx.fillRect(0,0,sz,sz);
-    // Fine stucco-like noise
-    for (let y = 0; y < sz; y++) {
-      for (let x = 0; x < sz; x++) {
-        const n = _noise2d(x*0.3, y*0.3);
-        const v = (n - 0.5) * 16;
-        ctx.fillStyle = `rgba(${v>0?255:0},${v>0?255:0},${v>0?255:0},${Math.abs(v)/220})`;
-        ctx.fillRect(x, y, 1, 1);
-      }
-    }
-  } else {
-    ctx.fillStyle = `rgb(${Math.round(R)},${Math.round(G)},${Math.round(B)})`; ctx.fillRect(0,0,sz,sz);
+    const ts = 32; ctx.strokeStyle = `rgba(0,0,0,0.3)`; ctx.lineWidth = 2;
+    for (let i = 0; i <= sz; i += ts) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, sz); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(sz, i); ctx.stroke(); }
   }
-
   const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(type === "tile" ? 2 : type === "brick" ? 2.5 : 3, type === "tile" ? 2 : type === "brick" ? 2.5 : 3);
-  tex.anisotropy = 16;
-  tex.generateMipmaps = true;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(3, 3);
   return tex;
-}
-
-// Generate a canvas-baked normal map for a given texture type
-function makeNormalMap(type: TexType): THREE.CanvasTexture | null {
-  const sz = 256;
-  let heightFn: ((x:number,y:number)=>number) | null = null;
-  let strength = 6;
-
-  if (type === "brick") {
-    strength = 10;
-    heightFn = (x, y) => {
-      const bw = 56/sz, bh = 26/sz, gap = 4/sz;
-      const row = Math.floor(y / (bh + gap));
-      const off = (row % 2) * (bw * 0.5);
-      const lx = ((x - off) % (bw + gap) + (bw + gap)) % (bw + gap);
-      const ly = (y % (bh + gap));
-      const inMortar = lx < gap || ly < gap;
-      return inMortar ? 0.2 : 0.75 + _noise2d(x*30, y*30)*0.08;
-    };
-  } else if (type === "concrete") {
-    strength = 5;
-    heightFn = (x, y) => 0.5 + _fbm(x*8, y*8, 4)*0.28;
-  } else if (type === "wood") {
-    strength = 4;
-    heightFn = (x, y) => {
-      const g = Math.sin(x*sz*0.18 + Math.sin(y*sz*0.04)*8)*0.5+0.5;
-      return 0.4 + g*0.35 + _noise2d(x*20,y*20)*0.08;
-    };
-  } else if (type === "marble") {
-    strength = 3;
-    heightFn = (x, y) => 0.5 + _fbm(x*4, y*4, 3)*0.15;
-  } else if (type === "tile") {
-    strength = 12;
-    heightFn = (x, y) => {
-      const ts = (52+3)/sz;
-      const lx = (x % ts) / ts, ly = (y % ts) / ts;
-      const gap2 = 3/(52+3);
-      const inGap = lx < gap2 || ly < gap2;
-      return inGap ? 0.0 : 0.6 + _fbm(x*40,y*40,2)*0.1;
-    };
-  } else if (type === "plaster") {
-    strength = 3;
-    heightFn = (x, y) => 0.5 + _fbm(x*12, y*12, 3)*0.18;
-  }
-
-  if (!heightFn) return null;
-  const hf = _buildHeightfield(sz, heightFn);
-  const nmap = _heightToNormal(hf, sz, strength);
-  nmap.repeat.set(3, 3);
-  nmap.wrapS = nmap.wrapT = THREE.RepeatWrapping;
-  nmap.anisotropy = 8;
-  return nmap;
-}
-
-// Roughness variation map — modulates surface micro-roughness procedurally
-function makeRoughnessMap(type: TexType): THREE.CanvasTexture | null {
-  const sz = 256;
-  const cv = document.createElement("canvas"); cv.width = sz; cv.height = sz;
-  const ctx = cv.getContext("2d")!;
-  const img = ctx.createImageData(sz, sz);
-
-  if (type === "none") return null;
-
-  for (let y = 0; y < sz; y++) {
-    for (let x = 0; x < sz; x++) {
-      let v = 0.5;
-      if (type === "marble")  v = 0.1 + _fbm(x*0.03, y*0.03, 3)*0.15;
-      if (type === "tile")    v = 0.15 + _noise2d(x*0.5, y*0.5)*0.12;
-      if (type === "wood")    v = 0.55 + _fbm(x*0.08, y*0.08, 2)*0.2;
-      if (type === "brick")   v = 0.7  + _fbm(x*0.12, y*0.12, 2)*0.15;
-      if (type === "concrete")v = 0.75 + _fbm(x*0.15, y*0.15, 3)*0.18;
-      if (type === "plaster") v = 0.65 + _noise2d(x*0.4, y*0.4)*0.2;
-      const bv = Math.round(Math.min(1, Math.max(0, v)) * 255);
-      const i = (y*sz+x)*4;
-      img.data[i] = bv; img.data[i+1] = bv; img.data[i+2] = bv; img.data[i+3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(cv);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(3,3);
-  return t;
 }
 
 function makeMat(color: string, tex?: TexType, roughness = 0.78) {
   if (!tex || tex === "none") return new THREE.MeshPhysicalMaterial({
     color, roughness, metalness: 0.04,
-    clearcoat: 0.06, clearcoatRoughness: 0.45, reflectivity: 0.1,
+    clearcoat: 0.08, clearcoatRoughness: 0.4, reflectivity: 0.12,
   });
-
-  const map      = makeTexture(tex, color);
-  const normalMap  = makeNormalMap(tex);
-  const roughnessMap = makeRoughnessMap(tex);
-
-  // Per-material PBR parameter sets
-  const params: Record<TexType, { r: number; metal: number; cc: number; ccR: number; refl: number; nScale: number }> = {
-    brick:    { r:0.82, metal:0.00, cc:0.00, ccR:1.0, refl:0.06, nScale:0.8  },
-    concrete: { r:0.88, metal:0.01, cc:0.00, ccR:1.0, refl:0.05, nScale:0.6  },
-    wood:     { r:0.72, metal:0.00, cc:0.04, ccR:0.8, refl:0.08, nScale:0.5  },
-    plaster:  { r:0.90, metal:0.00, cc:0.00, ccR:1.0, refl:0.04, nScale:0.35 },
-    marble:   { r:0.12, metal:0.05, cc:0.55, ccR:0.1, refl:0.70, nScale:0.4  },
-    tile:     { r:0.18, metal:0.02, cc:0.40, ccR:0.15,refl:0.55, nScale:0.9  },
-    none:     { r:roughness, metal:0.04, cc:0.06, ccR:0.45, refl:0.1, nScale:0 },
-  };
-  const p = params[tex] ?? params.none;
-
-  const mat = new THREE.MeshPhysicalMaterial({
-    color, map,
-    roughness: p.r, metalness: p.metal,
-    clearcoat: p.cc, clearcoatRoughness: p.ccR,
-    reflectivity: p.refl,
+  const map = makeTexture(tex, color);
+  const r = tex === "marble" ? 0.15 : tex === "tile" ? 0.25 : roughness;
+  const cc = tex === "marble" ? 0.35 : tex === "tile" ? 0.2 : 0.08;
+  return new THREE.MeshPhysicalMaterial({
+    color, map, roughness: r, metalness: tex === "marble" ? 0.08 : 0,
+    clearcoat: cc, clearcoatRoughness: 1.0 - cc, reflectivity: tex === "marble" ? 0.5 : 0.12,
   });
-  if (normalMap) { mat.normalMap = normalMap; mat.normalScale = new THREE.Vector2(p.nScale, p.nScale); }
-  if (roughnessMap) mat.roughnessMap = roughnessMap;
-  return mat;
 }
 
 // ─── Lighting ─────────────────────────────────────────────────────────────────
@@ -481,23 +194,14 @@ function WindSwirl({ dir, modelW, modelD }: { dir: string; modelW: number; model
     wfreq:  0.7  + (i % 5) * 0.25,
   }))).current;
 
-  // Set up geometry imperatively — pre-fill positions to avoid zero-vertex spike artifact
+  // Set up geometry imperatively once on mount
   useEffect(() => {
     if (!ptsRef.current) return;
     const geo = ptsRef.current.geometry;
     const pos = new Float32Array(COUNT * 3);
     const col = new Float32Array(COUNT * 3);
-    // Pre-scatter particles across a large volume so none start at origin (causes spike)
-    for (let i = 0; i < COUNT; i++) {
-      pos[i*3+0] = (Math.random()-0.5)*40;
-      pos[i*3+1] = 1 + Math.random()*6;
-      pos[i*3+2] = (Math.random()-0.5)*40;
-      col[i*3+0] = 0.2; col[i*3+1] = 0.8; col[i*3+2] = 1.0;
-    }
-    const posAttr = new THREE.BufferAttribute(pos, 3); posAttr.setUsage(THREE.DynamicDrawUsage);
-    const colAttr = new THREE.BufferAttribute(col, 3); colAttr.setUsage(THREE.DynamicDrawUsage);
-    geo.setAttribute('position', posAttr);
-    geo.setAttribute('color', colAttr);
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color',    new THREE.BufferAttribute(col, 3));
     geo.setDrawRange(0, COUNT);
   }, []);
 
@@ -988,34 +692,23 @@ const bloomFrag = `
   uniform vec2 uResolution;
   uniform float uIntensity;
   uniform float uThreshold;
-
-  // Gaussian weights for 13-tap separable bloom
-  float gauss(float x, float s) { return exp(-x*x/(2.0*s*s)); }
-
   void main() {
     vec2 uv = gl_FragCoord.xy / uResolution;
-    vec4 base = texture2D(tDiffuse, uv);
-
-    // Large-radius gaussian blur on bright areas — 2 passes faked in 1 with 2D kernel
-    vec3 glow = vec3(0.0);
-    float wSum = 0.0;
-    float blurR = 4.0 / min(uResolution.x, uResolution.y);
-    for(int ix=-3; ix<=3; ix++) {
-      for(int iy=-3; iy<=3; iy++) {
-        vec2 off = uv + vec2(float(ix), float(iy)) * blurR;
-        vec3 s = texture2D(tDiffuse, clamp(off,0.0,1.0)).rgb;
-        float lum = dot(s, vec3(0.2126,0.7152,0.0722));
-        float bright = max(0.0, lum - uThreshold);
-        float w = gauss(float(ix),1.6) * gauss(float(iy),1.6);
-        glow += s * bright * w;
-        wSum += w;
-      }
+    vec4 col = texture2D(tDiffuse, uv);
+    // Extract bright areas
+    float lum = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));
+    vec3 bright = col.rgb * max(0.0, lum - uThreshold);
+    // Simple 9-tap box blur for glow
+    vec3 blur = vec3(0.0);
+    float blurSize = 2.5 / max(uResolution.x, uResolution.y);
+    for(int x=-2;x<=2;x++) for(int y=-2;y<=2;y++) {
+      vec2 off = uv + vec2(float(x), float(y)) * blurSize;
+      vec3 s = texture2D(tDiffuse, clamp(off, 0.0, 1.0)).rgb;
+      float sl = dot(s, vec3(0.2126, 0.7152, 0.0722));
+      blur += s * max(0.0, sl - uThreshold);
     }
-    glow /= max(wSum, 0.001);
-
-    // Additive glow with intensity, tinted slightly warm
-    vec3 result = base.rgb + glow * uIntensity * vec3(1.05, 1.0, 0.95);
-    gl_FragColor = vec4(result, base.a);
+    blur /= 25.0;
+    gl_FragColor = vec4(col.rgb + blur * uIntensity, col.a);
   }
 `;
 
@@ -1025,40 +718,24 @@ const compositeFrag = `
   uniform float uVignette;
   uniform float uCA;
   uniform float uExposure;
-
-  // Precise ACES fitted curve (Stephen Hill fit)
-  vec3 aces(vec3 x) {
-    x = max(vec3(0.0), x);
-    float a=2.51, b=0.03, c=2.43, d=0.59, e=0.14;
-    return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);
-  }
-
   void main() {
     vec2 uv = gl_FragCoord.xy / uResolution;
+    // Chromatic aberration
     vec2 dir = uv - 0.5;
     float dist = length(dir);
-
-    // Radial chromatic aberration (stronger toward edges, zero at center)
-    float caStr = uCA * dist * dist * 2.5;
-    vec2 caOff = normalize(dir + vec2(0.001)) * caStr;
-    float r = texture2D(tDiffuse, clamp(uv + caOff,      0.0, 1.0)).r;
+    vec2 caOff = normalize(dir) * dist * uCA;
+    float r = texture2D(tDiffuse, uv + caOff).r;
     float g = texture2D(tDiffuse, uv).g;
-    float b = texture2D(tDiffuse, clamp(uv - caOff*0.7,  0.0, 1.0)).b;
+    float b = texture2D(tDiffuse, uv - caOff).b;
     vec3 col = vec3(r, g, b);
-
-    // Exposure
+    // ACES filmic tone mapping
     col *= uExposure;
-
-    // ACES filmic tonemapping
-    col = aces(col);
-
-    // Smooth vignette (cosine falloff)
-    float vig = 1.0 - smoothstep(0.45, 1.05, dist) * uVignette;
+    col = (col * (2.51*col + 0.03)) / (col * (2.43*col + 0.59) + 0.14);
+    // Vignette
+    float vig = 1.0 - dist * dist * uVignette;
     col *= vig;
-
-    // Gamma 2.2 encode
-    col = pow(max(col, vec3(0.0)), vec3(1.0/2.2));
-
+    // Gamma
+    col = pow(max(col, 0.0), vec3(1.0/2.2));
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -1173,10 +850,10 @@ function PBREnvironment({ sunOn, nightMode }: { sunOn: boolean; nightMode: boole
           g = Math.round(8  + t*18);
           b = Math.round(22 + t*14);
         } else if (sunOn) {
-          // True sky gradient: deep blue zenith → light blue horizon (no warm tint)
-          r = Math.round(80  + t*100);
-          g = Math.round(140 + t*80);
-          b = Math.round(220 + t*20);
+          // Pale blue sky → warm horizon
+          r = Math.round(140 + t*80);
+          g = Math.round(180 + t*60);
+          b = Math.round(230 - t*80);
         } else {
           // Overcast
           r = Math.round(80 + t*40);
@@ -1224,84 +901,49 @@ const groundFrag = /* glsl */ `
   uniform vec3  uColor;
   uniform vec3  uColor2;
   uniform float uTime;
-  uniform float uWet;
+  uniform float uWet;     // 0=dry 1=wet (flood)
   varying vec2  vUv;
   varying vec3  vWorldPos;
   varying vec3  vNormal;
 
+  // Hash for procedural noise
   float hash(vec2 p) {
-    p = fract(p * vec2(127.1,311.7)); p += dot(p,p+45.32); return fract(p.x*p.y);
+    p = fract(p * vec2(127.1, 311.7));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
   }
   float noise(vec2 p) {
-    vec2 i=floor(p); vec2 f=fract(p); f=f*f*(3.0-2.0*f);
-    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);
+    vec2 i = floor(p); vec2 f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),
+               mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);
   }
   float fbm(vec2 p) {
-    float v=0.0,a=0.5; for(int i=0;i<6;i++){v+=a*noise(p);p*=2.1;a*=0.48;} return v;
-  }
-
-  // Derived normal from heightfield gradient
-  vec3 fbmNormal(vec2 p, float eps) {
-    float h  = fbm(p);
-    float hx = fbm(p + vec2(eps, 0.0));
-    float hy = fbm(p + vec2(0.0, eps));
-    return normalize(vec3(h-hx, eps*1.5, h-hy));
-  }
-
-  // Blinn-Phong diffuse+specular
-  float blinnPhong(vec3 N, vec3 L, vec3 V, float roughness) {
-    vec3 H = normalize(L + V);
-    float diff = max(dot(N, L), 0.0);
-    float shin = 2.0 / (roughness*roughness) - 2.0;
-    float spec = pow(max(dot(N, H), 0.0), shin) * (1.0 - roughness);
-    return diff * 0.85 + spec * 0.3;
+    float v = 0.0; float a = 0.5;
+    for(int i=0;i<5;i++){v+=a*noise(p);p*=2.1;a*=0.5;}
+    return v;
   }
 
   void main() {
-    vec2 uv  = vWorldPos.xz * 0.14;
-    float n  = fbm(uv * 1.8);
-    float n2 = fbm(uv * 5.5 + 3.7);
-    float n3 = fbm(uv * 14.0 + 7.2); // micro detail
+    vec2 uv = vWorldPos.xz * 0.18;
+    float n  = fbm(uv * 2.0);
+    float n2 = fbm(uv * 6.0 + 3.7);
 
-    // 3-tone base: shadow/mid/light spots
-    vec3 col = mix(uColor * 0.7, uColor, n);
-    col = mix(col, uColor2, n2 * 0.3);
-    col += (n3 - 0.5) * 0.04; // micro variation
+    // Base ground colour with subtle variation
+    vec3 col = mix(uColor, uColor2, n * 0.4 + n2 * 0.1);
 
-    // Derived surface normal for lighting
-    vec3 N = fbmNormal(uv * 1.8, 0.005);
-
-    // Key light + fill + ambient
-    vec3 lightDir  = normalize(vec3(0.6, 1.0, 0.5));
-    vec3 viewDir   = normalize(vec3(0.0, 1.0, 0.5));
-    float lighting = blinnPhong(N, lightDir, viewDir, 0.88);
-    float ambient  = 0.38;
-    col *= (ambient + lighting * 0.62);
-
-    // Ambient occlusion approximation from noise
-    float ao = 0.78 + 0.22 * n;
+    // Fake AO in corners / low spots
+    float ao = 0.85 + 0.15 * n;
     col *= ao;
 
-    // Edge darkening around objects (proximity shadow approximation)
-    float edgeAO = 1.0 - smoothstep(0.0, 2.0, abs(vWorldPos.x)) * 0.05;
-    col *= edgeAO;
+    // Wet reflection overlay
+    vec3 wetCol = vec3(0.04, 0.08, 0.14);
+    float wetGloss = pow(max(dot(vNormal, normalize(vec3(1,3,1))), 0.0), 24.0);
+    col = mix(col, wetCol + wetGloss * 0.3, uWet * 0.65);
 
-    // ── Wet ground / flood ──────────────────────────────────────────────────
-    float puddleN = fbm(uv * 3.0 + 1.2);
-    float puddleMask = smoothstep(0.42, 0.58, puddleN) * uWet;
-
-    // Wet base darkening
-    col = mix(col, col * 0.45, uWet * 0.5);
-
-    // Water reflection (Fresnel-like specular off puddles)
-    vec3 reflDir = reflect(-lightDir, vec3(0,1,0));
-    float refl   = pow(max(dot(viewDir, reflDir), 0.0), 32.0);
-    vec3 wetSpec = vec3(0.15, 0.22, 0.32) + refl * 0.5;
-    col = mix(col, wetSpec, puddleMask * 0.75);
-
-    // Ripple normal on wet parts (time-animated)
-    float ripple = sin(vWorldPos.x*2.5 + uTime*1.2)*sin(vWorldPos.z*2.8 + uTime*0.9)*0.5+0.5;
-    col += ripple * puddleMask * 0.04;
+    // Subtle puddle specularity
+    float puddle = smoothstep(0.48, 0.52, n2) * uWet;
+    col = mix(col, vec3(0.06, 0.14, 0.22) + wetGloss * 0.6, puddle * 0.7);
 
     gl_FragColor = vec4(col, 1.0);
   }
@@ -1340,14 +982,14 @@ function PBRGround({ showGrid, wet }: { showGrid: boolean; wet: boolean }) {
 // ─── Furniture meshes ─────────────────────────────────────────────────────────
 function FurnitureMesh({ type }: { type: string }) {
   const t = type.toLowerCase();
-  const wood  = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#7c5a38", roughness:0.72, metalness:0.0, clearcoat:0.04, clearcoatRoughness:0.7 }), []);
-  const soft  = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#3a5070", roughness:0.92, metalness:0.0 }), []);
-  const metal = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#9ab0b8", metalness:0.85, roughness:0.22, reflectivity:0.9 }), []);
-  const white = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#e8e4de", roughness:0.65, metalness:0.0, clearcoat:0.1, clearcoatRoughness:0.5 }), []);
-  const dark  = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#1e2530", roughness:0.45, metalness:0.1, clearcoat:0.15, clearcoatRoughness:0.4 }), []);
-  const glass = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#88bbdd", transparent:true, opacity:0.35, transmission:0.55, roughness:0.0, metalness:0.0, ior:1.45, reflectivity:0.85 }), []);
-  const green = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#2a7a2a", roughness:0.88, metalness:0.0 }), []);
-  const fab   = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#4a6080", roughness:0.94, metalness:0.0 }), []);
+  const wood = useMemo(() => new THREE.MeshStandardMaterial({ color: "#7c5a38", roughness: 0.8 }), []);
+  const soft = useMemo(() => new THREE.MeshStandardMaterial({ color: "#3a5070", roughness: 0.9 }), []);
+  const metal = useMemo(() => new THREE.MeshStandardMaterial({ color: "#9ab0b8", metalness: 0.7, roughness: 0.3 }), []);
+  const white = useMemo(() => new THREE.MeshStandardMaterial({ color: "#e8e4de", roughness: 0.7 }), []);
+  const dark = useMemo(() => new THREE.MeshStandardMaterial({ color: "#1e2530", roughness: 0.5 }), []);
+  const glass = useMemo(() => new THREE.MeshStandardMaterial({ color: "#88bbdd", transparent: true, opacity: 0.45 }), []);
+  const green = useMemo(() => new THREE.MeshStandardMaterial({ color: "#2a7a2a", roughness: 0.85 }), []);
+  const fab = useMemo(() => new THREE.MeshStandardMaterial({ color: "#4a6080", roughness: 0.95 }), []);
   const nr = NOOP_RAYCAST;
 
   if (t === "chair") return <group>
@@ -1481,13 +1123,13 @@ function FurnitureMesh({ type }: { type: string }) {
 function RoomFurniture({ type, w, d }: { type: string; w: number; d: number }) {
   const t = type.toLowerCase();
   const Y = 0.16;
-  const wood  = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#7c5a38", roughness:0.72, metalness:0.0, clearcoat:0.04 }), []);
-  const soft  = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#3a5a70", roughness:0.94, metalness:0.0 }), []);
-  const white = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#e8e4de", roughness:0.65, metalness:0.0, clearcoat:0.1 }), []);
-  const dark  = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#252832", roughness:0.45, metalness:0.1, clearcoat:0.18 }), []);
-  const metal = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#9aacb4", metalness:0.85, roughness:0.2, reflectivity:0.9 }), []);
-  const glassMat = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#88bbdd", transparent:true, opacity:0.32, transmission:0.6, roughness:0.0, ior:1.45, reflectivity:0.88 }), []);
-  const green = useMemo(() => new THREE.MeshPhysicalMaterial({ color:"#2a7a2a", roughness:0.88, metalness:0.0 }), []);
+  const wood  = useMemo(() => new THREE.MeshStandardMaterial({ color: "#7c5a38", roughness: 0.8 }), []);
+  const soft  = useMemo(() => new THREE.MeshStandardMaterial({ color: "#3a5a70", roughness: 0.95 }), []);
+  const white = useMemo(() => new THREE.MeshStandardMaterial({ color: "#e8e4de", roughness: 0.7 }), []);
+  const dark  = useMemo(() => new THREE.MeshStandardMaterial({ color: "#252832", roughness: 0.5 }), []);
+  const metal = useMemo(() => new THREE.MeshStandardMaterial({ color: "#9aacb4", metalness: 0.7, roughness: 0.3 }), []);
+  const glassMat = useMemo(() => new THREE.MeshStandardMaterial({ color: "#88bbdd", transparent: true, opacity: 0.5 }), []);
+  const green = useMemo(() => new THREE.MeshStandardMaterial({ color: "#2a7a2a", roughness: 0.9 }), []);
   const nr = NOOP_RAYCAST;
 
   if (t.includes("living")) return (
@@ -2254,7 +1896,7 @@ export default function Model3DPage() {
                 stencil: false,
                 depth: true,
                 toneMapping: THREE.ACESFilmicToneMapping,
-                toneMappingExposure: showMoon ? 0.35 : showSun ? 0.82 : 0.65,
+                toneMappingExposure: showMoon ? 0.4 : showSun ? 1.1 : 0.75,
               }}
               dpr={Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, renderQuality === "high" ? 2 : renderQuality === "med" ? 1.5 : 1)}
               key={camMode}
