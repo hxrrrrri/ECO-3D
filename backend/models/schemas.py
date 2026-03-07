@@ -135,6 +135,10 @@ class FloorPlanResponse(BaseModel):
     ventilation_score: float
     tree_preserved_count: int
     orientation_degrees: float
+    # ── Eco-optimization results (new — additive, all Optional so no breakage) ──
+    eco_recommendations: Optional[List[str]] = None   # human-readable design hints
+    solar_breakdown: Optional[dict] = None            # {room_id: solar_score}
+    ventilation_path: Optional[list] = None           # [room_ids on cross-vent axis]
 
 
 class UserCreate(BaseModel):

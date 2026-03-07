@@ -109,14 +109,17 @@ def _best_plot(elements: list, lat: float, lon: float) -> Optional[list]:
 async def _try_cadastral(lat: float, lon: float) -> Optional[list]:
     """Query Overpass for small cadastral/plot ways near the click point."""
     # Small radius — we only want individual plots, not districts
-    s, w, n, e = _bbox_from_point(lat, lon, 150)
+    s, w, n, e = _bbox_from_point(lat, lon, 250)
     query = f"""
-[out:json][timeout:15];
+[out:json][timeout:20];
 (
   way["boundary"="cadastral"]({s},{w},{n},{e});
   way["place"="plot"]({s},{w},{n},{e});
-  way["landuse"~"^(residential|commercial|farmland|meadow|grass|greenfield|brownfield|allotments|orchard|vineyard)$"]({s},{w},{n},{e});
-  way["natural"~"^(grassland|scrub|heath|sand|bare_rock)$"]({s},{w},{n},{e});
+  way["landuse"~"^(residential|commercial|farmland|meadow|grass|greenfield|brownfield|allotments|orchard|vineyard|garden|forest|scrub|village_green|construction)$"]({s},{w},{n},{e});
+  way["natural"~"^(grassland|scrub|heath|sand|bare_rock|wood)$"]({s},{w},{n},{e});
+  way["building"]({s},{w},{n},{e});
+  way["amenity"]({s},{w},{n},{e});
+  relation["landuse"]({s},{w},{n},{e});
 );
 out geom;
 """
@@ -139,9 +142,9 @@ out geom;
 
 async def _try_containing_way(lat: float, lon: float) -> Optional[list]:
     """Find the smallest closed way that geometrically contains the click."""
-    s, w, n, e = _bbox_from_point(lat, lon, 100)
+    s, w, n, e = _bbox_from_point(lat, lon, 200)
     query = f"""
-[out:json][timeout:15];
+[out:json][timeout:20];
 way({s},{w},{n},{e});
 out geom;
 """
@@ -209,11 +212,16 @@ async def _try_nominatim(lat: float, lon: float) -> Optional[list]:
 def _synthetic_plot(lat: float, lon: float) -> list:
     """
     Deterministic realistic rectangular plot.
-    Uses typical residential plot sizes (150–800 m²).
+    Uses typical residential plot sizes for the region.
+    Kerala/India: typically 3-15 cents = 120-600 m²
+    Other regions: 150-800 m²
     """
     rng = random.Random(f"{lat:.5f}{lon:.5f}")
-    # Typical plot sizes: urban=150-300 m², suburban=300-600 m², rural=400-800 m²
-    area = rng.uniform(180, 600)
+    # Kerala/South India: smaller plots (3-8 cents typical)
+    if 8.0 <= lat <= 12.5 and 76.0 <= lon <= 77.5:
+        area = rng.uniform(120, 400)   # Kerala residential plot sizes
+    else:
+        area = rng.uniform(180, 600)
     # Aspect ratio: typically 1:1.5 to 1:3 (frontage × depth)
     ratio = rng.uniform(1.4, 2.5)
     w_m = math.sqrt(area / ratio)

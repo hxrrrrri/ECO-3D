@@ -379,6 +379,28 @@ def compute_buildability(flood_risk, slope, soil_buildable, clay_pct,
     return round(min(99.0, max(1.0, score)), 1)
 
 
+
+def _soil_fallback(lat: float, lon: float) -> dict:
+    """Deterministic synthetic soil data when SoilGrids is unavailable."""
+    import random as _rnd
+    rng = _rnd.Random(f"soil{lat:.3f}{lon:.3f}")
+    clay = round(rng.uniform(18, 42), 1)
+    sand = round(rng.uniform(20, 55), 1)
+    silt = round(max(0, 100 - clay - sand), 1)
+    ph   = round(rng.uniform(5.5, 7.5), 1)
+    oc   = round(rng.uniform(0.5, 2.5), 2)
+    bd   = round(rng.uniform(1.1, 1.6), 2)
+    soil_type = "Clay Loam" if clay > 35 else "Sandy Loam" if sand > 50 else "Loam"
+    return {
+        "clay_pct": clay, "sand_pct": sand, "silt_pct": silt,
+        "soil_ph": ph, "organic_carbon": oc, "bulk_density": bd,
+        "clay_fraction": clay / 100,
+        "soil_type": soil_type,
+        "soil_buildable": clay < 45,
+        "soil_source": "synthetic",
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN ORCHESTRATOR
 # ─────────────────────────────────────────────────────────────────────────────
@@ -389,15 +411,8 @@ async def fetch_all_real_data(lat: float, lon: float) -> dict:
     """
     logger.info(f"[ENV] Fetching real data for ({lat:.4f}, {lon:.4f})")
 
-    (
-        (elevation, slope),
-        (wind_ms, wind_dir),
-        rainfall,
-        soil_data,
-        (ndvi, solar_kwh),
-        flood_discharge,
-        dist_water,
-    ) = await asyncio.gather(
+    # Use return_exceptions=True so one API failure doesn't kill the rest
+    results = await asyncio.gather(
         fetch_elevation_slope(lat, lon),
         fetch_wind(lat, lon),
         fetch_rainfall(lat, lon),
@@ -405,7 +420,57 @@ async def fetch_all_real_data(lat: float, lon: float) -> dict:
         fetch_ndvi_and_solar(lat, lon),
         fetch_flood_discharge(lat, lon),
         fetch_distance_to_water(lat, lon),
+        return_exceptions=True,
     )
+
+    # Unpack with individual fallbacks for any that failed
+    rng_fb = __import__('random').Random(f"{lat:.4f}{lon:.4f}fb")
+
+    def _unpack_elev(r):
+        if isinstance(r, Exception):
+            logger.warning(f"[Elevation] fallback due to: {r}")
+            return round(rng_fb.uniform(10, 200), 1), round(rng_fb.uniform(1, 12), 2)
+        return r
+    def _unpack_wind(r):
+        if isinstance(r, Exception):
+            logger.warning(f"[Wind] fallback due to: {r}")
+            return round(rng_fb.uniform(2, 7), 1), rng_fb.choice(["N","NE","E","SE","S","SW","W","NW"])
+        return r
+    def _unpack_rain(r):
+        if isinstance(r, Exception):
+            logger.warning(f"[Rainfall] fallback due to: {r}")
+            return round(rng_fb.uniform(600, 1800), 1)
+        return r
+    def _unpack_soil(r):
+        if isinstance(r, Exception):
+            logger.warning(f"[Soil] fallback due to: {r}")
+            return _soil_fallback(lat, lon)
+        return r
+    def _unpack_ndvi(r):
+        if isinstance(r, Exception):
+            logger.warning(f"[NDVI] fallback due to: {r}")
+            ndvi_fb = round((0.55 if abs(lat)<23.5 else 0.38 if abs(lat)<45 else 0.22) + rng_fb.uniform(-0.08, 0.08), 3)
+            return ndvi_fb, round(rng_fb.uniform(3.5, 6.5), 2)
+        return r
+    def _unpack_flood(r):
+        if isinstance(r, Exception):
+            logger.warning(f"[Flood] fallback due to: {r}")
+            return {"glofas_flood_index": 0.2, "river_discharge_peak_m3s": 50.0,
+                    "river_discharge_mean_m3s": 20.0, "flood_source": "synthetic"}
+        return r
+    def _unpack_water(r):
+        if isinstance(r, Exception):
+            logger.warning(f"[Water] fallback due to: {r}")
+            return round(rng_fb.uniform(200, 2000), 1)
+        return r
+
+    (elevation, slope)     = _unpack_elev(results[0])
+    (wind_ms, wind_dir)    = _unpack_wind(results[1])
+    rainfall               = _unpack_rain(results[2])
+    soil_data              = _unpack_soil(results[3])
+    (ndvi, solar_kwh)      = _unpack_ndvi(results[4])
+    flood_discharge        = _unpack_flood(results[5])
+    dist_water             = _unpack_water(results[6])
 
     sun_hours  = compute_sun_hours(lat)
     glofas_idx = flood_discharge.get("glofas_flood_index")
