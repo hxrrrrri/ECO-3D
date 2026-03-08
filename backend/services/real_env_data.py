@@ -134,9 +134,97 @@ def _usda_texture(clay: float, sand: float, silt: float) -> tuple:
     return "Sandy Loam", True
 
 
+async def _fetch_openlandmap_soil(lat: float, lon: float) -> Optional[dict]:
+    """
+    Secondary soil source: OpenLandMap REST API (ISRIC-derived, 250m global, no API key).
+    Called only when SoilGrids REST v2 is unavailable.
+    Returns same dict shape as the primary fetch, or None on failure.
+    """
+    url = "https://api.openlandmap.org/query/point"
+    colls = {
+        "clay": "sol.texture.clay_usda.a334_r3_l1_v02_250m",
+        "sand": "sol.texture.sand_usda.c60_r3_l1_v02_250m",
+        "silt": "sol.texture.silt_usda.c62_r3_l1_v02_250m",
+        "ph":   "sol.ph.h2o_usda.4c1a2a_r3_l1_v02_250m",
+        "oc":   "sol.organic.carbon_usda.6a1c_r3_l1_v02_250m",
+        "bd":   "sol.bulk.density.10x_usda.3b4b1c_v02_250m",
+    }
+
+    def _parse_olm_value(data: dict, coll_name: str) -> Optional[float]:
+        """Handle multiple response shapes OpenLandMap may return."""
+        # Shape 1: {coll: {"b0": v, "0-5cm": v, ...}}  (keyed by depth band)
+        top = data.get(coll_name)
+        if isinstance(top, dict):
+            for k in ("b0", "0-5cm", "0_5", "sl1"):
+                if top.get(k) is not None:
+                    return float(top[k])
+            vals = [v for v in top.values() if v is not None]
+            return float(vals[0]) if vals else None
+        # Shape 2: {"result": [{"response": {coll: [{"depth": "...", "mean": v}]}}]}
+        results = data.get("result", [])
+        if results and isinstance(results, list):
+            resp = results[0].get("response", {})
+            layers = resp.get(coll_name, [])
+            for layer in layers:
+                if "0-5" in str(layer.get("depth", "")):
+                    v = layer.get("mean")
+                    if v is not None:
+                        return float(v)
+        # Shape 3: flat top-level key matching the short property name
+        for short in ("clay", "sand", "silt", "ph", "oc", "bd"):
+            if short in coll_name and data.get(short) is not None:
+                return float(data[short])
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(20.0, connect=6.0),
+            headers={"User-Agent": "eco3d-platform/2.1 soil-fallback"},
+        ) as c:
+            extracted: dict[str, float] = {}
+            for key, coll in colls.items():
+                try:
+                    r = await c.get(url, params={"lon": lon, "lat": lat, "coll": coll})
+                    if r.status_code == 200:
+                        v = _parse_olm_value(r.json(), coll)
+                        if v is not None:
+                            extracted[key] = v
+                except Exception:
+                    continue  # one property failing should not abort the others
+
+            if "clay" in extracted and "sand" in extracted:
+                clay = extracted["clay"]
+                sand = extracted["sand"]
+                silt = extracted.get("silt", max(0.0, 100.0 - clay - sand))
+                ph   = extracted.get("ph", 6.5)
+                oc   = extracted.get("oc")
+                # OpenLandMap stores bulk density as 10× actual (cg/cm³ × 10)
+                bd_raw = extracted.get("bd")
+                bd = round(bd_raw / 10.0, 2) if bd_raw is not None else None
+                name, buildable = _usda_texture(clay, sand, silt)
+                logger.info(f"[OpenLandMap] soil: {name} clay={clay:.1f}% sand={sand:.1f}%")
+                return {
+                    "soil_type": name, "clay_pct": round(clay, 1),
+                    "sand_pct": round(sand, 1), "silt_pct": round(silt, 1),
+                    "clay_fraction": round(clay / 100.0, 3),
+                    "soil_ph": round(ph, 1),
+                    "organic_carbon": round(oc, 2) if oc is not None else None,
+                    "bulk_density": bd,
+                    "soil_buildable": buildable,
+                    "soil_source": "OpenLandMap (ISRIC-derived) — 250m global",
+                }
+    except Exception as e:
+        logger.warning(f"[OpenLandMap] soil failed: {e}")
+    return None
+
+
 async def fetch_soil_data(lat: float, lon: float) -> dict:
     """
-    Fetch real soil properties from SoilGrids REST v2.
+    Fetch real soil properties.
+    Priority:
+      1. SoilGrids REST v2 (ISRIC/WUR) — 250m global
+      2. OpenLandMap REST API         — 250m global (ISRIC-derived, no key)
+      3. Synthetic lat-band estimate  — absolute last resort, clearly labelled
     Layer: 0-5 cm depth, mean value.
     """
     props  = ["clay", "sand", "silt", "phh2o", "soc", "bdod"]
@@ -184,7 +272,14 @@ async def fetch_soil_data(lat: float, lon: float) -> dict:
     except Exception as e:
         logger.warning(f"[SoilGrids] failed: {e}")
 
-    # Fallback
+    # ── Secondary: OpenLandMap (ISRIC-derived, different server) ──────────────
+    logger.info(f"[Soil] SoilGrids unavailable — trying OpenLandMap for ({lat:.4f}, {lon:.4f})")
+    olm = await _fetch_openlandmap_soil(lat, lon)
+    if olm is not None:
+        return olm
+
+    # ── Last resort: synthetic estimate (clearly labelled) ────────────────────
+    logger.warning(f"[Soil] Both real sources failed for ({lat:.4f}, {lon:.4f}) — using synthetic estimate")
     seed = int((abs(lat)*191.3 + abs(lon)*137.7) % 9999)
     rng  = random.Random(seed)
     if abs(lat) < 10:   clay,sand,silt = rng.uniform(30,55),rng.uniform(20,40),rng.uniform(10,30)
@@ -192,7 +287,7 @@ async def fetch_soil_data(lat: float, lon: float) -> dict:
     elif abs(lat) < 50: clay,sand,silt = rng.uniform(15,35),rng.uniform(30,55),rng.uniform(20,40)
     else:               clay,sand,silt = rng.uniform(5,20),rng.uniform(40,65),rng.uniform(20,40)
     name, buildable = _usda_texture(clay, sand, silt)
-    logger.info(f"[SoilGrids] fallback: {name}")
+    logger.info(f"[Soil] synthetic estimate: {name}")
     return {
         "soil_type": name, "clay_pct": round(clay,1),
         "sand_pct": round(sand,1), "silt_pct": round(silt,1),
@@ -201,7 +296,7 @@ async def fetch_soil_data(lat: float, lon: float) -> dict:
         "organic_carbon": round(rng.uniform(5, 25), 1),
         "bulk_density": round(rng.uniform(1.1, 1.6), 2),
         "soil_buildable": buildable,
-        "soil_source": "Fallback (SoilGrids unavailable)",
+        "soil_source": "Estimated (SoilGrids + OpenLandMap unavailable) — not real data",
     }
 
 

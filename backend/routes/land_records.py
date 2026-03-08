@@ -12,7 +12,7 @@ import asyncio
 import math
 import logging
 import random
-from typing import Optional
+from typing import Any, Optional
 from fastapi import APIRouter, Query
 import httpx
 
@@ -122,9 +122,12 @@ async def _try_bhu_naksha_wms(state: str, district: str, khasra: str, lat: Optio
     """
     if state not in BHU_NAKSHA_WMS:
         return None
-    if not lat or not lon:
+    if lat is None or lon is None:
         return None
 
+    assert lat is not None and lon is not None  # narrows Optional[float] → float
+    _lat: float = lat
+    _lon: float = lon
     base = BHU_NAKSHA_WMS[state]
     # Standard Bhu Naksha WMS GetMap/GetFeatureInfo pattern
     # Many states use GeoServer with layer "REVENUE_PLOT" or "cadastral_plot"
@@ -146,7 +149,7 @@ async def _try_bhu_naksha_wms(state: str, district: str, khasra: str, lat: Optio
                     "X": "256", "Y": "256",
                     "SRS": "EPSG:4326",
                     "WIDTH": "512", "HEIGHT": "512",
-                    "BBOX": f"{lon-0.001},{lat-0.001},{lon+0.001},{lat+0.001}",
+                    "BBOX": f"{_lon-0.001},{_lat-0.001},{_lon+0.001},{_lat+0.001}",
                 }
                 resp = await client.get(base, params=params)
                 if resp.status_code == 200:
@@ -175,25 +178,32 @@ async def _try_bhu_naksha_wms(state: str, district: str, khasra: str, lat: Optio
 
 
 async def _try_overpass_cadastral(lat: float, lon: float) -> Optional[dict]:
-    """Query Overpass for cadastral/landuse polygons at the given point."""
-    d = 0.003
+    """
+    Query Overpass for cadastral/landuse polygons at the given point.
+    Searches a 300m radius for plot-sized polygons (30–8 000 m²).
+    """
+    d = 0.003  # ~333 m
     query = f"""
-[out:json][timeout:12];
+[out:json][timeout:14];
 (
-  way["landuse"~"^(residential|farmland|industrial|commercial)$"]({lat-d},{lon-d},{lat+d},{lon+d});
+  way["landuse"~"^(residential|farmland|industrial|commercial|allotments|orchard|vineyard)$"]({lat-d},{lon-d},{lat+d},{lon+d});
   way["building"]({lat-d},{lon-d},{lat+d},{lon+d});
   way["plot"]({lat-d},{lon-d},{lat+d},{lon+d});
+  way["boundary"="plot"]({lat-d},{lon-d},{lat+d},{lon+d});
+  way["natural"~"^(wood|scrub|grassland|heath|bare_rock)$"]({lat-d},{lon-d},{lat+d},{lon+d});
+  way["amenity"~"^(school|hospital|park|parking)$"]({lat-d},{lon-d},{lat+d},{lon+d});
   relation["landuse"]({lat-d},{lon-d},{lat+d},{lon+d});
 );
 out geom;
 """
     try:
-        async with httpx.AsyncClient(timeout=14.0) as client:
+        async with httpx.AsyncClient(timeout=16.0) as client:
             resp = await client.post("https://overpass-api.de/api/interpreter", data={"data": query})
             if resp.status_code != 200:
                 return None
             elements = resp.json().get("elements", [])
-            best = None
+            best: Optional[list] = None
+            best_tags: dict[str, str] = {}
             best_area = float("inf")
             for el in elements:
                 geom = el.get("geometry", [])
@@ -203,22 +213,165 @@ out geom;
                 if not coords:
                     continue
                 area = _polygon_area_sqm(coords)
-                # Prefer small polygons close to clicked point (likely the actual plot)
                 if 30 < area < 8000 and area < best_area:
                     best = coords
                     best_area = area
-            if best:
+                    best_tags = el.get("tags", {})
+            if best is not None:
+                land_type = (
+                    best_tags.get("landuse") or best_tags.get("building") or
+                    best_tags.get("natural") or best_tags.get("amenity") or "Mapped via OSM"
+                )
                 return {
                     "boundary": best,
                     "area_sqm": round(best_area),
-                    "source": "OpenStreetMap (OSM Overpass)",
+                    "source": "OpenStreetMap (OSM Overpass — cadastral)",
                     "owner_name": "Not available via OSM",
                     "survey_number": "—",
-                    "land_type": "Mapped via OSM",
+                    "land_type": land_type.capitalize(),
                     "portal": "https://www.openstreetmap.org",
                 }
     except Exception as e:
         logger.warning(f"Overpass cadastral failed: {e}")
+    return None
+
+
+async def _try_nominatim_polygon(lat: float, lon: float) -> Optional[dict]:
+    """
+    Reverse-geocode with Nominatim and request a real polygon (polygon_geojson=1).
+    Tries zoom levels 17 → 16 → 15 → 14 (building → street → suburb → district).
+    Returns the first meaningful polygon found (area 50 m² – 2 km²), or None.
+    """
+    for zoom in (17, 16, 15, 14):
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0,
+                headers={"User-Agent": "eco3d-platform/2.1 boundary-lookup (contact@eco3d.app)"},
+            ) as c:
+                r = await c.get(
+                    "https://nominatim.openstreetmap.org/reverse",
+                    params={
+                        "format": "geojson",
+                        "lat": lat, "lon": lon,
+                        "polygon_geojson": 1,
+                        "zoom": zoom,
+                        "addressdetails": 1,
+                    },
+                )
+                if r.status_code != 200:
+                    continue
+                features = r.json().get("features", [])
+                if not features:
+                    continue
+                feat = features[0]
+                geom  = feat.get("geometry", {})
+                props = feat.get("properties", {})
+
+                # Extract outer ring regardless of Polygon vs MultiPolygon
+                if geom.get("type") == "Polygon":
+                    coords = geom["coordinates"][0]
+                elif geom.get("type") == "MultiPolygon":
+                    coords = geom["coordinates"][0][0]
+                else:
+                    continue  # Point or LineString — no polygon at this zoom
+
+                if len(coords) < 3:
+                    continue
+                area = _polygon_area_sqm(coords)
+                if area < 50 or area > 2_000_000:
+                    continue  # Too tiny (noise) or too vast (country/state level)
+
+                addr = props.get("address", {})
+                place = (
+                    addr.get("road") or addr.get("suburb") or
+                    addr.get("neighbourhood") or addr.get("village") or
+                    addr.get("town") or addr.get("city") or "—"
+                )
+                osm_type = props.get("type") or props.get("class") or "place"
+                logger.info(
+                    f"[Nominatim] boundary at zoom={zoom}: '{place}' area={area:.0f} m²"
+                )
+                return {
+                    "boundary": coords,
+                    "area_sqm": round(area),
+                    "source": f"Nominatim/OSM reverse geocode (zoom={zoom})",
+                    "owner_name": "Not available via Nominatim",
+                    "survey_number": "—",
+                    "land_type": osm_type.capitalize(),
+                    "portal": (
+                        f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}"
+                        f"#map={zoom}/{lat}/{lon}"
+                    ),
+                    "place_name": place,
+                }
+        except Exception as e:
+            logger.warning(f"[Nominatim] zoom={zoom} failed: {e}")
+    return None
+
+
+async def _try_overpass_admin_boundary(lat: float, lon: float) -> Optional[dict]:
+    """
+    Use Overpass `is_in` to find the smallest real administrative or place boundary
+    that physically contains the clicked point.
+    Useful when cadastral data is absent — still returns a real OSM polygon.
+    """
+    query = f"""
+[out:json][timeout:14];
+is_in({lat},{lon})->.a;
+(
+  way(pivot.a)["place"~"^(suburb|neighbourhood|quarter|village|hamlet|isolated_dwelling)$"];
+  way(pivot.a)["boundary"~"^(administrative|postal_code)$"];
+  relation(pivot.a)["place"~"^(suburb|neighbourhood|quarter|village|hamlet)$"];
+  relation(pivot.a)["boundary"~"^(administrative|postal_code)$"]["admin_level"~"^(8|9|10|11)$"];
+);
+out geom;
+"""
+    try:
+        async with httpx.AsyncClient(timeout=16.0) as c:
+            r = await c.post("https://overpass-api.de/api/interpreter", data={"data": query})
+            if r.status_code != 200:
+                return None
+            elements = r.json().get("elements", [])
+            best: Optional[tuple] = None
+            best_area = float("inf")
+            for el in elements:
+                # ways have geometry directly; relations have it in members
+                raw_geom = el.get("geometry", [])
+                if not raw_geom and el.get("type") == "relation":
+                    for m in el.get("members", []):
+                        if m.get("role") == "outer" and m.get("geometry"):
+                            raw_geom = m["geometry"]
+                            break
+                if not raw_geom:
+                    continue
+                coords = [
+                    [g["lon"], g["lat"]] for g in raw_geom
+                    if "lon" in g and "lat" in g
+                ]
+                if len(coords) < 3:
+                    continue
+                area = _polygon_area_sqm(coords)
+                # Accept local-scale polygons only (500 m² – 5 km²)
+                if 500 < area < 5_000_000 and area < best_area:
+                    best = (coords, area, el.get("tags", {}))
+                    best_area = area
+            if best:
+                coords, area, tags = best
+                land_type = (
+                    tags.get("place") or tags.get("boundary") or "Administrative"
+                ).capitalize()
+                logger.info(f"[Overpass is_in] boundary: {land_type} area={area:.0f} m²")
+                return {
+                    "boundary": coords,
+                    "area_sqm": round(area),
+                    "source": "OSM Administrative Boundary (Overpass is_in)",
+                    "owner_name": "Not available",
+                    "survey_number": "—",
+                    "land_type": land_type,
+                    "portal": "https://www.openstreetmap.org",
+                }
+    except Exception as e:
+        logger.warning(f"[Overpass is_in] failed: {e}")
     return None
 
 
@@ -252,17 +405,27 @@ async def lookup_land_record(
     """
     Look up land record data for an Indian plot.
 
-    Priority:
-    1. Bhu Naksha WMS (if state supports it and lat/lon provided)
-    2. OSM Overpass cadastral (if lat/lon provided)
-    3. Informational fallback with portal link
+    Priority order (all real data sources tried before synthetic):
+    1. Bhu Naksha WMS         — official cadastral polygon (10 states)
+    2. OSM Overpass cadastral — plot/building/landuse polygons from OSM
+    3. Nominatim reverse      — real OSM polygon via reverse geocode (zoom 17→14)
+    4. Overpass is_in         — real admin/neighbourhood boundary containing the point
+    5. Synthetic rectangle    — absolute last resort, clearly labelled as estimated
     """
     state_info = STATES.get(state)
     if not state_info:
         return {"error": f"State '{state}' not found. Use /land-record/states to list valid states."}
 
-    result = {
-        "state": state_info["name"],
+    state_name = str(state_info["name"])
+    state_bhulekh = str(state_info["bhulekh"])
+    portal_url = BHU_NAKSHA_WMS.get(state) or (
+        "https://www.google.com/search?q="
+        + state_name.replace(" ", "+")
+        + "+Bhulekh+land+records"
+    )
+
+    result: dict[str, Any] = {
+        "state": state_name,
         "district": district or "—",
         "survey_number": survey_number or "—",
         "owner_name": None,
@@ -270,61 +433,110 @@ async def lookup_land_record(
         "area_sqm": None,
         "boundary": None,
         "source": None,
-        "portal_name": state_info["bhulekh"],
-        "portal_url": BHU_NAKSHA_WMS.get(state) or f"https://www.google.com/search?q={state_info['name'].replace(' ', '+')}+Bhulekh+land+records",
-        "bhu_naksha_available": state_info["bhu_naksha"],
+        "portal_name": state_bhulekh,
+        "portal_url": portal_url,
+        "bhu_naksha_available": bool(state_info["bhu_naksha"]),
         "note": None,
     }
 
-    # Try 1: Bhu Naksha WMS
-    if lat and lon and state_info["bhu_naksha"]:
+    # Narrow Optional[float] → float once so every branch below gets a concrete type
+    have_coords = lat is not None and lon is not None
+    _lat: float = lat if lat is not None else 0.0
+    _lon: float = lon if lon is not None else 0.0
+
+    # ── Try 1: Bhu Naksha WMS (official government cadastral) ─────────────────
+    if have_coords and state_info["bhu_naksha"]:
         try:
             wms_result = await asyncio.wait_for(
-                _try_bhu_naksha_wms(state, district, survey_number, lat, lon),
-                timeout=10.0
+                _try_bhu_naksha_wms(state, district, survey_number, _lat, _lon),
+                timeout=10.0,
             )
             if wms_result:
-                result.update(wms_result)
+                for k, v in wms_result.items():
+                    result[k] = v
                 result["note"] = "Boundary fetched from official Bhu Naksha WMS."
+                logger.info(f"[LandRecord] Bhu Naksha WMS success for ({_lat}, {_lon})")
                 return result
         except asyncio.TimeoutError:
-            logger.warning("Bhu Naksha WMS timed out")
+            logger.warning("[LandRecord] Bhu Naksha WMS timed out")
 
-    # Try 2: OSM Overpass cadastral
-    if lat and lon:
+    # ── Try 2: OSM Overpass cadastral (plot/building/landuse polygons) ─────────
+    if have_coords:
         try:
             osm_result = await asyncio.wait_for(
-                _try_overpass_cadastral(lat, lon),
-                timeout=14.0
+                _try_overpass_cadastral(_lat, _lon),
+                timeout=16.0,
             )
             if osm_result:
-                result.update(osm_result)
+                for k, v in osm_result.items():
+                    result[k] = v
                 result["note"] = (
-                    "Boundary sourced from OpenStreetMap. "
-                    "For official owner data, visit the state portal link below."
+                    "Boundary sourced from OpenStreetMap cadastral data. "
+                    "For official owner/survey data, visit the state portal below."
                 )
+                logger.info(f"[LandRecord] OSM Overpass cadastral success for ({_lat}, {_lon})")
                 return result
         except asyncio.TimeoutError:
-            logger.warning("Overpass cadastral timed out")
+            logger.warning("[LandRecord] OSM Overpass cadastral timed out")
 
-    # Try 3: Synthetic fallback + portal guidance
-    rng = random.Random(f"{lat or 0:.4f}{lon or 0:.4f}{survey_number}")
-    area_estimate = rng.randint(150, 600)
-    if lat and lon:
-        boundary = _synthetic_boundary(lat, lon, float(area_estimate))
-    else:
-        boundary = None
+    # ── Try 3: Nominatim reverse geocode with real polygon ────────────────────
+    if have_coords:
+        try:
+            nom_result = await asyncio.wait_for(
+                _try_nominatim_polygon(_lat, _lon),
+                timeout=15.0,
+            )
+            if nom_result:
+                nom_source = str(nom_result.get("source", "OSM"))
+                for k, v in nom_result.items():
+                    result[k] = v
+                result["note"] = (
+                    f"Boundary from Nominatim/OSM reverse geocode ({nom_source}). "
+                    "This is the enclosing mapped area, not the exact cadastral parcel. "
+                    "For official parcel data, visit the state portal below."
+                )
+                logger.info(f"[LandRecord] Nominatim polygon success for ({_lat}, {_lon})")
+                return result
+        except asyncio.TimeoutError:
+            logger.warning("[LandRecord] Nominatim reverse geocode timed out")
 
-    result.update({
-        "boundary": boundary,
-        "area_sqm": area_estimate if boundary else None,
-        "owner_name": "Fetch from state portal (link below)",
-        "land_type": "Residential / Mixed",
-        "source": "Estimated boundary — real data via state portal",
-        "note": (
-            f"Live data for {state_info['name']} could not be fetched automatically. "
-            f"Visit the {state_info['bhulekh']} portal (link below) and enter Survey No. "
-            f"'{survey_number or '<your survey number>'}' to get the official RoR and boundary."
-        ),
-    })
+    # ── Try 4: Overpass is_in — administrative/neighbourhood boundary ──────────
+    if have_coords:
+        try:
+            admin_result = await asyncio.wait_for(
+                _try_overpass_admin_boundary(_lat, _lon),
+                timeout=16.0,
+            )
+            if admin_result:
+                for k, v in admin_result.items():
+                    result[k] = v
+                result["note"] = (
+                    "Boundary is the OSM administrative/neighbourhood area containing "
+                    "your point — not the exact cadastral parcel. "
+                    "For official parcel data, visit the state portal below."
+                )
+                logger.info(f"[LandRecord] Overpass is_in admin boundary success for ({_lat}, {_lon})")
+                return result
+        except asyncio.TimeoutError:
+            logger.warning("[LandRecord] Overpass is_in timed out")
+
+    # ── Try 5: Synthetic rectangle — absolute last resort ─────────────────────
+    logger.warning(
+        f"[LandRecord] All real sources failed for ({_lat}, {_lon}) — returning synthetic estimate"
+    )
+    rng = random.Random(f"{_lat:.4f}{_lon:.4f}{survey_number}")
+    area_estimate = float(rng.randint(150, 600))
+    boundary = _synthetic_boundary(_lat, _lon, area_estimate) if have_coords else None
+
+    result["boundary"] = boundary
+    result["area_sqm"] = int(area_estimate) if boundary else None
+    result["owner_name"] = "Fetch from state portal (link below)"
+    result["land_type"] = "Residential / Mixed"
+    result["source"] = "Estimated boundary — NOT real cadastral data"
+    result["note"] = (
+        f"All real boundary sources (Bhu Naksha WMS, OpenStreetMap, Nominatim) "
+        f"are currently unavailable for this location. "
+        f"Visit the {state_bhulekh} portal (link below) and enter Survey No. "
+        f"'{survey_number or '<your survey number>'}' to get the official RoR and boundary."
+    )
     return result
