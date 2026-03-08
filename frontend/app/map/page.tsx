@@ -85,26 +85,17 @@ export default function MapPage() {
 
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const resp = await fetch(`${apiBase}/plot-boundary?lat=${lat}&lon=${lon}`, {
-        signal: AbortSignal.timeout(28000), // 28s — matches backend 25s + buffer
-      });
+      const resp = await fetch(`${apiBase}/plot-boundary?lat=${lat}&lon=${lon}`);
       if (resp.ok) {
         const data = await resp.json();
-        // Only set boundary if it has enough points to draw a polygon
-        const bnd = Array.isArray(data.boundary) && data.boundary.length >= 3
-          ? data.boundary : null;
-        setPlotBoundary(bnd);
+        setPlotBoundary(data.boundary ?? null);
         setBuildability({ ok: !!data.is_buildable, reason: data.reason ?? "" });
-        // Always set a valid area so UI never shows "—"
-        setPlotArea(data.area_sqm ? Math.round(data.area_sqm) : 200);
+        if (data.area_sqm) setPlotArea(Math.round(data.area_sqm));
       } else {
-        setBuildability({ ok: true, reason: "Boundary service unavailable — using default area." });
-        setPlotArea(200);
+        setBuildability({ ok: true, reason: "Boundary check unavailable — proceeding." });
       }
-    } catch (boundaryErr) {
-      // Boundary failure is non-fatal — analysis can still proceed with coordinates
-      setBuildability({ ok: true, reason: "Boundary service unavailable — using coordinates only." });
-      setPlotArea(200);
+    } catch {
+      setBuildability({ ok: true, reason: "Boundary check unavailable — proceeding." });
     }
 
     setStage("ready");
@@ -132,8 +123,9 @@ export default function MapPage() {
         setLrResult(data);
         // If we got a boundary back, use it as the plot boundary
         if (data.boundary && data.boundary.length >= 3) {
-          // boundary is already [[lon,lat]] — MapComponent handles flip internally
-          setPlotBoundary(data.boundary);
+          // boundary is [[lon,lat],...] — convert to [[lat,lon]] for MapComponent
+          const converted = data.boundary.map((c: number[]) => [c[1], c[0]]);
+          setPlotBoundary(converted);
           if (data.area_sqm) setPlotArea(data.area_sqm);
           if (!selectedLat && data.boundary[0]) {
             setSelectedLocation(data.boundary[0][1], data.boundary[0][0]);
@@ -191,16 +183,7 @@ export default function MapPage() {
       await new Promise(r => setTimeout(r, 500));
       router.push(`/analysis/${currentPlotId}`);
     } catch (e: unknown) {
-      let msg = "Analysis failed";
-      if (e instanceof Error) {
-        if (e.message.includes("Network Error") || e.message.includes("ERR_CONNECTION_REFUSED") || e.message.includes("ECONNREFUSED")) {
-          msg = "Cannot reach backend — start it with: cd backend && uvicorn main:app --reload --port 8000";
-        } else if (e.message.includes("timeout") || e.message.includes("408")) {
-          msg = "Analysis timed out (slow APIs). Click Retry — it will be faster on second attempt.";
-        } else {
-          msg = e.message;
-        }
-      }
+      const msg = e instanceof Error ? e.message : "Analysis failed — is backend running on port 8000?";
       setError(msg);
       setStage("ready");
     } finally {

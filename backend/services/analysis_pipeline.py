@@ -171,34 +171,11 @@ async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> An
     loop = asyncio.get_running_loop()
 
     # Run all layers concurrently — each has its own internal try/except
-    # Run each independently so one slow API doesn't kill everything
-    async def _safe_seg():
-        try:
-            return await loop.run_in_executor(None, run_segmentation, lat, lon)
-        except Exception as e:
-            logger.warning(f"Segmentation gather failed ({e})")
-            return _synthetic_seg(lat, lon)
-
-    async def _safe_trees():
-        try:
-            return await loop.run_in_executor(None, run_tree_detection, lat, lon)
-        except Exception as e:
-            logger.warning(f"Tree detection gather failed ({e})")
-            return _synthetic_trees(lat, lon)
-
-    async def _safe_env():
-        try:
-            return await asyncio.wait_for(_fetch_env_data(lat, lon), timeout=45.0)
-        except asyncio.TimeoutError:
-            logger.warning("Env data fetch timed out after 45s, using synthetic")
-            return _synthetic_env(lat, lon)
-        except Exception as e:
-            logger.warning(f"Env data fetch failed ({e}), using synthetic")
-            return _synthetic_env(lat, lon)
-
     try:
         seg, trees, env_data = await asyncio.gather(
-            _safe_seg(), _safe_trees(), _safe_env()
+            loop.run_in_executor(None, run_segmentation, lat, lon),
+            loop.run_in_executor(None, run_tree_detection, lat, lon),
+            _fetch_env_data(lat, lon),
         )
     except Exception as e:
         logger.error(f"Gather failed entirely ({e}), using all-synthetic data")
@@ -209,7 +186,7 @@ async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> An
     flood = run_flood_model(env_data)
     build = run_buildability_model(env_data, flood)
 
-    # DB persist — completely non-fatal, never raises
+    # DB persist — non-fatal
     try:
         existing = await db.execute(
             select(PlotRecord).where(PlotRecord.plot_id == plot_id)
