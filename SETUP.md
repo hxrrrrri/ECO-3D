@@ -1,6 +1,6 @@
-# ECO-3D Studio — Setup & Deployment Guide
+# ECO-3D Studio — Complete Setup & Deployment Guide
 
-Complete installation instructions from zero to production.
+> Comprehensive installation instructions from zero to production.
 
 ---
 
@@ -12,25 +12,26 @@ Complete installation instructions from zero to production.
 4. [Frontend Setup — Next.js 14](#4-frontend-setup--nextjs-14)
 5. [Real-Time Data APIs — No Keys Required](#5-real-time-data-apis--no-keys-required)
 6. [ML Model Weights (Optional)](#6-ml-model-weights-optional)
-7. [PostgreSQL + PostGIS (Production)](#7-postgresql--postgis-production)
-8. [Docker Compose — Full Stack](#8-docker-compose--full-stack)
-9. [Running Tests](#9-running-tests)
-10. [Production Deployment](#10-production-deployment)
-11. [Troubleshooting](#11-troubleshooting)
+7. [Training Scripts](#7-training-scripts)
+8. [PostgreSQL + PostGIS (Production)](#8-postgresql--postgis-production)
+9. [Docker Compose — Full Stack](#9-docker-compose--full-stack)
+10. [Running Tests](#10-running-tests)
+11. [Production Deployment](#11-production-deployment)
+12. [Troubleshooting](#12-troubleshooting)
 
 ---
 
 ## 1. Prerequisites
 
-| Tool | Minimum Version | Check |
+| Tool | Minimum Version | Check Command |
 |---|---|---|
 | Python | 3.11+ | `python3 --version` |
 | Node.js | 18+ | `node --version` |
 | npm | 9+ | `npm --version` |
 | Git | any | `git --version` |
-| Docker (optional) | 24+ | `docker --version` |
+| Docker | 24+ (optional) | `docker --version` |
 
-No API keys are required for the core real-time data pipeline. All seven environmental data APIs (Open-Elevation, Open-Meteo, SoilGrids, NASA POWER, GloFAS, OSM Overpass, NOAA formula) are free and key-free.
+**No API keys are required.** All seven environmental data APIs (Open-Elevation, Open-Meteo, SoilGrids, NASA POWER, GloFAS, OSM Overpass, NOAA formula) are free and keyless.
 
 ---
 
@@ -38,20 +39,22 @@ No API keys are required for the core real-time data pipeline. All seven environ
 
 ```
 ECO-3D/
-├── frontend/        Next.js 14 app
-├── backend/         FastAPI + AI pipeline
-├── scripts/         ML training scripts
-├── docker-compose.yml
-├── .env.example
+├── frontend/           Next.js 14 app
+├── backend/            FastAPI + AI pipeline
+├── scripts/            ML training scripts
+├── data/               Synthetic training datasets
+├── .env.example        Environment variable template
 ├── README.md
-└── SETUP.md
+├── SETUP.md
+├── FIXES.md
+└── ARCHITECTURE.md
 ```
 
 ---
 
 ## 3. Backend Setup — Python / FastAPI
 
-### 3.1 Clone & create virtual environment
+### 3.1 Clone & Create Virtual Environment
 
 ```bash
 git clone https://github.com/your-org/eco-3d.git
@@ -61,25 +64,22 @@ python3 -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
 ```
 
-### 3.2 Install dependencies
+### 3.2 Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Key packages installed:
+This installs the full stack including optional ML packages (PyTorch, XGBoost, Ultralytics). If you want a minimal install without ML packages:
 
-```
-fastapi==0.110.0          uvicorn[standard]==0.29.0
-sqlalchemy[asyncio]==2.0  aiosqlite==0.20.0
-pydantic==2.7.0           python-jose[cryptography]==3.3.0
-bcrypt==4.1.2             httpx==0.27.0
-torch==2.3.0              torchvision==0.18.0
-ultralytics==8.2.0        xgboost==2.0.3
-python-multipart==0.0.9   sse-starlette==2.1.0
+```bash
+# Minimal install — app runs with physics-based fallbacks
+pip install fastapi uvicorn[standard] sqlalchemy[asyncio] aiosqlite \
+            pydantic pydantic-settings python-dotenv httpx pillow numpy \
+            python-jose[cryptography] bcrypt sse-starlette python-multipart
 ```
 
-### 3.3 Configure environment
+### 3.3 Configure Environment
 
 ```bash
 cp ../.env.example .env
@@ -94,39 +94,47 @@ SECRET_KEY=your-secret-here          # generate: openssl rand -hex 32
 
 # Optional — defaults work without these
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
-MAPBOX_TOKEN=                        # leave blank to use OSM tiles
-WEIGHTS_DIR=training/weights         # path to ML model weights
+MAPBOX_TOKEN=                        # leave blank to use free OSM tiles
+WEIGHTS_DIR=training/weights         # path to ML model weights directory
 ```
 
-### 3.4 Initialise database & run
+### 3.4 Initialise Database & Run
 
 ```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-On first startup the app creates the SQLite database and all tables automatically. You should see:
+On first startup, SQLAlchemy creates the SQLite database file and all tables automatically. Expected output:
 
 ```
-INFO: Database tables created/verified
-INFO: ECO-3D API v2.1.0 — real-time data mode active
-INFO: Application startup complete.
-INFO: Uvicorn running on http://0.0.0.0:8000
+INFO:     Database tables created/verified
+INFO:     ECO-3D backend ready
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 ```
 
-Verify: `curl http://localhost:8000/health` → `{"status":"ok","version":"2.1.0"}`
+Verify the health endpoint:
 
-### 3.5 Backend dependencies explained
+```bash
+curl http://localhost:8000/health
+# → {"status":"ok","version":"2.0.0"}
+```
 
-**Core real-time data fetching** — `httpx` (async HTTP client) with per-API timeout tuning:
-- Open-Elevation: 12 s timeout (5-point DEM lookup)
-- Open-Meteo Forecast: 12 s (real-time wind)
-- Open-Meteo ERA5 Climate: 20 s (30-year monthly aggregation)
-- SoilGrids ISRIC REST v2: 15 s (6 soil property layers)
-- NASA POWER API: 20 s (365 daily observations)
-- Open-Meteo GloFAS: 12 s (90-day discharge forecast)
-- OSM Overpass: 14 s (spatial water feature query)
+### 3.5 Backend Dependency Details
 
-All calls fire concurrently via `asyncio.gather()`. Total Layer 2 latency is bounded by the slowest single API (~15–20 s worst case), not the sum.
+**Core async HTTP (`httpx`)** — Per-API timeout configuration:
+
+| API | Timeout | Notes |
+|---|---|---|
+| Open-Elevation | 12 s | 5-point DEM lookup |
+| Open-Meteo Forecast | 12 s | Real-time wind |
+| Open-Meteo ERA5 Climate | 20 s | 30-year monthly aggregation |
+| SoilGrids ISRIC REST v2 | 15 s | 6 soil property layers |
+| NASA POWER API | 20 s | 365 daily observations |
+| Open-Meteo GloFAS | 12 s | 90-day discharge forecast |
+| OSM Overpass | 14 s | Spatial water feature query |
+
+All calls run concurrently via `asyncio.gather()`. Total Layer 2 latency equals the slowest single API call (~15–20 s worst case), **not** the sum.
 
 ---
 
@@ -149,11 +157,11 @@ echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
 Optional additions to `.env.local`:
 
 ```env
-NEXT_PUBLIC_MAPBOX_TOKEN=pk.eyJ1...   # for satellite tile quality upgrade
+NEXT_PUBLIC_MAPBOX_TOKEN=pk.eyJ1...      # for high-res satellite tiles
 NEXT_PUBLIC_APP_NAME=ECO-3D Studio
 ```
 
-### 4.3 Run development server
+### 4.3 Development Server
 
 ```bash
 npm run dev
@@ -161,7 +169,7 @@ npm run dev
 
 Navigate to [http://localhost:3000](http://localhost:3000).
 
-### 4.4 Build for production
+### 4.4 Production Build
 
 ```bash
 npm run build
@@ -172,10 +180,8 @@ npm run start
 
 ## 5. Real-Time Data APIs — No Keys Required
 
-All seven APIs used for environmental data are free and require no registration or API key. Here is what each does and how to verify it independently:
-
 ### Open-Elevation (SRTM 30m DEM)
-Provides elevation in metres at any lat/lon. The pipeline queries 5 points (centre + N/S/E/W) to compute slope via the max rise-over-run.
+
 ```bash
 curl "https://api.open-elevation.com/api/v1/lookup" \
   -H "Content-Type: application/json" \
@@ -184,75 +190,134 @@ curl "https://api.open-elevation.com/api/v1/lookup" \
 ```
 
 ### Open-Meteo Forecast (Real-time wind)
-Current wind speed (m/s) and direction (°) at 10 m above ground.
+
 ```bash
 curl "https://api.open-meteo.com/v1/forecast?latitude=10&longitude=76.3&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&forecast_days=1"
 ```
 
 ### Open-Meteo Climate — ERA5 (30-year rainfall normals)
-Monthly precipitation_sum aggregated to annual total (mm/yr).
+
 ```bash
 curl "https://climate-api.open-meteo.com/v1/climate?latitude=10&longitude=76.3&start_date=1991-01-01&end_date=2020-12-31&monthly=precipitation_sum&models=ERA5"
 ```
 
-### SoilGrids REST v2 — ISRIC / Wageningen University (soil profile)
-Six soil properties at 0–5 cm depth: clay, sand, silt (g/kg), phh2o (pH×10), soc (dg/kg), bdod (cg/cm³). Resolution: 250 m global.
+### SoilGrids REST v2 — ISRIC / Wageningen University
+
 ```bash
 curl "https://rest.isric.org/soilgrids/v2.0/properties/query?lon=76.3&lat=10&property=clay&property=sand&property=silt&property=phh2o&property=soc&property=bdod&depth=0-5cm&value=mean"
 ```
 
-SoilGrids unit conversions applied by the pipeline:
-- `clay_pct = clay_raw / 10`   (g/kg → %)
-- `soil_ph  = phh2o_raw / 10`  (pH×10 → pH)
-- `org_carbon = soc_raw / 10`  (dg/kg → g/kg)
+**Unit conversions applied by pipeline:**
+- `clay_pct = clay_raw / 10` (g/kg → %)
+- `soil_ph  = phh2o_raw / 10` (pH×10 → pH)
+- `org_carbon = soc_raw / 10` (dg/kg → g/kg)
 - `bulk_density = bdod_raw / 100` (cg/cm³ → g/cm³)
 
-USDA Texture Triangle classification maps clay/sand/silt % to a texture name (Sandy Loam, Loam, Clay Loam, Clay, etc.) and a binary `soil_buildable` flag.
-
 ### NASA POWER API (NDVI proxy + solar radiation)
-Daily shortwave radiation (ALLSKY_SFC_SW_DWN) and photosynthetically active radiation (CLRSKY_SFC_PAR_TOT) over the past 365 days. NDVI is estimated as: `FPAR = (avg_PAR × 0.45) / (avg_SW × 0.48)` → `NDVI ≈ FPAR × 0.72 + 0.05`.
+
 ```bash
 curl "https://power.larc.nasa.gov/api/temporal/daily/point?parameters=ALLSKY_SFC_SW_DWN,CLRSKY_SFC_PAR_TOT&community=AG&longitude=76.3&latitude=10&start=20240101&end=20241231&format=JSON"
 ```
 
-### Open-Meteo GloFAS — EU Copernicus (river discharge 90-day forecast)
-River discharge (m³/s) forecast for 90 days. Peak and mean values mapped to a GloFAS flood index (0–1) via logarithmic thresholds. Returns null for plots far from any river system.
+NDVI proxy calculation:
+```python
+FPAR  = (avg_PAR × 0.45) / (avg_SW × 0.48)
+NDVI ≈ FPAR × 0.72 + 0.05
+```
+
+### Open-Meteo GloFAS — EU Copernicus (river discharge)
+
 ```bash
 curl "https://flood-api.open-meteo.com/v1/flood?latitude=10&longitude=76.3&daily=river_discharge&forecast_days=90"
 ```
 
 ### OSM Overpass API (distance to water)
-Queries rivers, streams, canals, wetlands, lakes within 5 km. Computes Haversine distance to nearest centroid.
+
 ```bash
 curl -X POST "https://overpass-api.de/api/interpreter" \
   -d 'data=[out:json];way["waterway"~"^(river|stream)$"](9.95,76.25,10.05,76.35);out center;'
 ```
 
 ### NOAA Astronomical Formula (sun hours)
-No network call. Computed from site latitude and Julian day number using the sunrise equation: `cos(hour_angle) = −tan(φ) × tan(δ)` where δ = 23.45° × sin(360/365 × (DOY − 81)).
+
+No network call. Computed from site latitude and Julian day number:
+
+```python
+decl   = 23.45 × sin(360/365 × (DOY − 81))    # declination degrees
+cos_ha = −tan(φ) × tan(decl)                   # hour angle cosine
+sun_h  = 2 × acos(cos_ha) / 15                 # hours of daylight
+```
 
 ---
 
 ## 6. ML Model Weights (Optional)
 
-The physics-based `compute_flood_risk()` and `compute_buildability()` functions run without any ML weights and produce accurate results for real data. ML model weights provide an optional second opinion.
+The physics-based `compute_flood_risk()` and `compute_buildability()` functions produce accurate results without any ML weights. ML weights provide a second opinion / hybrid output.
 
-### 6.1 Directory structure
+### Directory Structure
 
 ```
-backend/training/weights/
-├── flood_model.json            XGBoost booster (if trained)
-└── buildability_model.pt       PyTorch MLP state dict (if trained)
+backend/
+├── ai/
+│   ├── flood/weights/
+│   │   ├── flood_xgboost.pkl
+│   │   ├── flood_model.pkl
+│   │   └── flood_metrics.json
+│   └── buildability/weights/
+│       ├── buildability_mlp.pkl
+│       ├── buildability_model.pkl
+│       └── buildability_metrics.json
+└── training/weights/
+    ├── flood_xgboost.pkl       (symlink / copy)
+    └── buildability_mlp.pkl    (symlink / copy)
 ```
 
-### 6.2 Train flood model (XGBoost, ~10 seconds)
+Pre-trained weights **are included** in the repository at `backend/ai/flood/weights/` and `backend/ai/buildability/weights/`.
+
+### Verify Models Load
 
 ```bash
 cd backend
-python scripts/train_flood_model.py
+python -c "
+from ai.flood.model import predict_flood_probability
+print('Flood model OK')
+from ai.buildability.buildability_model import BuildabilityModel
+print('Buildability model OK')
+"
 ```
 
-Generates 2 000 physics-informed synthetic samples:
+---
+
+## 7. Training Scripts
+
+Training scripts are located in `scripts/`. Run from the project root.
+
+### Prerequisites
+
+```bash
+pip install -r scripts/requirements_training.txt
+# or: pip install xgboost scikit-learn torch numpy pandas matplotlib
+```
+
+### Train Flood Model (XGBoost, ~10 seconds)
+
+```bash
+python scripts/train_flood_model.py
+# optional: python scripts/train_flood_model.py --samples 5000 --estimators 300
+```
+
+Expected output:
+
+```
+Training XGBoost flood model on 2000 synthetic samples...
+  Train RMSE: 0.038   R²: 0.946
+  Test  RMSE: 0.042   R²: 0.941
+Model saved → backend/ai/flood/weights/flood_xgboost.pkl
+Metrics → backend/ai/flood/weights/flood_metrics.json
+```
+
+Physics-informed synthetic data generation formula:
+
 ```python
 P(flood) = 0.40 × max(0, 1 − elev/100)
          + 0.15 × max(0, 1 − slope/30)
@@ -263,46 +328,35 @@ P(flood) = 0.40 × max(0, 1 − elev/100)
          + ε,    ε ~ N(0, 0.05)
 ```
 
-Expected output:
-```
-Training XGBoost flood model on 2000 synthetic samples...
-  Train RMSE: 0.038   R²: 0.946
-  Test  RMSE: 0.042   R²: 0.941
-Model saved to training/weights/flood_model.json
-```
-
-### 6.3 Train buildability model (PyTorch MLP, ~30 seconds)
+### Train Buildability Model (PyTorch MLP, ~30 seconds)
 
 ```bash
 python scripts/train_buildability_model.py
+# optional: python scripts/train_buildability_model.py --samples 5000 --epochs 300 --plot
 ```
 
-Architecture: `Linear(6→64) → ReLU → Dropout(0.1) → Linear(64→128) → ReLU → Dropout(0.1) → Linear(128→64) → ReLU → Linear(64→1)`. Total params: 17 217.
+Architecture: `Linear(6→64) → ReLU → Dropout(0.1) → Linear(64→128) → ReLU → Dropout(0.1) → Linear(128→64) → ReLU → Linear(64→1)` — Total: 17,217 parameters.
 
 Expected output:
+
 ```
 Epoch 100/200  Loss: 38.42
 Epoch 200/200  Loss: 14.87
 Test MAE: 4.2 points   R²: 0.912
-Model saved to training/weights/buildability_model.pt
+Model saved → backend/ai/buildability/weights/buildability_mlp.pkl
 ```
 
-### 6.4 Verify models load
+### Evaluate All Models
 
 ```bash
-python -c "
-from ai.flood.model import predict_flood_probability
-from ai.buildability.buildability_model import predict_buildability_score
-print('Flood:', predict_flood_probability({'elevation':15,'slope':2,'rainfall_mm':2800,'ndvi':0.6,'clay_fraction':0.28,'distance_to_water_m':300}))
-print('Build: OK')
-"
+python scripts/evaluate_models.py
 ```
 
 ---
 
-## 7. PostgreSQL + PostGIS (Production)
+## 8. PostgreSQL + PostGIS (Production)
 
-### 7.1 Install PostgreSQL 16 + PostGIS 3.4
+### Install PostgreSQL 16 + PostGIS 3.4
 
 **Ubuntu/Debian:**
 ```bash
@@ -314,7 +368,7 @@ sudo apt install postgresql-16 postgresql-16-postgis-3 -y
 brew install postgresql@16 postgis
 ```
 
-**Docker (recommended for production):**
+**Docker (recommended):**
 ```bash
 docker run -d \
   --name eco3d-postgres \
@@ -325,7 +379,7 @@ docker run -d \
   postgis/postgis:16-3.4
 ```
 
-### 7.2 Create database
+### Create Database
 
 ```bash
 psql -U postgres -c "CREATE USER eco3d WITH PASSWORD 'yourpassword';"
@@ -334,26 +388,20 @@ psql -U eco3d -d eco3d -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 psql -U eco3d -d eco3d -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
 ```
 
-### 7.3 Update .env
+### Update .env
 
 ```env
 DATABASE_URL=postgresql+asyncpg://eco3d:yourpassword@localhost:5432/eco3d
 ```
 
-### 7.4 Run migrations
-
-```bash
-uvicorn main:app --host 0.0.0.0 --port 8000
-# Tables are created automatically on first startup via SQLAlchemy
-```
+Tables are created automatically on first startup via SQLAlchemy `create_all()`.
 
 ---
 
-## 8. Docker Compose — Full Stack
-
-### 8.1 docker-compose.yml
+## 9. Docker Compose — Full Stack
 
 ```yaml
+# docker-compose.yml (place in project root)
 version: "3.9"
 
 services:
@@ -399,43 +447,35 @@ volumes:
   pgdata:
 ```
 
-### 8.2 Launch
-
+**Launch:**
 ```bash
 SECRET_KEY=$(openssl rand -hex 32) docker compose up --build -d
-```
-
-View logs:
-```bash
 docker compose logs -f backend
-docker compose logs -f frontend
 ```
 
 ---
 
-## 9. Running Tests
+## 10. Running Tests
 
 ```bash
 cd backend
 pip install pytest pytest-asyncio httpx
 
-# Run all tests
+# All tests
 pytest tests/ -v
 
-# Test real-data pipeline specifically
-pytest tests/test_real_env_data.py -v
+# Unit tests only (mocked APIs)
+pytest tests/ -v -m "not integration"
 
-# Test with real API calls (slower, requires internet)
-pytest tests/test_real_env_data.py -v -m "integration"
+# Integration tests (live API calls, slower)
+pytest tests/ -v -m "integration"
 ```
-
-The test suite uses `pytest-asyncio` for async endpoint tests. API calls in unit tests are mocked with `httpx.MockTransport`; integration tests call live APIs.
 
 ---
 
-## 10. Production Deployment
+## 11. Production Deployment
 
-### 10.1 Backend — systemd service
+### Backend — systemd Service
 
 ```ini
 # /etc/systemd/system/eco3d-backend.service
@@ -462,7 +502,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now eco3d-backend
 ```
 
-### 10.2 Frontend — PM2
+### Frontend — PM2
 
 ```bash
 cd frontend && npm run build
@@ -470,14 +510,14 @@ pm2 start npm --name eco3d-frontend -- start -- -p 3000
 pm2 save && pm2 startup
 ```
 
-### 10.3 Nginx reverse proxy with SSE support
+### Nginx with SSE Support
 
 ```nginx
 server {
     listen 443 ssl;
     server_name your-domain.com;
 
-    # API + SSE
+    # API + SSE streams
     location /api/ {
         proxy_pass http://127.0.0.1:8000/;
         proxy_set_header Host $host;
@@ -499,48 +539,50 @@ server {
 }
 ```
 
-### 10.4 Rate limiting for external APIs
+### API Rate Limits & Caching Recommendations
 
-The seven real-time APIs are free but have fair-use rate limits. For high-traffic production:
-
-| API | Rate limit | Mitigation |
+| API | Free Rate Limit | Recommended Cache TTL |
 |---|---|---|
-| Open-Elevation | ~1 req/s | Redis cache on (lat, lon) pairs |
-| Open-Meteo | 10 000 req/day | Redis cache, 1-hr TTL |
-| SoilGrids ISRIC | ~1 req/s | Redis cache, 24-hr TTL (soil data is stable) |
-| NASA POWER | 1 000 req/day | Redis cache, 7-day TTL |
-| Open-Meteo GloFAS | 10 000 req/day | Redis cache, 6-hr TTL |
-| OSM Overpass | Fair use | Cache on bounding box |
+| Open-Elevation | ~1 req/s | 24 hr (terrain is static) |
+| Open-Meteo Forecast | 10,000 req/day | 1 hr |
+| Open-Meteo ERA5 | 10,000 req/day | 7 days (climatology) |
+| SoilGrids ISRIC | ~1 req/s | 30 days (soil is stable) |
+| NASA POWER | 1,000 req/day | 7 days |
+| Open-Meteo GloFAS | 10,000 req/day | 6 hr |
+| OSM Overpass | Fair use | 24 hr |
 
-Recommended caching layer: `redis-py` with `aioredis` for async cache lookups before each API call.
+Recommended caching layer: `aioredis` async Redis client with per-API TTL keyed on `(lat, lon)`.
 
 ---
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
-### Backend won't start: `ModuleNotFoundError: No module named 'torch'`
-PyTorch is large (~2 GB). The system runs without it — the physics-based fallback is always available.
+**`ModuleNotFoundError: No module named 'torch'`**
+PyTorch (~2 GB) is optional. The system runs without it.
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
-### SoilGrids returns 404 or empty data
-Some remote locations have no SoilGrids coverage (e.g., open ocean, ice sheets). The latitude-calibrated fallback activates automatically. Check logs for `[SoilGrids] fallback`.
+**SoilGrids returns 404 or empty data**
+Expected for open ocean, ice sheets, or extreme coordinates. The latitude-calibrated fallback activates automatically. Check logs for `[SoilGrids] fallback`.
 
-### GloFAS returns null / no discharge data
-Expected for locations far from any river system (deserts, highlands). The pipeline uses the full topo model without GloFAS blending. Check logs for `[GloFAS] Fallback`.
+**GloFAS returns null / no discharge data**
+Expected for locations far from any river (deserts, highlands). The full topo model is used without GloFAS blending. Look for `[GloFAS] Fallback` in logs.
 
-### NASA POWER returns fill values (-999)
-Occasionally happens at extreme latitudes or for recent dates not yet processed. The pipeline filters out fill values and uses the ecological fallback. Check logs for `[NASA POWER] failed`.
+**NASA POWER returns fill values (-999)**
+Occurs at extreme latitudes or for future dates not yet processed. The pipeline filters fill values. Check logs for `[NASA POWER] failed`.
 
-### Analysis takes > 30 seconds
-One or more external APIs are slow. All calls have hard timeouts (12–20 s each). The `asyncio.gather()` runs all concurrently so total wall time equals the slowest single call, not the sum. If consistently slow, enable Redis caching.
+**Analysis takes > 30 seconds**
+One or more APIs are slow. All calls have hard timeouts (12–20 s). Total time = slowest single call. Enable Redis caching for repeated coordinates.
 
-### SSE stream disconnects immediately
-Ensure Nginx has `proxy_buffering off` and `proxy_read_timeout 86400s`. Without this, Nginx buffers the stream and the browser never receives events.
+**SSE stream disconnects immediately**
+Nginx must have `proxy_buffering off` and `proxy_read_timeout 86400s`. Without these, Nginx buffers the stream and the browser never receives events.
 
-### `Database is locked` (SQLite dev mode)
-SQLite supports limited concurrent writes. Either restart the backend to clear connections, or switch to PostgreSQL for production.
+**`Database is locked` (SQLite dev mode)**
+SQLite has limited concurrent write support. Restart the backend to clear connections, or switch to PostgreSQL.
 
-### Frontend: `CORS error` calling backend
-Ensure `NEXT_PUBLIC_API_URL` in `.env.local` exactly matches the backend origin including port. The FastAPI CORS middleware is configured for `http://localhost:3000` in development.
+**Frontend: `CORS error` calling backend**
+Ensure `NEXT_PUBLIC_API_URL` in `.env.local` exactly matches the backend origin including port number. The FastAPI CORS middleware allows `"*"` in development.
+
+**Plot IDs with special characters break routing**
+Plot IDs are generated as `PLOT{abs_lat_int}X{abs_lon_int}` to avoid double-dashes from negative coordinates. If you see routing errors, check for legacy IDs using the old `PLOT-{lat}-{lon}` format.
