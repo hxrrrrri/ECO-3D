@@ -17,7 +17,7 @@ asyncpg>=0.29.0
 
 # Auth
 passlib[bcrypt]>=1.7.4
-python-jose[cryptography]>=3.3.0
+PyJWT>=2.8.0
 
 # Data / config
 pydantic>=2.7.0
