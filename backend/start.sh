@@ -1,17 +1,11 @@
 #!/bin/bash
-echo "=== Finding Python ==="
-which python || echo "python not in PATH"
-which python3 || echo "python3 not in PATH"
-which uvicorn || echo "uvicorn not in PATH"
-
-echo "=== Searching for uvicorn ==="
-find / -name "uvicorn" -type f 2>/dev/null | head -5
-
-echo "=== Searching for python ==="
-find / -name "python*" -type f 2>/dev/null | grep -v "__pycache__" | head -10
-
-echo "=== PATH ==="
-echo $PATH
-
-echo "=== Starting app ==="
-python3 -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Activate venv if it exists, otherwise use system Python
+if [ -f /app/.venv/bin/activate ]; then
+  echo "=== Activating venv ==="
+  source /app/.venv/bin/activate
+  uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+else
+  echo "=== Using mise Python directly ==="
+  /mise/installs/python/3.13.12/bin/pip install -r requirements.prod.txt --quiet
+  /mise/installs/python/3.13.12/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+fi
