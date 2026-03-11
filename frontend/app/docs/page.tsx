@@ -234,7 +234,6 @@ export default function DocsPage() {
                   {item.body.split("\n").map((line, j) => (
                     <p key={j} style={{
                       color: line.startsWith("•") ? "#94a3b8" : "#cbd5e1",
-                      fontSize: 14,
                       lineHeight: 1.8,
                       margin: line.startsWith("•") ? "4px 0" : "0 0 12px",
                       paddingLeft: line.startsWith("•") ? 8 : 0,
