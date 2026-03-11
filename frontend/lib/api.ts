@@ -33,6 +33,24 @@ export interface AnalysisResponse {
     soil_type: string;
     wind_direction: string;
     sun_exposure_hours: number;
+    // Extended real-time fields
+    wind_ms?: number;
+    solar_radiation_kwh?: number;
+    distance_to_water_m?: number;
+    // Soil profile (SoilGrids v2)
+    clay_pct?: number;
+    sand_pct?: number;
+    silt_pct?: number;
+    soil_ph?: number;
+    organic_carbon?: number;
+    bulk_density?: number;
+    soil_buildable?: boolean;
+    soil_source?: string;
+    // Flood data (GloFAS)
+    river_discharge_peak_m3s?: number;
+    river_discharge_mean_m3s?: number;
+    glofas_flood_index?: number;
+    flood_source?: string;
   };
   flood_probability: number;
   buildability_score: number;
