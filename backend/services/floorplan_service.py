@@ -32,6 +32,55 @@ WALL_EXT = 0.23
 WALL_INT = 0.12
 FLOOR_HEIGHT = 3.2
 
+
+# ---------------------------------------------------------------------------
+# Passive-solar / climate helpers
+# ---------------------------------------------------------------------------
+
+def _climate_profile(lat: float, sun_hours: float) -> str:
+    """Classify site climate for passive-design decisions.
+
+    Returns one of: 'hot', 'warm', 'temperate', 'cold'.
+    """
+    alat = abs(lat)
+    if alat < 23.5 and sun_hours >= 7.5:
+        return "hot"
+    if alat < 35 and sun_hours >= 6.0:
+        return "warm"
+    if alat < 60:
+        return "temperate"
+    return "cold"
+
+
+def _solar_noon_altitude(lat: float) -> Tuple[float, float]:
+    """Return (summer_noon_alt°, winter_noon_alt°) at solar noon.
+
+    Uses declination ±23.45° for solstices.
+    """
+    summer = 90.0 - abs(lat - 23.45)
+    winter = 90.0 - abs(lat + 23.45)
+    return max(5.0, min(90.0, summer)), max(5.0, min(90.0, winter))
+
+
+def _overhang_depth_ratio(lat: float) -> float:
+    """Horizontal overhang depth / window height to shade the summer sun."""
+    summer_alt, _ = _solar_noon_altitude(lat)
+    return round(1.0 / max(math.tan(math.radians(summer_alt)), 0.10), 2)
+
+
+def _wwr(climate: str, room_type: str) -> float:
+    """Window-to-wall ratio for a given climate and room type.
+
+    Hot climates get smaller windows to reduce heat gain; cold climates larger.
+    """
+    base = {
+        "living":   0.52, "dining": 0.44, "bedroom":  0.38,
+        "office":   0.32, "kitchen": 0.30, "bathroom": 0.18,
+        "utility":  0.14, "garage": 0.10, "puja_room": 0.22,
+    }.get(room_type, 0.25)
+    factor = {"hot": 0.75, "warm": 0.88, "temperate": 1.00, "cold": 1.20}.get(climate, 1.0)
+    return base * factor
+
 COMPASS = {
     "N": 0.0, "NNE": 22.5, "NE": 45.0, "ENE": 67.5,
     "E": 90.0, "ESE": 112.5, "SE": 135.0, "SSE": 157.5,
@@ -232,22 +281,48 @@ def _allocate_room_areas(room_types: List[str], total_area: float) -> Dict[str, 
     return grouped
 
 
-def _target_orientation(room_type: str, lat: float, wind_dir: str, edge_pref: str) -> str:
+def _target_orientation(room_type: str, lat: float, wind_dir: str, edge_pref: str,
+                        sun_hours: float = 8.0) -> str:
+    """Return preferred compass orientation for a room using passive-solar principles.
+
+    Rules:
+    - Living / Dining: face the sunny side (S in NH, N in SH); in hot climates face
+      the shaded side to reduce cooling load.
+    - Kitchen: windward edge for natural ventilation of cooking fumes; fallback east.
+    - Bedroom: east for gentle morning sun; avoids hot west afternoon sun.
+    - Office: shaded side (N in NH) for stable, glare-free diffuse light.
+    - Bathroom / Utility: windward for continuous ventilation.
+    - Garage: leeward (least sun/wind exposure needed).
+    """
     is_north = lat >= 0
     sunny = "S" if is_north else "N"
     shade = "N" if is_north else "S"
+    climate = _climate_profile(lat, sun_hours)
     windward = _deg_to_compass(_bearing(wind_dir))
     leeward = _deg_to_compass(_bearing(wind_dir) + 180.0)
-    edge_map = {"south": sunny, "north": shade, "east": "E", "west": "W", "windward": windward, "leeward": leeward}
+    edge_map = {
+        "south": sunny, "north": shade, "east": "E", "west": "W",
+        "windward": windward, "leeward": leeward,
+    }
     if room_type in ("living", "dining"):
+        # Hot climates: face shaded side to minimise solar heat gain in living areas
+        if climate == "hot":
+            return shade
         return edge_map.get(edge_pref, sunny)
     if room_type == "kitchen":
-        return "E" if is_north else "W"
+        # Windward placement removes cooking heat/odours; east is the gentle fallback
+        ww_edge = _compass_to_edge(windward)
+        return windward if ww_edge in ("east", "north") else "E"
     if room_type == "bedroom":
+        # East: morning sun for gentle wake-up, avoids hot west-afternoon heat
         return "E"
     if room_type == "office":
+        # Stable diffuse light — shaded (north NH / south SH)
         return shade
-    if room_type in ("utility", "garage"):
+    if room_type in ("bathroom", "utility"):
+        # Ventilation priority: windward edge
+        return windward
+    if room_type == "garage":
         return leeward
     return shade
 
@@ -562,6 +637,7 @@ def _layout_variant(
                             site.lat,
                             site.wind_dir,
                             config["public_edge"] if ROOM_RULES[room_type]["class"] == "public" else config["private_edge"],
+                            sun_hours=site.sun_hours,
                         ),
                     ),
                 )
@@ -573,7 +649,7 @@ def _overlap_len(a0: float, a1: float, b0: float, b1: float) -> float:
     return max(0.0, min(a1, b1) - max(a0, b0))
 
 
-def _explicit_geometry(rooms: List[Room]) -> Tuple[List[Wall], List[Door], List[Window]]:
+def _explicit_geometry(rooms: List[Room], site: Optional["SiteContext"] = None) -> Tuple[List[Wall], List[Door], List[Window]]:
     walls: List[Wall] = []
     doors: List[Door] = []
     windows: List[Window] = []
@@ -661,12 +737,36 @@ def _explicit_geometry(rooms: List[Room]) -> Tuple[List[Wall], List[Door], List[
                 doors.append(Door(id=f"door_{door_idx}", room_to=other.id or other.type, type="interior", x=round(door_x, 2), y=round(other.y, 2), width=0.9, orientation="horizontal", symbol="arc_swing", floor=room.floor))
                 door_idx += 1
 
+    # ---- Derive climate and wind context for eco-window placement ----
+    if site is not None:
+        climate = _climate_profile(site.lat, site.sun_hours)
+        wind_bearing = _bearing(site.wind_dir)
+        windward_edge = _compass_to_edge(_deg_to_compass(wind_bearing))
+        leeward_edge  = _compass_to_edge(_deg_to_compass(wind_bearing + 180.0))
+        lat = site.lat
+    else:
+        climate = "temperate"
+        wind_bearing = 180.0
+        windward_edge = "south"
+        leeward_edge  = "north"
+        lat = 10.0
+
+    # Perpendicular edges for cross-ventilation pairing
+    _PERP = {
+        "top":    ["left", "right"],
+        "bottom": ["left", "right"],
+        "left":   ["top", "bottom"],
+        "right":  ["top", "bottom"],
+    }
+    # Rooms that benefit from two-sided cross-ventilation
+    CROSS_VENT_ROOMS = {"living", "dining", "bedroom", "office", "kitchen"}
+
     for room in rooms:
         outer_edges = [
-            ("top", room.x, room.y, room.width),
-            ("bottom", room.x, room.y + room.height, room.width),
-            ("left", room.x, room.y, room.height),
-            ("right", room.x + room.width, room.y, room.height),
+            ("top",    room.x,              room.y,               room.width),
+            ("bottom", room.x,              room.y + room.height, room.width),
+            ("left",   room.x,              room.y,               room.height),
+            ("right",  room.x + room.width, room.y,               room.height),
         ]
         available_edges: List[Tuple[str, float]] = []
         for edge_name, x, y, span in outer_edges:
@@ -674,36 +774,79 @@ def _explicit_geometry(rooms: List[Room]) -> Tuple[List[Wall], List[Door], List[
             for other in rooms:
                 if other.id == room.id or other.floor != room.floor:
                     continue
-                if edge_name == "top" and abs(y - (other.y + other.height)) < 0.09 and _overlap_len(x, x + span, other.x, other.x + other.width) > 0.4:
+                if edge_name == "top"    and abs(y - (other.y + other.height)) < 0.09 and _overlap_len(x, x + span, other.x, other.x + other.width) > 0.4:
                     shared = True
                 if edge_name == "bottom" and abs(y - other.y) < 0.09 and _overlap_len(x, x + span, other.x, other.x + other.width) > 0.4:
                     shared = True
-                if edge_name == "left" and abs(x - (other.x + other.width)) < 0.09 and _overlap_len(y, y + span, other.y, other.y + other.height) > 0.4:
+                if edge_name == "left"   and abs(x - (other.x + other.width)) < 0.09 and _overlap_len(y, y + span, other.y, other.y + other.height) > 0.4:
                     shared = True
-                if edge_name == "right" and abs(x - other.x) < 0.09 and _overlap_len(y, y + span, other.y, other.y + other.height) > 0.4:
+                if edge_name == "right"  and abs(x - other.x) < 0.09 and _overlap_len(y, y + span, other.y, other.y + other.height) > 0.4:
                     shared = True
             if shared or span < 1.2:
                 continue
             available_edges.append((edge_name, span))
 
         edge_priority = preferred_edges(room)
+        placed_edges: List[str] = []
+
+        # --- PRIMARY WINDOW: solar/orientation optimised ---
         for edge_name, span in available_edges:
             if edge_name not in edge_priority:
                 continue
-            windows.append(
-                Window(
-                    id=f"window_{win_idx}",
-                    wall=f"{room.id}_{edge_name}",
-                    position=0.5,
-                    width=round(min(2.6, max(0.65, span * (0.46 if room.type in ('living', 'dining') else 0.34 if room.type in ('bedroom', 'office') else 0.22))), 2),
-                    floor=room.floor,
-                    sill_height=0.9,
-                    head_height=2.1,
-                )
-            )
+            win_w = round(min(3.0, max(0.65, span * _wwr(climate, room.type))), 2)
+            windows.append(Window(
+                id=f"window_{win_idx}",
+                wall=f"{room.id}_{edge_name}",
+                position=0.5,
+                width=win_w,
+                floor=room.floor,
+                sill_height=0.85,
+                head_height=2.10,
+            ))
             win_idx += 1
-            if room.type in ("living", "dining", "bedroom") and len(available_edges) > 1:
-                break
+            placed_edges.append(edge_name)
+            break  # one primary window per room
+
+        # --- CROSS-VENTILATION WINDOW: windward or perpendicular to primary ---
+        if room.type in CROSS_VENT_ROOMS and placed_edges:
+            primary = placed_edges[0]
+            # Prefer windward edge (creates through-breeze); fall back to perpendicular
+            cross_candidates = []
+            if windward_edge != primary:
+                cross_candidates.append(windward_edge)
+            cross_candidates += [e for e in _PERP.get(primary, []) if e != windward_edge]
+            for edge_name, span in available_edges:
+                if edge_name in cross_candidates and edge_name not in placed_edges:
+                    # Cross-vent window: slightly smaller, higher sill (privacy + warm-air exhaust)
+                    win_w = round(min(1.8, max(0.55, span * _wwr(climate, room.type) * 0.65)), 2)
+                    windows.append(Window(
+                        id=f"window_{win_idx}",
+                        wall=f"{room.id}_{edge_name}_vent",
+                        position=0.5,
+                        width=win_w,
+                        floor=room.floor,
+                        sill_height=1.20,  # high sill: warm air exits near ceiling
+                        head_height=2.10,
+                    ))
+                    win_idx += 1
+                    placed_edges.append(edge_name)
+                    break
+
+        # --- SERVICE ROOMS: single ventilation window on any available exterior wall ---
+        if room.type in ("bathroom", "utility") and not placed_edges:
+            for edge_name, span in available_edges:
+                if span >= 1.2:
+                    windows.append(Window(
+                        id=f"window_{win_idx}",
+                        wall=f"{room.id}_{edge_name}",
+                        position=0.5,
+                        width=round(min(0.9, max(0.45, span * 0.18)), 2),
+                        floor=room.floor,
+                        sill_height=1.50,  # Privacy height for wet rooms
+                        head_height=2.10,
+                    ))
+                    win_idx += 1
+                    break
 
     if rooms:
         entry = min((r for r in rooms if r.floor == 1), key=lambda r: (r.y, r.x))
@@ -712,43 +855,98 @@ def _explicit_geometry(rooms: List[Room]) -> Tuple[List[Wall], List[Door], List[
     return walls, doors, windows
 
 
-def _score_layout(rooms: List[Room], site: SiteContext, walls: List[Wall]) -> Dict[str, float]:
+def _score_layout(rooms: List[Room], site: SiteContext, walls: List[Wall],
+                  windows: Optional[List[Window]] = None) -> Dict[str, float]:
+    """Multi-factor eco score incorporating passive solar, cross-ventilation,
+    natural-light depth, service clustering, structural fitness, and compactness."""
     total_area = sum(r.width * r.height for r in rooms) or 1.0
-    public_rooms = [r for r in rooms if r.type in ("living", "dining", "kitchen", "office")]
+    climate = _climate_profile(site.lat, site.sun_hours)
+    public_rooms  = [r for r in rooms if r.type in ("living", "dining", "kitchen", "office")]
     private_rooms = [r for r in rooms if r.type in ("bedroom", "bathroom", "puja_room")]
+    habitable     = [r for r in rooms if r.type in ("living", "dining", "bedroom", "office")]
+
+    # ---- 1. Passive-solar score ----
+    # In hot climates the goal is to minimise solar gain; in cold/temperate, maximise.
+    sunny_bearing = _bearing("S" if site.lat >= 0 else "N")
+    shade_bearing  = _bearing("N" if site.lat >= 0 else "S")
     sunlight = 0.0
     for room in public_rooms:
-        target = _bearing("S" if site.lat >= 0 else "N")
-        sunlight += max(0.0, math.cos(math.radians(_adiff(_bearing(room.orientation), target))))
+        room_bearing = _bearing(room.orientation)
+        if climate == "hot":
+            # Reward facing shade side (cool living areas)
+            sunlight += max(0.0, math.cos(math.radians(_adiff(room_bearing, shade_bearing))))
+        else:
+            # Reward facing sunny side (passive solar heating / daylight)
+            sunlight += max(0.0, math.cos(math.radians(_adiff(room_bearing, sunny_bearing))))
     sunlight = sunlight / max(len(public_rooms), 1)
 
-    wind_target = _bearing(site.wind_dir)
-    ventilation = 0.0
-    for room in public_rooms + private_rooms:
-        ventilation += max(0.0, math.cos(math.radians(_adiff(_bearing(room.orientation), wind_target))))
-    ventilation = ventilation / max(len(public_rooms) + len(private_rooms), 1)
+    # ---- 2. Cross-ventilation score ----
+    # Reward rooms that have windows on two non-parallel walls (≈ windward + leeward/perp)
+    cross_vent = 0.0
+    if windows:
+        wind_edge    = _compass_to_edge(_deg_to_compass(_bearing(site.wind_dir)))
+        opp_edge     = _compass_to_edge(_deg_to_compass(_bearing(site.wind_dir) + 180.0))
+        for room in habitable:
+            room_wins = {w.wall.split("_")[-1].replace("vent", "").strip("_")
+                         for w in windows if w.wall.startswith(room.id or room.type)}
+            has_windward = wind_edge in room_wins or opp_edge in room_wins
+            has_two_sides = len(room_wins - {""}) >= 2
+            cross_vent += 1.0 if (has_windward and has_two_sides) else (0.5 if has_two_sides else 0.0)
+        cross_vent /= max(len(habitable), 1)
+    else:
+        # Approximate: check room orientation alignment with wind axis
+        wind_target = _bearing(site.wind_dir)
+        for room in public_rooms + private_rooms:
+            cross_vent += max(0.0, math.cos(math.radians(_adiff(_bearing(room.orientation), wind_target))))
+        cross_vent /= max(len(public_rooms) + len(private_rooms), 1)
 
-    compactness = total_area / max((max(r.x + r.width for r in rooms) - min(r.x for r in rooms)) * (max(r.y + r.height for r in rooms) - min(r.y for r in rooms)), total_area)
+    # ---- 3. Natural-light depth ----
+    # Reward habitable rooms that are not excessively deep (daylight rule: depth ≤ 2.5× window wall)
+    light_score = 0.0
+    for room in habitable:
+        depth = min(room.width, room.height)
+        win_wall = max(room.width, room.height)
+        light_score += min(1.0, (win_wall * 2.5) / max(depth, 0.1)) * 0.5 + 0.5  # always at least 0.5
+    light_score = min(1.0, light_score / max(len(habitable), 1))
+
+    # ---- 4. Compactness (minimise heat-loss surface) ----
+    bbox_area = ((max(r.x + r.width for r in rooms) - min(r.x for r in rooms)) *
+                 (max(r.y + r.height for r in rooms) - min(r.y for r in rooms)))
+    compactness = total_area / max(bbox_area, total_area)
+
+    # ---- 5. Service clustering (shared plumbing wall, lower pipe runs) ----
     service_clustering = 0.0
     service_rooms = [r for r in rooms if r.type in ("kitchen", "bathroom", "utility")]
     if len(service_rooms) > 1:
         pairs = 0
-        dsum = 0.0
+        dsum  = 0.0
         for i, room in enumerate(service_rooms):
             for other in service_rooms[i + 1:]:
-                dsum += math.dist((room.x + room.width / 2, room.y + room.height / 2), (other.x + other.width / 2, other.y + other.height / 2))
+                dsum += math.dist(
+                    (room.x + room.width / 2, room.y + room.height / 2),
+                    (other.x + other.width / 2, other.y + other.height / 2),
+                )
                 pairs += 1
-        service_clustering = max(0.0, 1.0 - dsum / max(pairs * 12.0, 1.0))
-    structural = max(0.0, 1.0 - site.slope / 28.0) * 0.6 + max(0.0, 1.0 - site.flood_risk) * 0.4
-    facade = min(1.0, len([w for w in walls if w.type == "exterior"]) / max(len(rooms) * 2, 1))
-    eco = (0.26 * sunlight + 0.24 * ventilation + 0.16 * compactness + 0.14 * service_clustering + 0.12 * structural + 0.08 * facade)
+        service_clustering = max(0.0, 1.0 - dsum / max(pairs * 10.0, 1.0))
+
+    # ---- 6. Structural score ----
+    structural = (max(0.0, 1.0 - site.slope / 28.0) * 0.6 +
+                  max(0.0, 1.0 - site.flood_risk)    * 0.4)
+
+    # ---- Composite eco score ----
+    eco = (0.24 * sunlight
+         + 0.22 * cross_vent
+         + 0.18 * light_score
+         + 0.14 * compactness
+         + 0.12 * service_clustering
+         + 0.10 * structural)
     return {
-        "solar": round(sunlight, 3),
-        "ventilation": round(ventilation, 3),
+        "solar":       round(sunlight, 3),
+        "ventilation": round(cross_vent, 3),
         "compactness": round(compactness, 3),
-        "service": round(service_clustering, 3),
-        "structural": round(structural, 3),
-        "eco": round(min(0.99, eco), 3),
+        "service":     round(service_clustering, 3),
+        "structural":  round(structural, 3),
+        "eco":         round(min(0.99, eco), 3),
     }
 
 
@@ -799,8 +997,8 @@ async def generate_floor_plan(request: GenerateFloorPlanRequest, db: AsyncSessio
     variant_configs = _variant_configs_for_shape(request.plot_shape)
     for idx, config in enumerate(variant_configs, start=1):
         layout = _layout_variant(room_types, area_map, config, site, total_area, floors, request.plot_shape)
-        walls, doors, windows = _explicit_geometry(layout)
-        scores = _score_layout(layout, site, walls)
+        walls, doors, windows = _explicit_geometry(layout, site)
+        scores = _score_layout(layout, site, walls, windows)
         variant_area = round(sum(r.width * r.height for r in layout), 1)
         variants.append(
             FloorPlanVariant(

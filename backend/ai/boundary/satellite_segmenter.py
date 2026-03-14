@@ -174,23 +174,27 @@ def _soil_likelihood(img: np.ndarray, sx: int, sy: int) -> np.ndarray:
     water = ((h >= 175) & (h <= 275) & (s >= 15)).astype(np.float32)
     dark = (v < 13).astype(np.float32)
     bright = (v > 94).astype(np.float32)
-    neutral = (s < 17).astype(np.float32)
-    road = ((s < 18) & (v >= 18) & (v <= 64)).astype(np.float32)
-    roof_white = ((s < 16) & (v >= 78)).astype(np.float32)
+    # Expanded road detection: covers concrete (light grey) and asphalt (dark grey) roads
+    road = ((s < 28) & (v >= 10) & (v <= 85)).astype(np.float32)
+    # Dark asphalt / tarmac (very low value, low saturation)
+    asphalt = ((s < 18) & (v >= 8) & (v <= 48)).astype(np.float32)
+    # White/light roofs — lower threshold to catch pale concrete roofs
+    roof_white = ((s < 22) & (v >= 70)).astype(np.float32)
     roof_red = ((((h <= 15) | (h >= 345)) & (s >= 24) & (v >= 28))).astype(np.float32)
     roof_blue = ((h >= 180) & (h <= 245) & (s >= 18) & (v >= 28)).astype(np.float32)
-    concrete = ((neutral > 0) & (v >= 42) & (v <= 82) & (texture >= 0.42)).astype(np.float32)
-    manmade = np.maximum.reduce([road, roof_white, roof_red, roof_blue, concrete])
+    # Concrete: wider saturation/value range, lower texture threshold
+    concrete = ((s < 30) & (v >= 35) & (v <= 90) & (texture >= 0.36)).astype(np.float32)
+    manmade = np.maximum.reduce([road, asphalt, roof_white, roof_red, roof_blue, concrete])
 
     warm_bias = np.clip(warmth / seed_warmth, 0.0, 1.0)
     score = adaptive * 0.46 + np.maximum.reduce([prior_laterite, prior_beige, prior_bare]) * 0.28 + warm_bias * 0.26
     obstacle_penalty = np.maximum.reduce([
-        vegetation * 0.96,
-        water * 0.96,
-        dark * 0.72,
-        bright * 0.70,
-        manmade * 0.92,
-        np.clip(texture - 0.82, 0.0, 1.0) * 0.30,
+        vegetation * 0.97,
+        water * 0.97,
+        dark * 0.80,
+        bright * 0.76,
+        manmade * 1.00,   # full block: any detected road/building zeroes the score
+        np.clip(texture - 0.82, 0.0, 1.0) * 0.35,
     ])
     score *= (1.0 - obstacle_penalty)
     return np.clip(score, 0.0, 1.0)
@@ -200,12 +204,17 @@ def _manmade_mask(img: np.ndarray) -> np.ndarray:
     h, s, v = _rgb_to_hsv(img)
     gray = _grayscale(img)
     texture = _local_texture(gray)
-    road = ((s < 18) & (v >= 18) & (v <= 66)).astype(np.uint8)
-    roof_white = ((s < 16) & (v >= 78)).astype(np.uint8)
+    # Expanded road: concrete roads (light) + asphalt (dark-mid grey)
+    road = ((s < 28) & (v >= 10) & (v <= 85)).astype(np.uint8)
+    # Dark asphalt / tarmac
+    asphalt = ((s < 18) & (v >= 8) & (v <= 48)).astype(np.uint8)
+    # White/light rooftops (lowered threshold)
+    roof_white = ((s < 22) & (v >= 70)).astype(np.uint8)
     roof_red = ((((h <= 15) | (h >= 345)) & (s >= 24) & (v >= 28))).astype(np.uint8)
     roof_blue = ((h >= 180) & (h <= 245) & (s >= 18) & (v >= 28)).astype(np.uint8)
-    concrete = ((s < 22) & (v >= 42) & (v <= 82) & (texture >= 0.40)).astype(np.uint8)
-    return np.maximum.reduce([road, roof_white, roof_red, roof_blue, concrete]).astype(np.uint8)
+    # Concrete: wider value range, lower texture threshold
+    concrete = ((s < 30) & (v >= 35) & (v <= 90) & (texture >= 0.36)).astype(np.uint8)
+    return np.maximum.reduce([road, asphalt, roof_white, roof_red, roof_blue, concrete]).astype(np.uint8)
 
 
 def _binary_dilate(mask: np.ndarray, iterations: int = 1) -> np.ndarray:
@@ -247,7 +256,8 @@ def _expand_region(mask: np.ndarray, score: np.ndarray, edge: np.ndarray) -> np.
         return out
     region_scores = score[ys, xs]
     target = float(np.median(region_scores))
-    loose_thr = max(0.20, target - 0.12)
+    # Tightened expansion threshold: stops absorbing road/building edge pixels
+    loose_thr = max(0.32, target - 0.06)
     frontier = deque(zip(xs.tolist(), ys.tolist()))
     seen = set(frontier)
     while frontier:
@@ -260,7 +270,7 @@ def _expand_region(mask: np.ndarray, score: np.ndarray, edge: np.ndarray) -> np.
                 if out[ny, nx]:
                     frontier.append((nx, ny))
                     continue
-                if score[ny, nx] >= loose_thr and edge[ny, nx] <= 1.75:
+                if score[ny, nx] >= loose_thr and edge[ny, nx] <= 1.50:
                     out[ny, nx] = 1
                     frontier.append((nx, ny))
     return _cleanup(out)
@@ -289,12 +299,13 @@ def _region_grow(score: np.ndarray, edge: np.ndarray, sx: int, sy: int) -> np.nd
     mask[sy, sx] = 1
     while q:
         x, y = q.popleft()
-        local_thr = 0.23 if edge[y, x] < 0.85 else 0.32
+        # Raised thresholds: stop region growing at road/building edges more decisively
+        local_thr = 0.32 if edge[y, x] < 0.85 else 0.46
         for nx in range(max(0, x - 1), min(w, x + 2)):
             for ny in range(max(0, y - 1), min(h, y + 2)):
                 if mask[ny, nx]:
                     continue
-                if score[ny, nx] >= local_thr and edge[ny, nx] <= 1.55:
+                if score[ny, nx] >= local_thr and edge[ny, nx] <= 1.30:
                     mask[ny, nx] = 1
                     q.append((nx, ny))
     return _expand_region(_cleanup(mask), score, edge)
@@ -432,7 +443,10 @@ async def detect_plot_boundary(lat: float, lon: float) -> Tuple[Optional[List[Li
     soil_score = _soil_likelihood(img, sx, sy)
     region = _region_grow(soil_score, edges, sx, sy)
     obstacles = _manmade_mask(img)
-    region = np.where(obstacles > 0, 0, region).astype(np.uint8)
+    # Dilate obstacle mask by 4px to create a clear buffer zone around roads/buildings
+    # This prevents boundary polygon edges from bleeding onto adjacent roads/rooftops
+    obstacles_buffered = _binary_dilate(obstacles, 4)
+    region = np.where(obstacles_buffered > 0, 0, region).astype(np.uint8)
     region = _largest_component_with_seed(region, sx, sy)
     seed = (sx, sy) if region[sy, sx] else _nearest_positive(region, sx, sy)
     if seed is not None:
