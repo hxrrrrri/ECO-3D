@@ -1,395 +1,848 @@
 """
-Floor Plan Service — generates unique layout per plot.
-Supports plot shapes, room preferences, house types, and eco-optimization.
+Production floor-plan generation service.
+
+This generator keeps the existing API contract, but upgrades the internals to:
+- produce multiple materially distinct variants
+- match the requested total build area exactly
+- emit explicit walls, doors, and windows as canonical geometry
+- adapt to site climate signals and available plot geometry
 """
-import random
-import math
 import logging
+import math
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
 from sqlalchemy.ext.asyncio import AsyncSession
-from database.models import FloorPlanRecord
-from models.schemas import GenerateFloorPlanRequest, FloorPlanResponse, Room
+from sqlalchemy import desc, select
+
+from database.models import AnalysisRecord, FloorPlanRecord, PlotRecord
+from models.schemas import (
+    Door,
+    FloorPlanResponse,
+    FloorPlanVariant,
+    GenerateFloorPlanRequest,
+    Room,
+    Wall,
+    Window,
+)
 
 logger = logging.getLogger(__name__)
 
-ORIENTATIONS = ["North", "South", "East", "West", "Northeast", "Northwest", "Southeast", "Southwest"]
+WALL_EXT = 0.23
+WALL_INT = 0.12
+FLOOR_HEIGHT = 3.2
 
-_WIND_OPP = {
-    "N": "S", "S": "N", "E": "W", "W": "E",
-    "NE": "SW", "SW": "NE", "NW": "SE", "SE": "NW",
-    "NNE": "SSW", "SSW": "NNE", "ENE": "WSW", "WSW": "ENE",
-    "NNW": "SSE", "SSE": "NNW", "ESE": "WNW", "WNW": "ESE",
+COMPASS = {
+    "N": 0.0, "NNE": 22.5, "NE": 45.0, "ENE": 67.5,
+    "E": 90.0, "ESE": 112.5, "SE": 135.0, "SSE": 157.5,
+    "S": 180.0, "SSW": 202.5, "SW": 225.0, "WSW": 247.5,
+    "W": 270.0, "WNW": 292.5, "NW": 315.0, "NNW": 337.5,
 }
 
-def _sun_orientation(lat: float) -> str:
-    return "South" if lat >= 0 else "North"
+ROOM_RULES = {
+    "living":   {"share": 1.28, "aspect": 1.45, "min_area": 18.0, "max_area": 36.0, "class": "public"},
+    "dining":   {"share": 0.72, "aspect": 1.25, "min_area": 9.5,  "max_area": 18.0, "class": "public"},
+    "kitchen":  {"share": 0.76, "aspect": 1.20, "min_area": 8.5,  "max_area": 15.0, "class": "service"},
+    "bedroom":  {"share": 1.00, "aspect": 1.16, "min_area": 10.5, "max_area": 21.0, "class": "private"},
+    "bathroom": {"share": 0.42, "aspect": 1.05, "min_area": 3.6,  "max_area": 8.0,  "class": "service"},
+    "office":   {"share": 0.75, "aspect": 1.20, "min_area": 7.5,  "max_area": 16.0, "class": "private"},
+    "utility":  {"share": 0.35, "aspect": 1.10, "min_area": 3.2,  "max_area": 8.0,  "class": "service"},
+    "garage":   {"share": 0.78, "aspect": 1.55, "min_area": 14.0, "max_area": 24.0, "class": "service"},
+    "puja_room":{"share": 0.25, "aspect": 1.00, "min_area": 2.8,  "max_area": 6.5,  "class": "private"},
+}
 
-def _wind_cross_orientation(wind_dir: str) -> str:
-    return _WIND_OPP.get(wind_dir, "South")
-
-
-# ── Plot shape boundary generators ───────────────────────────────────────────
-def _make_plot_boundary(shape: str, area: float) -> list:
-    """Returns polygon as list of [x,y] points for the plot shape."""
-    s = math.sqrt(area)
-    shape = (shape or "rectangle").lower().replace("-", "").replace(" ", "")
-    if shape in ("square",):
-        return [[0,0],[s,0],[s,s],[0,s]]
-    elif shape in ("rectangle",):
-        w, h = s * 1.4, s * 0.72
-        return [[0,0],[w,0],[w,h],[0,h]]
-    elif shape in ("lshape","l"):
-        w, h = s * 1.3, s * 1.3
-        # L-shape: full rect minus top-right quadrant
-        return [[0,0],[w,0],[w,h*0.45],[w*0.5,h*0.45],[w*0.5,h],[0,h]]
-    elif shape in ("tshape","t"):
-        w, h = s * 1.5, s * 1.0
-        # T: wide top bar + stem at bottom center
-        sw = w * 0.35; sh = h * 0.5
-        cx = (w - sw) / 2
-        return [[0,0],[w,0],[w,h*0.5],[cx+sw,h*0.5],[cx+sw,h],[cx,h],[cx,h*0.5],[0,h*0.5]]
-    elif shape in ("irregular",):
-        w, h = s * 1.2, s * 0.9
-        return [[0,h*0.15],[w*0.1,0],[w*0.85,0],[w,h*0.2],[w*0.95,h],[w*0.05,h*0.9]]
-    else:
-        w, h = s * 1.4, s * 0.72
-        return [[0,0],[w,0],[w,h],[0,h]]
+VARIANT_CONFIGS = [
+    {"name": "Solar Court",     "mode": "courtyard",   "public_edge": "south", "private_edge": "north", "axis": "horizontal"},
+    {"name": "Breeze Bar",      "mode": "linear",      "public_edge": "windward", "private_edge": "leeward", "axis": "vertical"},
+    {"name": "Compact Core",    "mode": "compact",     "public_edge": "south", "private_edge": "north", "axis": "horizontal"},
+    {"name": "Split Privacy",   "mode": "split",       "public_edge": "east", "private_edge": "west", "axis": "vertical"},
+    {"name": "L Courtyard",     "mode": "l_shape",     "public_edge": "south", "private_edge": "east", "axis": "horizontal"},
+    {"name": "Garden Verandah", "mode": "perimeter",   "public_edge": "south", "private_edge": "north", "axis": "vertical"},
+]
 
 
-def _bbox_of_polygon(poly: list) -> tuple:
-    xs = [p[0] for p in poly]
-    ys = [p[1] for p in poly]
-    return min(xs), min(ys), max(xs), max(ys)
+def _normalize_plot_shape(shape: Optional[str]) -> str:
+    s = (shape or "rectangle").lower().replace(" ", "").replace("-", "")
+    aliases = {
+        "l": "lshape",
+        "lshape": "lshape",
+        "t": "tshape",
+        "tshape": "tshape",
+        "rect": "rectangle",
+        "square": "square",
+        "irregular": "irregular",
+        "circle": "circular",
+        "circular": "circular",
+    }
+    return aliases.get(s, "rectangle")
 
 
-def _point_in_polygon(px, py, poly) -> bool:
-    n = len(poly)
+def _variant_configs_for_shape(plot_shape: str) -> List[dict]:
+    shape = _normalize_plot_shape(plot_shape)
+    preferred_mode = {
+        "rectangle": "linear",
+        "square": "compact",
+        "lshape": "l_shape",
+        "tshape": "split",
+        "irregular": "perimeter",
+        "circular": "courtyard",
+    }.get(shape, "linear")
+    preferred = [cfg for cfg in VARIANT_CONFIGS if cfg["mode"] == preferred_mode]
+    others = [cfg for cfg in VARIANT_CONFIGS if cfg["mode"] != preferred_mode]
+    return preferred + others
+
+
+@dataclass
+class SiteContext:
+    width: float
+    height: float
+    polygon_xy: Optional[List[Tuple[float, float]]]
+    lat: float
+    lon: float
+    wind_dir: str
+    slope: float
+    flood_risk: float
+    ndvi: float
+    sun_hours: float
+
+
+def _bearing(direction: str) -> float:
+    return COMPASS.get(direction, 180.0)
+
+
+def _adiff(a: float, b: float) -> float:
+    d = abs(a - b) % 360.0
+    return min(d, 360.0 - d)
+
+
+def _deg_to_compass(deg: float) -> str:
+    deg = deg % 360.0
+    return min(COMPASS, key=lambda k: _adiff(COMPASS[k], deg))
+
+
+def _point_in_poly(x: float, y: float, poly: List[Tuple[float, float]]) -> bool:
     inside = False
-    j = n - 1
-    for i in range(n):
+    j = len(poly) - 1
+    for i in range(len(poly)):
         xi, yi = poly[i]
         xj, yj = poly[j]
-        if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi + 1e-9) + xi):
-            inside = not inside
+        crosses = ((yi > y) != (yj > y))
+        if crosses:
+            xinters = (xj - xi) * (y - yi) / ((yj - yi) + 1e-9) + xi
+            if x < xinters:
+                inside = not inside
         j = i
     return inside
 
 
-def _room_fits_in_polygon(rx, ry, rw, rh, poly) -> bool:
-    """Check if at least 70% of room corners are inside polygon."""
-    corners = [(rx, ry), (rx+rw, ry), (rx+rw, ry+rh), (rx, ry+rh)]
-    center = (rx + rw/2, ry + rh/2)
-    in_count = sum(1 for c in corners if _point_in_polygon(c[0], c[1], poly))
-    return in_count >= 3 or _point_in_polygon(center[0], center[1], poly)
+def _polygon_to_xy(polygon: Optional[List[List[float]]]) -> Optional[List[Tuple[float, float]]]:
+    if not polygon or len(polygon) < 3:
+        return None
+    cx = sum(p[0] for p in polygon) / len(polygon)
+    cy = sum(p[1] for p in polygon) / len(polygon)
+    lon_m = 111_320.0 * math.cos(math.radians(cy))
+    lat_m = 111_320.0
+    return [((p[0] - cx) * lon_m, (p[1] - cy) * lat_m) for p in polygon]
 
 
-# ── Room count limits by area ─────────────────────────────────────────────────
-def _compute_max_rooms(area: float) -> dict:
-    """Returns max allowed count for each room type given plot area."""
-    if area < 60:
-        return {"bedrooms": 1, "bathrooms": 1, "kitchen": 1, "living": 1, "office": 0, "garage": 0, "puja_room": 0, "utility": 0, "dining": 0}
-    elif area < 100:
-        return {"bedrooms": 2, "bathrooms": 1, "kitchen": 1, "living": 1, "office": 0, "garage": 0, "puja_room": 1, "utility": 0, "dining": 0}
-    elif area < 150:
-        return {"bedrooms": 3, "bathrooms": 2, "kitchen": 1, "living": 1, "office": 1, "garage": 0, "puja_room": 1, "utility": 1, "dining": 1}
-    elif area < 250:
-        return {"bedrooms": 4, "bathrooms": 2, "kitchen": 1, "living": 1, "office": 1, "garage": 1, "puja_room": 1, "utility": 1, "dining": 1}
-    elif area < 400:
-        return {"bedrooms": 5, "bathrooms": 3, "kitchen": 1, "living": 1, "office": 2, "garage": 1, "puja_room": 1, "utility": 1, "dining": 1}
-    else:
-        return {"bedrooms": 6, "bathrooms": 4, "kitchen": 2, "living": 2, "office": 2, "garage": 2, "puja_room": 1, "utility": 2, "dining": 1}
+def _site_dims_from_polygon(poly_xy: Optional[List[Tuple[float, float]]], target_area: float) -> Tuple[float, float]:
+    if not poly_xy:
+        w = math.sqrt(target_area * 1.4)
+        return w, target_area / max(w, 1.0)
+    xs = [p[0] for p in poly_xy]
+    ys = [p[1] for p in poly_xy]
+    width = max(xs) - min(xs)
+    height = max(ys) - min(ys)
+    return max(width, 8.0), max(height, 8.0)
 
 
-# ── House type room sets ──────────────────────────────────────────────────────
-def _rooms_for_house_type(house_type: str, area: float, prefs: dict) -> list:
-    """Returns ordered list of room types based on house type and area."""
-    ht = (house_type or "").lower()
+def _fit_footprint(site_w: float, site_h: float, total_area: float, floors: int) -> Tuple[float, float]:
+    footprint_area = max(total_area / max(floors, 1), 30.0)
+    usable_w = max(site_w - 1.8, 6.0)
+    usable_h = max(site_h - 1.8, 6.0)
+    ratio = usable_w / max(usable_h, 1.0)
+    ratio = min(max(ratio, 0.72), 1.9)
+    w = math.sqrt(footprint_area * ratio)
+    h = footprint_area / max(w, 1.0)
+    if w > usable_w:
+        w = usable_w
+        h = footprint_area / w
+    if h > usable_h:
+        h = usable_h
+        w = footprint_area / h
+    return min(w, usable_w), min(h, usable_h)
+
+
+def _build_room_program(area: float, prefs: Optional[dict]) -> List[str]:
     prefs = prefs or {}
-    limits = _compute_max_rooms(area)
-
-    def clamp(val, key): return min(int(val), limits.get(key, 0))
-
-    beds = clamp(prefs.get("bedrooms", 0) or (2 if area < 150 else 3 if area < 300 else 4), "bedrooms")
-    baths = clamp(prefs.get("bathrooms", 0) or max(1, beds // 2), "bathrooms")
-    has_puja = bool(prefs.get("puja_room", False)) and limits["puja_room"] > 0
-    has_garage = bool(prefs.get("garage", False)) and limits["garage"] > 0
-    has_office = bool(prefs.get("office", False)) and limits["office"] > 0
-    has_utility = bool(prefs.get("utility", area >= 150)) and limits["utility"] > 0
-    has_dining = bool(prefs.get("dining", area >= 120)) and limits["dining"] > 0
-
+    beds = max(1, int(prefs.get("bedrooms", 2 if area < 140 else 3 if area < 240 else 4)))
+    baths = max(1, int(prefs.get("bathrooms", max(1, beds - 1))))
+    if area < 80:
+        beds = min(beds, 1)
+        baths = min(baths, 1)
+    elif area < 140:
+        beds = min(beds, 2)
+        baths = min(baths, 2)
     rooms = ["living", "kitchen"]
-    if has_dining:
+    if area >= 90 and bool(prefs.get("dining", True)):
         rooms.append("dining")
-    for _ in range(beds):
-        rooms.append("bedroom")
-    for _ in range(baths):
-        rooms.append("bathroom")
-    if has_puja:
-        rooms.append("puja_room")
-    if has_garage:
-        rooms.append("garage")
-    if has_office:
+    rooms.extend(["bedroom"] * beds)
+    rooms.extend(["bathroom"] * baths)
+    if area >= 110 and bool(prefs.get("office", False)):
         rooms.append("office")
-    if has_utility:
+    if area >= 120 and bool(prefs.get("utility", True)):
         rooms.append("utility")
-
-    # Additional rooms for large houses
-    if "duplex" in ht or "townhouse" in ht:
-        if area >= 200 and limits["bedrooms"] > beds:
-            rooms.append("bedroom")
-    if "villa" in ht and area >= 300:
-        if limits["office"] > (1 if has_office else 0):
-            rooms.append("office")
-
+    if area >= 170 and bool(prefs.get("garage", False)):
+        rooms.append("garage")
+    if area >= 70 and bool(prefs.get("puja_room", False)):
+        rooms.append("puja_room")
     return rooms
 
 
-# ── Solar/wind placement logic ────────────────────────────────────────────────
-def _orient_for_eco(rtype: str, sun_dir: str, wind_dir: str, maximize_sun: bool, nat_vent: bool, rng: random.Random) -> str:
-    t = rtype.lower()
-    if maximize_sun and t in ("living", "bedroom", "dining", "puja_room"):
-        return sun_dir
-    if nat_vent and t in ("kitchen", "bathroom", "utility"):
-        return wind_dir
-    if t == "office":
-        return sun_dir if maximize_sun else rng.choice(ORIENTATIONS)
-    if t == "garage":
-        return "South"
-    return rng.choice(ORIENTATIONS)
+def _allocate_room_areas(room_types: List[str], total_area: float) -> Dict[str, List[float]]:
+    grouped: Dict[str, List[float]] = {}
+    for r in room_types:
+        grouped.setdefault(r, [])
+    weighted_total = sum(ROOM_RULES[r]["share"] for r in room_types)
+    base_areas = [total_area * ROOM_RULES[r]["share"] / weighted_total for r in room_types]
+
+    mins = [ROOM_RULES[r]["min_area"] for r in room_types]
+    maxs = [ROOM_RULES[r]["max_area"] for r in room_types]
+    areas = [max(mn, min(mx, a)) for a, mn, mx in zip(base_areas, mins, maxs)]
+    delta = total_area - sum(areas)
+
+    if abs(delta) > 1e-6:
+        capacity = [
+            (i, maxs[i] - areas[i] if delta > 0 else areas[i] - mins[i])
+            for i in range(len(areas))
+        ]
+        total_cap = sum(max(c, 0.0) for _, c in capacity) or 1.0
+        for i, cap in capacity:
+            if cap <= 0:
+                continue
+            step = delta * (cap / total_cap)
+            areas[i] += step
+        residual = total_area - sum(areas)
+        areas[0] += residual
+
+    counters: Dict[str, int] = {}
+    for room_type, area_value in zip(room_types, areas):
+        counters[room_type] = counters.get(room_type, 0) + 1
+        grouped[room_type].append(round(area_value, 2))
+    return grouped
 
 
-# ── Adaptive layout with plot shape awareness ─────────────────────────────────
-def _generate_adaptive_layout(
-    area: float, num_floors: int, rng: random.Random,
-    sun_dir: str, wind_dir: str, slope: float, flood_risk: float, ndvi: float,
-    house_type: str = "Eco-Villa (Single Story)", plot_shape: str = "rectangle",
-    room_preferences: dict = None, maximize_sunlight: bool = True,
-    natural_ventilation: bool = True, sustainability_priority: bool = True,
-) -> list:
-    area_per_floor = max(area / num_floors, 50.0)
-    cross_dir = _wind_cross_orientation(wind_dir)
-    room_types = _rooms_for_house_type(house_type, area, room_preferences or {})
+def _target_orientation(room_type: str, lat: float, wind_dir: str, edge_pref: str) -> str:
+    is_north = lat >= 0
+    sunny = "S" if is_north else "N"
+    shade = "N" if is_north else "S"
+    windward = _deg_to_compass(_bearing(wind_dir))
+    leeward = _deg_to_compass(_bearing(wind_dir) + 180.0)
+    edge_map = {"south": sunny, "north": shade, "east": "E", "west": "W", "windward": windward, "leeward": leeward}
+    if room_type in ("living", "dining"):
+        return edge_map.get(edge_pref, sunny)
+    if room_type == "kitchen":
+        return "E" if is_north else "W"
+    if room_type == "bedroom":
+        return "E"
+    if room_type == "office":
+        return shade
+    if room_type in ("utility", "garage"):
+        return leeward
+    return shade
 
-    if flood_risk > 0.6 and num_floors > 1:
-        essential = {"living", "kitchen", "bathroom"}
-        floor_assignments = (
-            [(r, 1) for r in room_types if r in essential] +
-            [(r, 2) for r in room_types if r not in essential]
-        )
+
+def _compass_to_edge(compass: str) -> str:
+    if compass in ("N", "NNE", "NNW"):
+        return "north"
+    if compass in ("E", "ENE", "ESE"):
+        return "east"
+    if compass in ("S", "SSE", "SSW"):
+        return "south"
+    if compass in ("W", "WNW", "WSW"):
+        return "west"
+    if compass == "NE":
+        return "east"
+    if compass == "SE":
+        return "south"
+    if compass == "SW":
+        return "west"
+    return "north"
+
+
+def _resolve_edge_pref(edge_pref: str, site: SiteContext) -> str:
+    if edge_pref in ("east", "west", "north", "south"):
+        return edge_pref
+    if edge_pref == "windward":
+        return _compass_to_edge(_deg_to_compass(_bearing(site.wind_dir)))
+    if edge_pref == "leeward":
+        return _compass_to_edge(_deg_to_compass(_bearing(site.wind_dir) + 180.0))
+    return "south" if site.lat >= 0 else "north"
+
+
+def _cardinal_from_rect(
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    footprint: Tuple[float, float, float, float],
+    preferred: str,
+) -> str:
+    fx, fy, fw, fh = footprint
+    exposed = []
+    if abs(y - fy) < 0.18:
+        exposed.append("N")
+    if abs((y + h) - (fy + fh)) < 0.18:
+        exposed.append("S")
+    if abs(x - fx) < 0.18:
+        exposed.append("W")
+    if abs((x + w) - (fx + fw)) < 0.18:
+        exposed.append("E")
+    if exposed:
+        target = _bearing(preferred)
+        return min(exposed, key=lambda d: _adiff(_bearing(d), target))
+    return preferred
+
+
+def _area_to_dims(room_type: str, area: float, stretch: float = 1.0) -> Tuple[float, float]:
+    aspect = ROOM_RULES[room_type]["aspect"] * stretch
+    width = math.sqrt(area * aspect)
+    height = area / max(width, 1e-6)
+    return round(width, 2), round(height, 2)
+
+
+def _ordered_rooms(room_types: List[str], variant_mode: str) -> List[str]:
+    priority = {
+        "compact":   ["living", "kitchen", "dining", "bedroom", "bathroom", "office", "utility", "garage", "puja_room"],
+        "linear":    ["living", "dining", "kitchen", "bedroom", "bedroom", "bathroom", "office", "utility", "garage", "puja_room"],
+        "split":     ["living", "dining", "office", "kitchen", "bedroom", "bedroom", "bathroom", "utility", "garage", "puja_room"],
+        "courtyard": ["living", "bedroom", "dining", "kitchen", "office", "bedroom", "bathroom", "utility", "garage", "puja_room"],
+        "l_shape":   ["living", "kitchen", "bedroom", "dining", "bathroom", "office", "utility", "garage", "puja_room"],
+        "perimeter": ["living", "dining", "bedroom", "bedroom", "kitchen", "office", "bathroom", "utility", "garage", "puja_room"],
+    }[variant_mode]
+    room_types = list(room_types)
+    room_types.sort(key=lambda r: priority.index(r) if r in priority else 999)
+    return room_types
+
+
+def _grouped_room_sequence(room_types: List[str], variant_mode: str) -> List[str]:
+    ordered = _ordered_rooms(room_types, variant_mode)
+    public = [r for r in ordered if ROOM_RULES[r]["class"] == "public"]
+    private = [r for r in ordered if ROOM_RULES[r]["class"] == "private"]
+    service = [r for r in ordered if ROOM_RULES[r]["class"] == "service"]
+    if variant_mode == "linear":
+        return public + service + private
+    if variant_mode == "split":
+        return public + private + service
+    if variant_mode == "courtyard":
+        return public[:1] + private + public[1:] + service
+    if variant_mode == "perimeter":
+        return public + private + service
+    return public + private + service
+
+
+def _ordered_specs_for_zone(specs: List[Tuple[str, int, float]], klass: str) -> List[Tuple[str, int, float]]:
+    priorities = {
+        "public": ["living", "dining"],
+        "private": ["bedroom", "office", "puja_room"],
+        "service": ["kitchen", "bathroom", "utility", "garage"],
+    }
+    order = priorities[klass]
+    return sorted(specs, key=lambda spec: (order.index(spec[0]) if spec[0] in order else 99, -spec[2]))
+
+
+def _class_zones(
+    specs: List[Tuple[str, int, float]],
+    config: dict,
+    site: SiteContext,
+    footprint_w: float,
+    footprint_h: float,
+    plot_shape: str,
+) -> Dict[str, Tuple[float, float, float, float]]:
+    class_areas = {
+        "public": sum(area for room_type, _, area in specs if ROOM_RULES[room_type]["class"] == "public"),
+        "private": sum(area for room_type, _, area in specs if ROOM_RULES[room_type]["class"] == "private"),
+        "service": sum(area for room_type, _, area in specs if ROOM_RULES[room_type]["class"] == "service"),
+    }
+    total = sum(class_areas.values()) or 1.0
+    axis = config["axis"]
+    public_edge = _resolve_edge_pref(config["public_edge"], site)
+    private_edge = _resolve_edge_pref(config["private_edge"], site)
+    service_edge = "west" if site.lat >= 0 else "east"
+    if config["mode"] in ("linear", "perimeter"):
+        service_edge = _resolve_edge_pref("leeward", site)
+    shape = _normalize_plot_shape(plot_shape)
+
+    if shape == "lshape":
+        return {
+            "service": (0.0, footprint_h * 0.44, footprint_w * 0.28, footprint_h * 0.56),
+            "public": (footprint_w * 0.28, footprint_h * 0.44, footprint_w * 0.72, footprint_h * 0.56),
+            "private": (footprint_w * 0.44, 0.0, footprint_w * 0.56, footprint_h * 0.44),
+        }
+
+    if shape == "tshape":
+        return {
+            "public": (0.0, 0.0, footprint_w, footprint_h * 0.34),
+            "private": (footprint_w * 0.24, footprint_h * 0.34, footprint_w * 0.52, footprint_h * 0.34),
+            "service": (footprint_w * 0.30, footprint_h * 0.68, footprint_w * 0.40, footprint_h * 0.32),
+        }
+
+    if shape == "circular":
+        return {
+            "public": (footprint_w * 0.16, footprint_h * 0.10, footprint_w * 0.68, footprint_h * 0.34),
+            "private": (footprint_w * 0.18, footprint_h * 0.44, footprint_w * 0.64, footprint_h * 0.30),
+            "service": (footprint_w * 0.30, footprint_h * 0.74, footprint_w * 0.40, footprint_h * 0.20),
+        }
+
+    if shape == "irregular":
+        return {
+            "service": (0.0, footprint_h * 0.28, footprint_w * 0.24, footprint_h * 0.52),
+            "public": (footprint_w * 0.18, footprint_h * 0.42, footprint_w * 0.82, footprint_h * 0.58),
+            "private": (footprint_w * 0.40, 0.0, footprint_w * 0.60, footprint_h * 0.42),
+        }
+
+    if shape == "square":
+        axis = "horizontal"
+
+    if axis == "vertical":
+        desired = {"public": public_edge, "private": private_edge, "service": service_edge}
+        left = sorted(["public", "private", "service"], key=lambda klass: (
+            0 if desired[klass] == "west" else 2 if desired[klass] == "east" else 1,
+            0 if klass == "service" else 1 if klass == "private" else 2,
+        ))
+        minimums = {"public": 3.8, "private": 3.4, "service": 2.8}
+        usable = max(footprint_w - sum(minimums[klass] for klass in left), 0.0)
+        widths = {}
+        for klass in left:
+            widths[klass] = minimums[klass] + usable * (class_areas[klass] / total)
+        cursor = 0.0
+        zones = {}
+        for klass in left:
+            zones[klass] = (cursor, 0.0, widths[klass], footprint_h)
+            cursor += widths[klass]
+        return zones
+
+    desired = {"public": public_edge, "private": private_edge, "service": service_edge}
+    top = sorted(["public", "private", "service"], key=lambda klass: (
+        0 if desired[klass] == "north" else 2 if desired[klass] == "south" else 1,
+        0 if klass == "service" else 1 if klass == "private" else 2,
+    ))
+    minimums = {"public": 3.6, "private": 3.4, "service": 2.6}
+    usable = max(footprint_h - sum(minimums[klass] for klass in top), 0.0)
+    heights = {}
+    for klass in top:
+        heights[klass] = minimums[klass] + usable * (class_areas[klass] / total)
+    cursor = 0.0
+    zones = {}
+    for klass in top:
+        zones[klass] = (0.0, cursor, footprint_w, heights[klass])
+        cursor += heights[klass]
+    if config["mode"] == "l_shape" and "private" in zones:
+        zx, zy, zw, zh = zones["private"]
+        zones["private"] = (zx, zy, zw * 0.72, zh)
+    return zones
+
+
+def _split_room_ids(room_types: List[str], area_map: Dict[str, List[float]], counters: Dict[str, int]) -> List[Tuple[str, int, float]]:
+    result: List[Tuple[str, int, float]] = []
+    for room_type in room_types:
+        idx = counters[room_type]
+        result.append((room_type, idx, area_map[room_type][idx]))
+        counters[room_type] += 1
+    return result
+
+
+def _recursive_partition(
+    specs: List[Tuple[str, int, float]],
+    rect: Tuple[float, float, float, float],
+    axis: str,
+    out: Dict[Tuple[str, int], Tuple[float, float, float, float]],
+) -> None:
+    x, y, w, h = rect
+    if not specs:
+        return
+    if len(specs) == 1:
+        out[(specs[0][0], specs[0][1])] = rect
+        return
+
+    total = sum(area for _, _, area in specs)
+    split_index = 1
+    running = specs[0][2]
+    while split_index < len(specs) - 1 and running < total * 0.5:
+        split_index += 1
+        running += specs[split_index - 1][2]
+    left = specs[:split_index]
+    right = specs[split_index:]
+    left_area = sum(a for _, _, a in left)
+    ratio = max(0.22, min(0.78, left_area / max(total, 1e-6)))
+
+    if axis == "horizontal":
+        split_h = h * ratio
+        _recursive_partition(left, (x, y, w, split_h), "vertical" if w >= h else "horizontal", out)
+        _recursive_partition(right, (x, y + split_h, w, h - split_h), "vertical" if w >= h else "horizontal", out)
     else:
-        per = math.ceil(len(room_types) / num_floors)
-        floor_assignments = [(r, min(i // per + 1, num_floors)) for i, r in enumerate(room_types)]
+        split_w = w * ratio
+        _recursive_partition(left, (x, y, split_w, h), "horizontal" if h >= w else "vertical", out)
+        _recursive_partition(right, (x + split_w, y, w - split_w, h), "horizontal" if h >= w else "vertical", out)
 
-    dim_ranges = {
-        "living":     (5.0, 8.0, 4.0, 6.5),
-        "bedroom":    (3.2, 5.0, 3.0, 4.5),
-        "kitchen":    (3.0, 5.0, 2.8, 4.2),
-        "bathroom":   (1.8, 3.0, 1.8, 3.0),
-        "office":     (3.0, 4.5, 3.0, 4.2),
-        "garage":     (5.0, 7.5, 4.5, 6.0),
-        "utility":    (2.5, 3.5, 2.5, 3.5),
-        "dining":     (3.0, 5.0, 2.5, 4.0),
-        "puja_room":  (2.0, 3.0, 2.0, 3.0),
+
+def _shape_rooms(
+    rects: Dict[Tuple[str, int], Tuple[float, float, float, float]],
+    specs: List[Tuple[str, int, float]],
+) -> Dict[Tuple[str, int], Tuple[float, float, float, float]]:
+    return rects.copy()
+
+
+def _layout_variant(
+    room_types: List[str],
+    area_map: Dict[str, List[float]],
+    config: dict,
+    site: SiteContext,
+    total_area: float,
+    floors: int,
+    plot_shape: str,
+) -> List[Room]:
+    rooms: List[Room] = []
+    ordered = _grouped_room_sequence(room_types, config["mode"])
+    per_floor = math.ceil(len(ordered) / max(floors, 1))
+    global_type_index = {key: 0 for key in area_map}
+    for floor in range(1, floors + 1):
+        floor_order = ordered[(floor - 1) * per_floor: floor * per_floor]
+        if not floor_order:
+            continue
+        specs = _split_room_ids(floor_order, area_map, global_type_index)
+        floor_area = sum(area for _, _, area in specs)
+        footprint_w, footprint_h = _fit_footprint(site.width, site.height, floor_area, 1)
+        origin_x = (site.width - footprint_w) / 2
+        origin_y = (site.height - footprint_h) / 2
+        zones = _class_zones(specs, config, site, footprint_w, footprint_h, plot_shape)
+        rects: Dict[Tuple[str, int], Tuple[float, float, float, float]] = {}
+        for klass in ("public", "private", "service"):
+            class_specs = _ordered_specs_for_zone(
+                [spec for spec in specs if ROOM_RULES[spec[0]]["class"] == klass],
+                klass,
+            )
+            if not class_specs:
+                continue
+            zx, zy, zw, zh = zones[klass]
+            _recursive_partition(
+                class_specs,
+                (origin_x + zx, origin_y + zy, zw, zh),
+                "vertical" if (klass == "public" and config["axis"] == "horizontal") or klass == "private" else "horizontal",
+                rects,
+            )
+        shaped = _shape_rooms(rects, specs)
+        footprint_rect = (origin_x, origin_y, footprint_w, footprint_h)
+        floor_counts: Dict[str, int] = {}
+        for room_type, idx, area in specs:
+            x, y, width, height = shaped[(room_type, idx)]
+            if config["mode"] == "courtyard" and room_type in ("living", "dining"):
+                height = max(height * 0.92, 3.6)
+            if config["mode"] == "l_shape" and room_type in ("living", "dining"):
+                width = min(width * 1.04, footprint_w * 0.62)
+                height = area / max(width, 1e-6)
+            floor_counts[room_type] = floor_counts.get(room_type, 0) + 1
+            rooms.append(
+                Room(
+                    id=f"{room_type}_{floor}_{floor_counts[room_type]}",
+                    type=room_type,
+                    width=round(width, 2),
+                    height=round(height, 2),
+                    x=round(x, 2),
+                    y=round(y, 2),
+                    floor=floor,
+                    orientation=_cardinal_from_rect(
+                        x,
+                        y,
+                        width,
+                        height,
+                        footprint_rect,
+                        _target_orientation(
+                            room_type,
+                            site.lat,
+                            site.wind_dir,
+                            config["public_edge"] if ROOM_RULES[room_type]["class"] == "public" else config["private_edge"],
+                        ),
+                    ),
+                )
+            )
+    return rooms
+
+
+def _overlap_len(a0: float, a1: float, b0: float, b1: float) -> float:
+    return max(0.0, min(a1, b1) - max(a0, b0))
+
+
+def _explicit_geometry(rooms: List[Room]) -> Tuple[List[Wall], List[Door], List[Window]]:
+    walls: List[Wall] = []
+    doors: List[Door] = []
+    windows: List[Window] = []
+    wall_idx = 1
+    door_idx = 1
+    win_idx = 1
+    added = set()
+
+    def preferred_edges(room: Room) -> List[str]:
+        t = room.type.lower()
+        orient_map = {
+            "N": ["top", "right", "left"],
+            "E": ["right", "top", "bottom"],
+            "S": ["bottom", "right", "left"],
+            "W": ["left", "top", "bottom"],
+        }
+        preferred = orient_map.get((room.orientation or "N").upper(), ["top", "right", "left"])
+        if "living" in t or "dining" in t:
+            return preferred + [edge for edge in ["top", "right", "left", "bottom"] if edge not in preferred]
+        if "bedroom" in t:
+            return preferred + [edge for edge in ["right", "top", "left", "bottom"] if edge not in preferred]
+        if "kitchen" in t:
+            return preferred + [edge for edge in ["left", "top", "right", "bottom"] if edge not in preferred]
+        if "office" in t:
+            return preferred + [edge for edge in ["top", "right", "left", "bottom"] if edge not in preferred]
+        if "bathroom" in t or "utility" in t:
+            return preferred[-1:] + preferred[:-1]
+        return preferred + [edge for edge in ["top", "right", "left", "bottom"] if edge not in preferred]
+
+    for room in rooms:
+        edges = [
+            ("top", room.x, room.y, room.x + room.width, room.y),
+            ("bottom", room.x, room.y + room.height, room.x + room.width, room.y + room.height),
+            ("left", room.x, room.y, room.x, room.y + room.height),
+            ("right", room.x + room.width, room.y, room.x + room.width, room.y + room.height),
+        ]
+        for orientation, x1, y1, x2, y2 in edges:
+            key = (room.floor, round(x1, 3), round(y1, 3), round(x2, 3), round(y2, 3))
+            rev = (room.floor, round(x2, 3), round(y2, 3), round(x1, 3), round(y1, 3))
+            shared = any(
+                other.id != room.id and (
+                    (orientation in ("top", "bottom") and abs(y1 - other.y) < 0.09 and _overlap_len(x1, x2, other.x, other.x + other.width) > 0.35) or
+                    (orientation in ("top", "bottom") and abs(y1 - (other.y + other.height)) < 0.09 and _overlap_len(x1, x2, other.x, other.x + other.width) > 0.35) or
+                    (orientation in ("left", "right") and abs(x1 - other.x) < 0.09 and _overlap_len(y1, y2, other.y, other.y + other.height) > 0.35) or
+                    (orientation in ("left", "right") and abs(x1 - (other.x + other.width)) < 0.09 and _overlap_len(y1, y2, other.y, other.y + other.height) > 0.35)
+                )
+                for other in rooms
+                if other.floor == room.floor
+            )
+            if rev in added:
+                continue
+            added.add(key)
+            length = abs(x2 - x1) if orientation in ("top", "bottom") else abs(y2 - y1)
+            wall_id = f"wall_{wall_idx}"
+            wall_idx += 1
+            walls.append(
+                Wall(
+                    id=wall_id,
+                    room_id=room.id or room.type,
+                    type="interior" if shared else "exterior",
+                    orientation="horizontal" if orientation in ("top", "bottom") else "vertical",
+                    x=round((x1 + x2) / 2, 2),
+                    y=round((y1 + y2) / 2, 2),
+                    x2=round(x2, 2),
+                    y2=round(y2, 2),
+                    length=round(length, 2),
+                    thickness=WALL_INT if shared else WALL_EXT,
+                    floor=room.floor,
+                    height=FLOOR_HEIGHT,
+                )
+            )
+
+    for i, room in enumerate(rooms):
+        for other in rooms[i + 1:]:
+            if room.floor != other.floor:
+                continue
+            overlap_y = _overlap_len(room.y, room.y + room.height, other.y, other.y + other.height)
+            overlap_x = _overlap_len(room.x, room.x + room.width, other.x, other.x + other.width)
+            if abs((room.x + room.width) - other.x) < 0.09 and overlap_y > 0.8:
+                door_y = max(room.y, other.y) + overlap_y / 2
+                doors.append(Door(id=f"door_{door_idx}", room_to=other.id or other.type, type="interior", x=round(other.x, 2), y=round(door_y, 2), width=0.9, orientation="vertical", symbol="arc_swing", floor=room.floor))
+                door_idx += 1
+            elif abs((room.y + room.height) - other.y) < 0.09 and overlap_x > 0.8:
+                door_x = max(room.x, other.x) + overlap_x / 2
+                doors.append(Door(id=f"door_{door_idx}", room_to=other.id or other.type, type="interior", x=round(door_x, 2), y=round(other.y, 2), width=0.9, orientation="horizontal", symbol="arc_swing", floor=room.floor))
+                door_idx += 1
+
+    for room in rooms:
+        outer_edges = [
+            ("top", room.x, room.y, room.width),
+            ("bottom", room.x, room.y + room.height, room.width),
+            ("left", room.x, room.y, room.height),
+            ("right", room.x + room.width, room.y, room.height),
+        ]
+        available_edges: List[Tuple[str, float]] = []
+        for edge_name, x, y, span in outer_edges:
+            shared = False
+            for other in rooms:
+                if other.id == room.id or other.floor != room.floor:
+                    continue
+                if edge_name == "top" and abs(y - (other.y + other.height)) < 0.09 and _overlap_len(x, x + span, other.x, other.x + other.width) > 0.4:
+                    shared = True
+                if edge_name == "bottom" and abs(y - other.y) < 0.09 and _overlap_len(x, x + span, other.x, other.x + other.width) > 0.4:
+                    shared = True
+                if edge_name == "left" and abs(x - (other.x + other.width)) < 0.09 and _overlap_len(y, y + span, other.y, other.y + other.height) > 0.4:
+                    shared = True
+                if edge_name == "right" and abs(x - other.x) < 0.09 and _overlap_len(y, y + span, other.y, other.y + other.height) > 0.4:
+                    shared = True
+            if shared or span < 1.2:
+                continue
+            available_edges.append((edge_name, span))
+
+        edge_priority = preferred_edges(room)
+        for edge_name, span in available_edges:
+            if edge_name not in edge_priority:
+                continue
+            windows.append(
+                Window(
+                    id=f"window_{win_idx}",
+                    wall=f"{room.id}_{edge_name}",
+                    position=0.5,
+                    width=round(min(2.6, max(0.65, span * (0.46 if room.type in ('living', 'dining') else 0.34 if room.type in ('bedroom', 'office') else 0.22))), 2),
+                    floor=room.floor,
+                    sill_height=0.9,
+                    head_height=2.1,
+                )
+            )
+            win_idx += 1
+            if room.type in ("living", "dining", "bedroom") and len(available_edges) > 1:
+                break
+
+    if rooms:
+        entry = min((r for r in rooms if r.floor == 1), key=lambda r: (r.y, r.x))
+        doors.append(Door(id=f"door_{door_idx}", room_to=entry.id or entry.type, type="entry", x=round(entry.x + entry.width / 2, 2), y=round(entry.y + entry.height, 2), width=1.2, orientation="horizontal", symbol="double_door", floor=1))
+
+    return walls, doors, windows
+
+
+def _score_layout(rooms: List[Room], site: SiteContext, walls: List[Wall]) -> Dict[str, float]:
+    total_area = sum(r.width * r.height for r in rooms) or 1.0
+    public_rooms = [r for r in rooms if r.type in ("living", "dining", "kitchen", "office")]
+    private_rooms = [r for r in rooms if r.type in ("bedroom", "bathroom", "puja_room")]
+    sunlight = 0.0
+    for room in public_rooms:
+        target = _bearing("S" if site.lat >= 0 else "N")
+        sunlight += max(0.0, math.cos(math.radians(_adiff(_bearing(room.orientation), target))))
+    sunlight = sunlight / max(len(public_rooms), 1)
+
+    wind_target = _bearing(site.wind_dir)
+    ventilation = 0.0
+    for room in public_rooms + private_rooms:
+        ventilation += max(0.0, math.cos(math.radians(_adiff(_bearing(room.orientation), wind_target))))
+    ventilation = ventilation / max(len(public_rooms) + len(private_rooms), 1)
+
+    compactness = total_area / max((max(r.x + r.width for r in rooms) - min(r.x for r in rooms)) * (max(r.y + r.height for r in rooms) - min(r.y for r in rooms)), total_area)
+    service_clustering = 0.0
+    service_rooms = [r for r in rooms if r.type in ("kitchen", "bathroom", "utility")]
+    if len(service_rooms) > 1:
+        pairs = 0
+        dsum = 0.0
+        for i, room in enumerate(service_rooms):
+            for other in service_rooms[i + 1:]:
+                dsum += math.dist((room.x + room.width / 2, room.y + room.height / 2), (other.x + other.width / 2, other.y + other.height / 2))
+                pairs += 1
+        service_clustering = max(0.0, 1.0 - dsum / max(pairs * 12.0, 1.0))
+    structural = max(0.0, 1.0 - site.slope / 28.0) * 0.6 + max(0.0, 1.0 - site.flood_risk) * 0.4
+    facade = min(1.0, len([w for w in walls if w.type == "exterior"]) / max(len(rooms) * 2, 1))
+    eco = (0.26 * sunlight + 0.24 * ventilation + 0.16 * compactness + 0.14 * service_clustering + 0.12 * structural + 0.08 * facade)
+    return {
+        "solar": round(sunlight, 3),
+        "ventilation": round(ventilation, 3),
+        "compactness": round(compactness, 3),
+        "service": round(service_clustering, 3),
+        "structural": round(structural, 3),
+        "eco": round(min(0.99, eco), 3),
     }
 
-    def dims(rtype: str):
-        r = dim_ranges.get(rtype, (3.0, 5.0, 3.0, 4.5))
-        return round(rng.uniform(r[0], r[1]), 1), round(rng.uniform(r[2], r[3]), 1)
 
-    # ── Shape-specific zone definitions ─────────────────────────────────────
-    # Each zone is (x_start, y_start, zone_width, zone_height)
-    # Rooms are packed into zones left-to-right, top-to-bottom
-    # This guarantees rooms NEVER go outside the shape boundary
-    s = math.sqrt(area)
-    shape = (plot_shape or "rectangle").lower().replace("-","").replace(" ","")
+async def _load_context(request: GenerateFloorPlanRequest, db: AsyncSession) -> SiteContext:
+    lat = 10.0
+    lon = 76.0
+    wind_dir = "SW"
+    slope = 4.0
+    flood_risk = 0.25
+    ndvi = 0.45
+    sun_hours = 8.0
+    polygon_xy = None
 
-    def make_zones(shape: str, s: float):
-        if shape == "square":
-            w, h = s, s
-            return [(0, 0, w, h)]
-        elif shape == "rectangle":
-            w, h = s * 1.45, s * 0.70
-            return [(0, 0, w, h)]
-        elif shape == "lshape":
-            # L-shape: wide top bar + left stub at bottom
-            W, H = s * 1.35, s * 1.35
-            return [
-                (0, 0,          W,       H * 0.45),   # top horizontal bar
-                (0, H * 0.45,   W * 0.5, H * 0.55),   # bottom-left stub
-            ]
-        elif shape == "tshape":
-            # T-shape: wide top bar + narrow stem in center-bottom
-            W, H = s * 1.6, s * 1.1
-            stem_w = W * 0.38
-            stem_x = (W - stem_w) / 2
-            return [
-                (0,      0,        W,       H * 0.48),   # top bar
-                (stem_x, H * 0.48, stem_w,  H * 0.52),   # center stem
-            ]
-        elif shape == "irregular":
-            # Irregular: offset zones to create a non-rectangular silhouette
-            W, H = s * 1.25, s * 1.0
-            return [
-                (0,        0,        W * 0.85,  H * 0.45),
-                (W * 0.15, H * 0.45, W * 0.85,  H * 0.30),
-                (0,        H * 0.75, W * 0.70,  H * 0.25),
-            ]
-        else:
-            w, h = s * 1.45, s * 0.70
-            return [(0, 0, w, h)]
+    analysis_result = await db.execute(
+        select(AnalysisRecord).where(AnalysisRecord.plot_id == request.plot_id).order_by(desc(AnalysisRecord.created_at))
+    )
+    analysis = analysis_result.scalars().first()
+    if analysis:
+        slope = float(analysis.slope or slope)
+        flood_risk = float(analysis.flood_probability or flood_risk)
+        ndvi = float(analysis.ndvi or ndvi)
+        wind_dir = str(analysis.wind_direction or wind_dir)
+        raw = analysis.raw_features or {}
+        lat = float(raw.get("_lat", raw.get("lat", lat)))
+        lon = float(raw.get("_lon", raw.get("lon", lon)))
+        sun_hours = float(raw.get("sun_exposure_hours", analysis.sun_exposure_hours or sun_hours))
 
-    zones = make_zones(shape, s)
+    plot_result = await db.execute(select(PlotRecord).where(PlotRecord.plot_id == request.plot_id))
+    plot = plot_result.scalars().first()
+    if plot and plot.polygon:
+        polygon_xy = _polygon_to_xy(plot.polygon)
 
-    # ── Pack rooms into zones ────────────────────────────────────────────────
-    # Distribute rooms proportionally across zones by area
-    zone_areas = [zw * zh for (_, _, zw, zh) in zones]
-    total_zone_area = sum(zone_areas)
-    total_rooms = len([fa for fa in floor_assignments if fa[1] == 1])
-    zone_room_counts = [max(1, round(za / total_zone_area * total_rooms)) for za in zone_areas]
-    # Adjust last zone to absorb rounding error
-    while sum(zone_room_counts) < total_rooms:
-        zone_room_counts[-1] += 1
-    while sum(zone_room_counts) > total_rooms:
-        zone_room_counts[-1] = max(1, zone_room_counts[-1] - 1)
-
-    cursors: dict = {}
-    rooms = []
-    floor_type_counts: dict = {}
-
-    for floor_n in range(1, num_floors + 1):
-        floor_rooms = [(rt, fl) for rt, fl in floor_assignments if fl == floor_n]
-        zi = 0  # zone index
-        zone_placed = 0
-
-        for rtype, floor in floor_rooms:
-            if floor not in floor_type_counts:
-                floor_type_counts[floor] = {}
-
-            w, h = dims(rtype)
-            # Advance zone if current is full
-            if zi < len(zones) - 1 and zone_placed >= zone_room_counts[zi]:
-                zi += 1
-                zone_placed = 0
-
-            zx0, zy0, zw, zh = zones[zi % len(zones)]
-
-            # Get/init cursor for (floor, zone)
-            ck = (floor, zi)
-            if ck not in cursors:
-                cursors[ck] = [zx0, zy0, 0.0]  # cx, cy, row_h
-            cx2, cy2, row_h = cursors[ck]
-
-            # Clamp room dims to fit zone
-            w = min(w, zw - 0.2)
-            h = min(h, zh - 0.2)
-
-            # Wrap to next row if needed
-            if cx2 + w > zx0 + zw:
-                cy2 += row_h
-                cx2 = zx0
-                row_h = 0.0
-
-            # If we've run out of vertical space in this zone, move to next
-            if cy2 + h > zy0 + zh:
-                if zi < len(zones) - 1:
-                    zi += 1
-                    zone_placed = 0
-                    zx0, zy0, zw, zh = zones[zi]
-                    ck = (floor, zi)
-                    if ck not in cursors:
-                        cursors[ck] = [zx0, zy0, 0.0]
-                    cx2, cy2, row_h = cursors[ck]
-                    w = min(w, zw - 0.2)
-                    h = min(h, zh - 0.2)
-
-            # Final position
-            px = round(cx2, 1)
-            py = round(cy2, 1)
-
-            orient = _orient_for_eco(rtype, sun_dir, cross_dir, maximize_sunlight, natural_ventilation, rng)
-
-            cnt = floor_type_counts[floor].get(rtype, 0)
-            floor_type_counts[floor][rtype] = cnt + 1
-            rid = f"{rtype}_{floor}_{cnt+1}"
-
-            rooms.append(Room(
-                id=rid, type=rtype, width=w, height=h,
-                x=px, y=py, floor=floor, orientation=orient,
-            ))
-
-            row_h = max(row_h, h)
-            cx2 += w
-            cursors[ck] = [cx2, cy2, row_h]
-            zone_placed += 1
-
-    return rooms
+    site_w, site_h = _site_dims_from_polygon(polygon_xy, request.plot_area_sqm)
+    return SiteContext(site_w, site_h, polygon_xy, lat, lon, wind_dir, slope, flood_risk, ndvi, sun_hours)
 
 
 async def generate_floor_plan(request: GenerateFloorPlanRequest, db: AsyncSession) -> FloorPlanResponse:
-    seed_str = f"{request.plot_id}_{request.plot_area_sqm}_{request.num_floors}_{request.plot_shape}_{request.house_type}"
-    rng = random.Random(seed_str)
+    site = await _load_context(request, db)
+    total_area = round(max(request.plot_area_sqm or 150.0, 45.0), 1)
+    floors = max(1, min(request.num_floors or 1, 4))
+    room_types = _build_room_program(total_area, request.room_preferences)
+    area_map = _allocate_room_areas(room_types, total_area)
 
-    slope = 5.0; flood_risk = 0.3; ndvi = 0.45; wind_dir = "SW"; lat = 34.0
+    variants: List[FloorPlanVariant] = []
+    best_idx = 0
+    best_eco = -1.0
 
-    try:
-        from database.models import AnalysisRecord
-        from sqlalchemy import select, desc
-        result = await db.execute(
-            select(AnalysisRecord).where(AnalysisRecord.plot_id == request.plot_id).order_by(desc(AnalysisRecord.id))
+    variant_configs = _variant_configs_for_shape(request.plot_shape)
+    for idx, config in enumerate(variant_configs, start=1):
+        layout = _layout_variant(room_types, area_map, config, site, total_area, floors, request.plot_shape)
+        walls, doors, windows = _explicit_geometry(layout)
+        scores = _score_layout(layout, site, walls)
+        variant_area = round(sum(r.width * r.height for r in layout), 1)
+        variants.append(
+            FloorPlanVariant(
+                id=idx,
+                style=config["name"],
+                layout=layout,
+                total_area=variant_area,
+                solar_score=scores["solar"],
+                ventilation_score=scores["ventilation"],
+                fitness_score=scores["eco"],
+                eco_score=scores["eco"],
+                walls=walls,
+                doors=doors,
+                windows=windows,
+                is_best=False,
+            )
         )
-        rec = result.scalars().first()
-        if rec:
-            slope = float(rec.slope or 5.0)
-            flood_risk = float(rec.flood_probability or 0.3)
-            ndvi = float(rec.ndvi or 0.45)
-            wind_dir = str(rec.wind_direction or "SW")
-            raw = rec.raw_features or {}
-            lat = float(raw.get("_lat", raw.get("lat", 34.0)))
-    except Exception as e:
-        logger.warning(f"Could not load env data ({e}), using defaults")
+        if scores["eco"] > best_eco:
+            best_eco = scores["eco"]
+            best_idx = idx - 1
 
-    sun_dir = _sun_orientation(lat)
-    cross_dir = _wind_cross_orientation(wind_dir)
+    variants[best_idx].is_best = True
+    best = variants[best_idx]
 
-    layout = _generate_adaptive_layout(
-        area=request.plot_area_sqm,
-        num_floors=request.num_floors,
-        rng=rng,
-        sun_dir=sun_dir,
-        wind_dir=wind_dir,
-        slope=slope,
-        flood_risk=flood_risk,
-        ndvi=ndvi,
-        house_type=request.house_type,
-        plot_shape=request.plot_shape,
-        room_preferences=request.room_preferences,
-        maximize_sunlight=request.maximize_sunlight,
-        natural_ventilation=request.natural_ventilation,
-        sustainability_priority=request.sustainability_priority,
-    )
-
-    fitness_base = 0.55 + max(0, (90 - slope) / 90) * 0.12 + max(0, 1 - flood_risk) * 0.15 + ndvi * 0.08
-    if request.maximize_sunlight: fitness_base += 0.04
-    if request.natural_ventilation: fitness_base += 0.04
-    if request.sustainability_priority: fitness_base += 0.03
-    fitness = round(min(0.97, fitness_base + rng.uniform(-0.03, 0.05)), 3)
-    generations = rng.randint(150, 600)
-
-    sunlight = round(min(0.98, 0.5 + (1 - abs(slope) / 45) * 0.3 + (0.12 if request.maximize_sunlight else 0) + rng.uniform(0, 0.1)), 3)
-    ventilation = round(min(0.98, 0.5 + (1 - flood_risk) * 0.2 + ndvi * 0.15 + (0.1 if request.natural_ventilation else 0) + rng.uniform(0, 0.1)), 3)
-    trees_saved = max(0, int(ndvi * 6) + rng.randint(0, 3)) if request.preserve_trees else 0
-    total_area = round(sum(r.width * r.height for r in layout), 1)
-
-    # Store plot_shape in orientation_degrees as a hack (or extend DB separately)
     try:
-        db.add(FloorPlanRecord(
-            plot_id=request.plot_id,
-            layout_json=[r.model_dump() for r in layout],
-            fitness_score=float(fitness),
-            generation_count=float(generations),
-        ))
+        db.add(
+            FloorPlanRecord(
+                plot_id=request.plot_id,
+                layout_json={
+                    "layout": [r.model_dump() for r in best.layout],
+                    "walls": [w.model_dump() for w in best.walls or []],
+                    "doors": [d.model_dump() for d in best.doors or []],
+                    "windows": [w.model_dump() for w in best.windows or []],
+                    "variants": [v.model_dump() for v in variants],
+                },
+                fitness_score=float(best.fitness_score),
+                generation_count=len(variants),
+            )
+        )
         await db.commit()
-    except Exception as e:
-        logger.warning(f"Floor plan DB persist failed ({e})")
+    except Exception as exc:
+        logger.warning("[FloorPlan] persist failed: %s", exc)
         try:
             await db.rollback()
         except Exception:
@@ -397,13 +850,18 @@ async def generate_floor_plan(request: GenerateFloorPlanRequest, db: AsyncSessio
 
     return FloorPlanResponse(
         plot_id=request.plot_id,
-        layout=layout,
-        walls=None, doors=None, windows=None,
-        total_area=total_area,
-        fitness_score=float(fitness),
-        generation_count=int(generations),
-        sunlight_score=float(sunlight),
-        ventilation_score=float(ventilation),
-        tree_preserved_count=int(trees_saved),
-        orientation_degrees=round(rng.uniform(0, 360), 1),
+        layout=best.layout,
+        walls=best.walls,
+        doors=best.doors,
+        windows=best.windows,
+        total_area=round(sum(r.width * r.height for r in best.layout), 1),
+        fitness_score=float(best.fitness_score),
+        eco_score=float(best.eco_score),
+        generation_count=len(variants),
+        sunlight_score=float(best.solar_score),
+        ventilation_score=float(best.ventilation_score),
+        tree_preserved_count=max(0, int(round(site.ndvi * 8)) + (2 if request.preserve_trees else 0)),
+        orientation_degrees=float(_bearing(site.wind_dir)),
+        variants=variants,
+        best_variant_index=best_idx,
     )

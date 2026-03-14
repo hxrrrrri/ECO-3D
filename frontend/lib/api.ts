@@ -72,9 +72,67 @@ export interface GenerateFloorPlanRequest {
   sustainability_priority?: boolean;
 }
 
+export interface FloorPlanVariant {
+  id: number;
+  style: string;
+  layout: Array<{
+    id?: string;
+    type: string;
+    width: number;
+    height: number;
+    x: number;
+    y: number;
+    floor: number;
+    orientation: string;
+  }>;
+  total_area: number;
+  solar_score: number;
+  ventilation_score: number;
+  fitness_score: number;
+  eco_score: number;
+  is_best: boolean;
+  walls?: Array<{
+    id?: string;
+    room_id: string;
+    type: string;
+    orientation: string;
+    x: number;
+    y: number;
+    x2?: number;
+    y2?: number;
+    length: number;
+    thickness: number;
+    floor: number;
+    height: number;
+  }>;
+  doors?: Array<{
+    id?: string;
+    room_to: string;
+    type: string;
+    x: number;
+    y: number;
+    width: number;
+    orientation: string;
+    symbol: string;
+    floor: number;
+    height: number;
+    wall_id?: string;
+  }>;
+  windows?: Array<{
+    id?: string;
+    wall: string;
+    position: number;
+    width: number;
+    floor: number;
+    sill_height: number;
+    head_height: number;
+  }>;
+}
+
 export interface FloorPlanResponse {
   plot_id: string;
   layout: Array<{
+    id?: string;
     type: string;
     width: number;
     height: number;
@@ -84,15 +142,20 @@ export interface FloorPlanResponse {
     orientation: string;
   }>;
   walls?: Array<{
-    room_id: string;
-    type: string;
-    orientation: string;
-    x: number;
-    y: number;
-    length: number;
-    thickness: number;
-  }>;
+      room_id: string;
+      type: string;
+      orientation: string;
+      x: number;
+      y: number;
+      x2?: number;
+      y2?: number;
+      length: number;
+      thickness: number;
+      floor: number;
+      height: number;
+    }>;
   doors?: Array<{
+    id?: string;
     room_to: string;
     type: string;
     x: number;
@@ -100,19 +163,29 @@ export interface FloorPlanResponse {
     width: number;
     orientation: string;
     symbol: string;
+    floor: number;
+    height: number;
+    wall_id?: string;
   }>;
   windows?: Array<{
+    id?: string;
     wall: string;
     position: number;
     width: number;
+    floor: number;
+    sill_height: number;
+    head_height: number;
   }>;
   total_area: number;
   fitness_score: number;
+  eco_score: number;
   generation_count: number;
   sunlight_score: number;
   ventilation_score: number;
   tree_preserved_count: number;
   orientation_degrees: number;
+  variants?: FloorPlanVariant[];
+  best_variant_index?: number;
 }
 
 export const analyzePlot = async (req: AnalyzePlotRequest): Promise<AnalysisResponse> => {

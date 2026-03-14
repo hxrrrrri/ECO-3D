@@ -97,6 +97,7 @@ class Room(BaseModel):
 
 
 class Wall(BaseModel):
+    id: Optional[str] = None
     room_id: str
     type: str
     orientation: str
@@ -104,9 +105,14 @@ class Wall(BaseModel):
     y: float
     length: float
     thickness: float
+    floor: int = 1
+    height: float = 3.2
+    x2: Optional[float] = None
+    y2: Optional[float] = None
 
 
 class Door(BaseModel):
+    id: Optional[str] = None
     room_to: str
     type: str
     x: float
@@ -114,12 +120,34 @@ class Door(BaseModel):
     width: float
     orientation: str
     symbol: str
+    floor: int = 1
+    height: float = 2.1
+    wall_id: Optional[str] = None
 
 
 class Window(BaseModel):
+    id: Optional[str] = None
     wall: str
     position: float
     width: float
+    floor: int = 1
+    sill_height: float = 0.9
+    head_height: float = 2.1
+
+
+class FloorPlanVariant(BaseModel):
+    id: int
+    style: str
+    layout: List[Room]
+    total_area: float
+    solar_score: float
+    ventilation_score: float
+    fitness_score: float
+    eco_score: float
+    is_best: bool
+    walls: Optional[List[Wall]] = None
+    doors: Optional[List[Door]] = None
+    windows: Optional[List[Window]] = None
 
 
 class FloorPlanResponse(BaseModel):
@@ -130,11 +158,14 @@ class FloorPlanResponse(BaseModel):
     windows: Optional[List[Window]] = None
     total_area: float
     fitness_score: float
+    eco_score: float
     generation_count: int
     sunlight_score: float
     ventilation_score: float
     tree_preserved_count: int
     orientation_degrees: float
+    variants: Optional[List[FloorPlanVariant]] = None
+    best_variant_index: Optional[int] = None
 
 
 class UserCreate(BaseModel):

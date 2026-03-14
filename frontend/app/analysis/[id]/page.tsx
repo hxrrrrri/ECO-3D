@@ -6,7 +6,10 @@ import { useParams, useRouter } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
 import { generateFloorPlan } from "@/lib/api";
 
-interface Room { type: string; width: number; height: number; x: number; y: number; floor: number; orientation: string; }
+interface Room { id?: string; type: string; width: number; height: number; x: number; y: number; floor: number; orientation: string; }
+interface Wall { id?: string; room_id: string; type: string; orientation: string; x: number; y: number; x2?: number; y2?: number; length: number; thickness: number; floor: number; }
+interface Door { id?: string; room_to: string; type: string; x: number; y: number; width: number; orientation: string; floor: number; }
+interface WindowEl { id?: string; wall: string; position?: number; width: number; floor: number; }
 interface Tree { lat: number; lon: number; confidence: number; }
 
 // ── Plot shape polygon generators ─────────────────────────────────────────────
@@ -93,8 +96,8 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
 }
 
 // ── Blueprint Canvas ──────────────────────────────────────────────────────────
-function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWindFlow, floorPlan, plotShape, plotArea, windDir }:
-  { rooms: Room[]; trees: Tree[]; lat: number; lon: number; zoom: number; showSolarPath: boolean; showWindFlow: boolean; floorPlan: any; plotShape: string; plotArea: number; windDir: string }) {
+function LegacyBlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, floorPlan, plotShape, plotArea, windDir }:
+  { rooms: Room[]; walls: Wall[]; doors: Door[]; windows: WindowEl[]; trees: Tree[]; lat: number; lon: number; zoom: number; showSolarPath: boolean; showWindFlow: boolean; floorPlan: any; plotShape: string; plotArea: number; windDir: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const timeRef = useRef<number>(0);
@@ -190,18 +193,15 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
     timeRef.current = t / 1000;
 
     // ── Background + grid ──
-    // Dark ECO-3D blueprint background
     ctx.fillStyle = "#0d1117";
     ctx.fillRect(0, 0, W, H);
-    // Blueprint grid
     const GRID = 22;
     ctx.strokeStyle = "rgba(13,242,242,0.06)"; ctx.lineWidth = 0.5;
-    for(let x=0;x<W;x+=GRID){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
-    for(let y=0;y<H;y+=GRID){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
-    // Stronger major grid lines every 5
+    for(let gx=0;gx<W;gx+=GRID){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
+    for(let gy=0;gy<H;gy+=GRID){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
     ctx.strokeStyle = "rgba(13,242,242,0.11)"; ctx.lineWidth = 0.8;
-    for(let x=0;x<W;x+=GRID*5){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
-    for(let y=0;y<H;y+=GRID*5){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+    for(let gx=0;gx<W;gx+=GRID*5){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
+    for(let gy=0;gy<H;gy+=GRID*5){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
 
     if (rooms.length === 0) {
       ctx.fillStyle = "#0df2f2"; ctx.font = "bold 14px 'Space Grotesk', sans-serif";
@@ -212,411 +212,264 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
       return;
     }
 
-    const SCALE = zoom;
-    const OWT = Math.max(8, zoom * 0.45);
-    const IWT = Math.max(4, zoom * 0.2);
-    const shape = plotShape.toLowerCase().replace(/[-\s]/g,"");
-
-    // ── Sort rooms ────────────────────────────────────────────────────────────
+    // ── USE BACKEND COORDINATES DIRECTLY ──────────────────────────────────────
+    // r.x, r.y, r.width, r.height are the authoritative layout positions.
+    // The canvas NEVER re-lays rooms — it only scales and offsets them.
     const floor1 = rooms.filter(r => (r.floor ?? 1) === 1);
-    const ORDER = ["living","kitchen","dining","bedroom","bedroom","bedroom","bathroom","puja_room","office","utility","garage"];
-    const sorted = [...floor1].sort((a,b)=>{
-      const ai=ORDER.findIndex(o=>a.type.toLowerCase().includes(o.replace("_","")));
-      const bi=ORDER.findIndex(o=>b.type.toLowerCase().includes(o.replace("_","")));
-      return (ai<0?99:ai)-(bi<0?99:bi);
-    });
-    // ── Standard room sizes ───────────────────────────────────────────────────
-    const normSz = (r: Room): {w:number;h:number} => {
-      const t = r.type.toLowerCase();
-      if(t.includes("living"))   return {w:5.5, h:5.0};
-      if(t.includes("kitchen"))  return {w:4.0, h:3.5};
-      if(t.includes("dining"))   return {w:3.8, h:3.5};
-      if(t.includes("bedroom"))  return {w:4.0, h:3.8};
-      if(t.includes("bathroom")) return {w:2.4, h:2.2};
-      if(t.includes("puja"))     return {w:2.5, h:2.5};
-      if(t.includes("office"))   return {w:3.5, h:3.2};
-      if(t.includes("garage"))   return {w:5.5, h:5.0};
-      if(t.includes("utility"))  return {w:2.8, h:2.5};
-      return {w:3.5, h:3.2};
+    if (floor1.length === 0) return;
+
+    // Bounding box from backend coordinates
+    const allRX = floor1.flatMap(r => [r.x, r.x + r.width]);
+    const allRY = floor1.flatMap(r => [r.y, r.y + r.height]);
+    const minRX = Math.min(...allRX), maxRX = Math.max(...allRX);
+    const minRY = Math.min(...allRY), maxRY = Math.max(...allRY);
+    const totalW_m = maxRX - minRX;
+    const totalH_m = maxRY - minRY;
+
+    // Scale to fit canvas with margins
+    const MARGIN = 80;
+    const SCALE = Math.min((W - MARGIN*2) / Math.max(totalW_m, 0.1), (H - MARGIN*2) / Math.max(totalH_m, 0.1));
+    const bw = totalW_m * SCALE;
+    const bh = totalH_m * SCALE;
+    const offX = (W - bw) / 2;
+    const offY = (H - bh) / 2 + 10;
+    const OWT = Math.max(6, SCALE * 0.4);
+    const IWT = Math.max(3, SCALE * 0.15);
+
+    // Helper: metres → canvas pixels
+    const px = (x: number) => offX + (x - minRX) * SCALE;
+    const py = (y: number) => offY + (y - minRY) * SCALE;
+    const ps = (v: number) => v * SCALE;
+
+    const ROOM_COLORS: Record<string,{bg:string;border:string;label:string}> = {
+      living:    {bg:"rgba(11,200,200,0.13)",  border:"#0bc8c8", label:"LIVING ROOM"},
+      bedroom:   {bg:"rgba(74,157,232,0.13)",  border:"#4a9de8", label:"BEDROOM"},
+      kitchen:   {bg:"rgba(44,180,110,0.13)",  border:"#2cb46e", label:"KITCHEN"},
+      bathroom:  {bg:"rgba(155,114,212,0.13)", border:"#9b72d4", label:"BATHROOM"},
+      office:    {bg:"rgba(232,195,58,0.13)",  border:"#e8c33a", label:"STUDY"},
+      garage:    {bg:"rgba(143,160,160,0.13)", border:"#8fa0a0", label:"GARAGE"},
+      utility:   {bg:"rgba(224,128,80,0.13)",  border:"#e08050", label:"UTILITY"},
+      dining:    {bg:"rgba(232,122,58,0.13)",  border:"#e87a3a", label:"DINING"},
+      puja_room: {bg:"rgba(200,160,32,0.13)",  border:"#c8a020", label:"PUJA ROOM"},
     };
-
-    // ── ZONE-BASED layout engine ──────────────────────────────────────────────
-    // Define rectangular zones per shape. Rooms packed left→right, top→bottom inside each zone.
-    // Zone = [x0, y0, zoneWidth, zoneHeight] in metres
-    type Zone = [number,number,number,number];
-    let shapZones: Zone[];
-    const n = sorted.length;
-    if(shape==="lshape") {
-      shapZones = [[0,0,14,4.5],[0,4.5,7,5.5]];
-    } else if(shape==="tshape") {
-      shapZones = [[0,0,16,4.5],[5,4.5,6,5.5]];
-    } else if(shape==="irregular") {
-      shapZones = [[0,0,12,4],[1.5,4,10,4],[0,8,9,4]];
-    } else if(shape==="square") {
-      const S = Math.ceil(Math.sqrt(n+1))*4.5;
-      shapZones = [[0,0,S,S]];
-    } else {
-      // Rectangle: 3 horizontal bands
-      shapZones = [[0,0,16,4.5],[0,4.5,16,4.5],[0,9,16,4]];
-    }
-
-    // Distribute rooms to zones by area proportion
-    const zAreas = shapZones.map(([,,w,h])=>w*h);
-    const totalZA = zAreas.reduce((a,b)=>a+b,0);
-    const zCounts = shapZones.map((z,i)=>Math.max(0,Math.round(n*zAreas[i]/totalZA)));
-    // Fix rounding
-    const cSum = zCounts.reduce((a,b)=>a+b,0);
-    if(cSum!==n) zCounts[zCounts.length-1]+=n-cSum;
-
-    const zRooms: Room[][] = [];
-    let rIdx=0;
-    zCounts.forEach(cnt=>{ zRooms.push(sorted.slice(rIdx,rIdx+cnt)); rIdx+=cnt; });
-    if(rIdx<sorted.length) zRooms[zRooms.length-1].push(...sorted.slice(rIdx));
-
-    // Pack rooms into zones
-    const laidFinal: Array<Room & {pw:number;ph:number;px:number;py:number}> = [];
-    shapZones.forEach(([zx,zy,zw,zh],zi)=>{
-      const zr = zRooms[zi]??[];
-      if(zr.length===0) return;
-      let cx=zx,cy=zy,rowH=0;
-      zr.forEach(r=>{
-        let {w,h}=normSz(r);
-        w=Math.min(w,zw-0.05); h=Math.min(h,zh-0.05);
-        if(cx+w>zx+zw+0.01){ cy+=rowH; cx=zx; rowH=0; }
-        if(cy+h>zy+zh+0.01) cy=zy+zh-h;
-        laidFinal.push({...r,pw:w,ph:h,px:cx,py:cy});
-        cx+=w; rowH=Math.max(rowH,h);
-      });
-    });
-
-    if(laidFinal.length===0) return;
-    const maxPXF = Math.max(...laidFinal.map(r=>r.px+r.pw));
-    const maxPYF = Math.max(...laidFinal.map(r=>r.py+r.ph));
-    const bwF = maxPXF*SCALE; const bhF = maxPYF*SCALE;
-    const offXF = (W-bwF)/2; const offYF = (H-bhF)/2+10;
-    renderFloorPlan(ctx, laidFinal, maxPXF, maxPYF, offXF, offYF, SCALE, OWT, IWT, W, H, t);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, layoutRooms, windVec]);
-
-  // ── renderFloorPlan: the actual drawing ────────────────────────────────────
-  const renderFloorPlan = useCallback((
-    ctx: CanvasRenderingContext2D,
-    laid: Array<Room & {pw:number;ph:number;px:number;py:number}>,
-    maxPX: number, maxPY: number,
-    offX: number, offY: number,
-    SCALE: number, OWT: number, IWT: number,
-    W: number, H: number, t: number
-  ) => {
-    if(laid.length===0) return;
-    const bw = maxPX*SCALE; const bh = maxPY*SCALE;
-    timeRef.current = t / 1000;
-
-    const ROOM_CFG: Record<string,{bg:string;border:string;label:string}> = {
-      living:    {bg:"rgba(11,200,200,0.12)", border:"#0bc8c8", label:"LIVING ROOM"},
-      bedroom:   {bg:"rgba(74,157,232,0.12)", border:"#4a9de8", label:"BEDROOM"},
-      kitchen:   {bg:"rgba(44,180,110,0.12)", border:"#2cb46e", label:"KITCHEN"},
-      bathroom:  {bg:"rgba(155,114,212,0.12)",border:"#9b72d4", label:"BATHROOM"},
-      office:    {bg:"rgba(232,195,58,0.12)", border:"#e8c33a", label:"STUDY"},
-      garage:    {bg:"rgba(143,160,160,0.12)",border:"#8fa0a0", label:"GARAGE"},
-      utility:   {bg:"rgba(224,128,80,0.12)", border:"#e08050", label:"UTILITY"},
-      dining:    {bg:"rgba(232,122,58,0.12)", border:"#e87a3a", label:"DINING"},
-      puja_room: {bg:"rgba(200,160,32,0.12)", border:"#c8a020", label:"PUJA ROOM"},
-    };
-    const getStyle=(t:string)=>{
-      const k=Object.keys(ROOM_CFG).find(k=>t.toLowerCase().includes(k.replace("_","")));
-      return k?ROOM_CFG[k]:{bg:"#f8f8f8",border:"#555",label:t.toUpperCase()};
+    const getRoomStyle = (type: string) => {
+      const k = Object.keys(ROOM_COLORS).find(k => type.toLowerCase().replace("_","").includes(k.replace("_","")));
+      return k ? ROOM_COLORS[k] : {bg:"rgba(13,242,242,0.06)", border:"#0df2f2", label:type.toUpperCase()};
     };
 
     const windVecLocal = (() => {
-      const M: Record<string,[number,number]> = {N:[0,-1],NE:[1,-1],E:[1,0],SE:[1,1],S:[0,1],SW:[-1,1],W:[-1,0],NW:[-1,-1]};
-      const key=Object.keys(M).find(k=>windDir.startsWith(k))??"SW";
-      const [x,z]=M[key]; const l=Math.sqrt(x*x+z*z)||1;
-      return {x:x/l,y:z/l};
+      const M: Record<string,[number,number]> = {N:[0,-1],NE:[1,-1],E:[1,0],SE:[1,1],S:[0,1],SW:[-1,1],W:[-1,0],NW:[-1,-1],
+        NNE:[0.5,-1],SSW:[-0.5,1],ENE:[1,-0.5],WSW:[-1,0.5],NNW:[-0.5,-1],SSE:[0.5,1]};
+      const key = Object.keys(M).find(k => windDir.toUpperCase().startsWith(k)) ?? "SW";
+      const [x,z] = M[key]; const l = Math.sqrt(x*x+z*z)||1;
+      return {x:x/l, y:z/l};
     })();
 
     // ── Solar arc ──
-    if(showSolarPath) {
-      const now2=new Date(); const h2=now2.getHours()+now2.getMinutes()/60;
+    if (showSolarPath) {
+      const now2 = new Date(); const h2 = now2.getHours() + now2.getMinutes()/60;
       ctx.save();
       ctx.strokeStyle="rgba(250,160,20,0.55)"; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
       ctx.beginPath();
       for(let i2=0;i2<=30;i2++){
-        const a2=(Math.PI*i2)/30;
         const sx2=offX-40+(bw+80)*(i2/30);
-        const sy2=offY-55-Math.sin(a2)*42;
+        const sy2=offY-55-Math.sin((Math.PI*i2)/30)*42;
         i2===0?ctx.moveTo(sx2,sy2):ctx.lineTo(sx2,sy2);
       }
       ctx.stroke(); ctx.setLineDash([]);
-      const sunX2=offX+bw*((h2-6)/12);
-      const sunY2=offY-55-Math.max(0,Math.sin(Math.max(0,(h2-6)*Math.PI/12)))*42;
-      ctx.fillStyle="#f59e0b"; ctx.beginPath(); ctx.arc(sunX2,sunY2,6,0,Math.PI*2); ctx.fill();
+      const sunX2=offX+bw*Math.max(0,Math.min(1,(h2-6)/12));
+      const sy2_pos=offY-55-Math.max(0,Math.sin(Math.max(0,(h2-6)*Math.PI/12)))*42;
+      ctx.fillStyle="#f59e0b"; ctx.beginPath(); ctx.arc(sunX2,sy2_pos,6,0,Math.PI*2); ctx.fill();
       ctx.strokeStyle="rgba(245,158,11,0.5)"; ctx.lineWidth=1.5;
-      for(let i3=0;i3<8;i3++){const a3=(i3/8)*Math.PI*2; ctx.beginPath(); ctx.moveTo(sunX2+Math.cos(a3)*8,sunY2+Math.sin(a3)*8); ctx.lineTo(sunX2+Math.cos(a3)*12,sunY2+Math.sin(a3)*12); ctx.stroke();}
+      for(let ri=0;ri<8;ri++){const a3=(ri/8)*Math.PI*2;ctx.beginPath();ctx.moveTo(sunX2+Math.cos(a3)*8,sy2_pos+Math.sin(a3)*8);ctx.lineTo(sunX2+Math.cos(a3)*12,sy2_pos+Math.sin(a3)*12);ctx.stroke();}
       ctx.fillStyle="rgba(255,185,30,0.95)"; ctx.font="8px monospace"; ctx.textAlign="center";
-      ctx.fillText(`${now2.getHours().toString().padStart(2,"0")}:${now2.getMinutes().toString().padStart(2,"0")}`,sunX2,sunY2-15);
+      ctx.fillText(`${now2.getHours().toString().padStart(2,"0")}:${now2.getMinutes().toString().padStart(2,"0")}`,sunX2,sy2_pos-15);
       ctx.restore();
     }
 
-    // ── Outer boundary fill (plot shape) ──
-    const poly=makePlotPolygon(plotShape,plotArea);
-    if(poly.length>2){
-      const polyMaxX=Math.max(...poly.map(p=>p[0]));
-      const polyMaxY=Math.max(...poly.map(p=>p[1]));
-      const pSX=bw/polyMaxX; const pSY=bh/polyMaxY;
-      ctx.save();
-      ctx.beginPath();
-      poly.forEach(([px,py],i)=>{
-        const sx=offX+px*pSX; const sy=offY+py*pSY;
-        i===0?ctx.moveTo(sx,sy):ctx.lineTo(sx,sy);
+    // ── Plot boundary label ──
+    ctx.fillStyle="rgba(13,242,242,0.6)"; ctx.font="8px monospace"; ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+    ctx.fillText(`PLOT: ${plotShape.toUpperCase()} — ${plotArea}m²`, offX+2, offY-OWT-12);
+    ctx.fillText(`WIND: ${windDir}`, offX+2, offY-OWT-2);
+
+    // ── Outer wall fill (dark building interior) ──
+    ctx.fillStyle="#111820";
+    ctx.fillRect(offX, offY, bw, bh);
+
+    // ── Room fills ──
+    floor1.forEach(room => {
+      const rx=px(room.x), ry=py(room.y), rw=ps(room.width), rh=ps(room.height);
+      const s=getRoomStyle(room.type);
+      ctx.fillStyle=s.bg;
+      ctx.fillRect(rx, ry, rw, rh);
+    });
+
+    // ── Interior walls (from room edges) ──
+    const EPS = 0.08;
+    const drawnWalls = new Set<string>();
+    floor1.forEach(a => {
+      floor1.forEach(b => {
+        if (a === b) return;
+        // Vertical shared wall: a's right edge == b's left edge
+        if (Math.abs((a.x + a.width) - b.x) < EPS) {
+          const ov = Math.min(a.y+a.height, b.y+b.height) - Math.max(a.y, b.y);
+          if (ov > 0.2) {
+            const key = `v:${(a.x+a.width).toFixed(2)}:${Math.min(a.y,b.y).toFixed(2)}`;
+            if (!drawnWalls.has(key)) {
+              drawnWalls.add(key);
+              const wy0 = Math.max(a.y,b.y), wy1 = wy0 + ov;
+              ctx.strokeStyle="rgba(13,242,242,0.55)"; ctx.lineWidth=IWT;
+              ctx.beginPath(); ctx.moveTo(px(a.x+a.width), py(wy0)); ctx.lineTo(px(a.x+a.width), py(wy1)); ctx.stroke();
+            }
+          }
+        }
+        // Horizontal shared wall: a's bottom == b's top
+        if (Math.abs((a.y + a.height) - b.y) < EPS) {
+          const ov = Math.min(a.x+a.width, b.x+b.width) - Math.max(a.x, b.x);
+          if (ov > 0.2) {
+            const key = `h:${Math.min(a.x,b.x).toFixed(2)}:${(a.y+a.height).toFixed(2)}`;
+            if (!drawnWalls.has(key)) {
+              drawnWalls.add(key);
+              const wx0 = Math.max(a.x,b.x), wx1 = wx0 + ov;
+              ctx.strokeStyle="rgba(13,242,242,0.55)"; ctx.lineWidth=IWT;
+              ctx.beginPath(); ctx.moveTo(px(wx0), py(a.y+a.height)); ctx.lineTo(px(wx1), py(a.y+a.height)); ctx.stroke();
+            }
+          }
+        }
       });
-      ctx.closePath();
-      ctx.fillStyle="rgba(13,242,242,0.05)"; ctx.fill();
-      ctx.strokeStyle="rgba(13,242,242,0.45)"; ctx.lineWidth=1.5; ctx.setLineDash([8,5]); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle="rgba(13,242,242,0.6)"; ctx.font="8px monospace"; ctx.textAlign="left";
-      ctx.fillText(`PLOT: ${plotShape.toUpperCase()} — ${plotArea}m²`, offX+2, offY-OWT-12);
-      ctx.restore();
-    }
-
-    // ── Outer wall — shape-aware clipping mask ──
-    // Clip paths EXACTLY match zone definitions from the layout engine
-    const buildClipPath = (ctx: CanvasRenderingContext2D) => {
-      const shapeKey = plotShape.toLowerCase().replace(/[-\s]/g,"");
-      const px = (x:number) => offX + x*SCALE;
-      const py2 = (y:number) => offY + y*SCALE;
-      if(shapeKey==="lshape") {
-        // L-shape: zones [[0,0,14,4.5],[0,4.5,7,5.5]]
-        // Top bar: (0,0)→(14,4.5), Bottom-left: (0,4.5)→(7,10)
-        ctx.beginPath();
-        ctx.moveTo(px(0),  py2(0));
-        ctx.lineTo(px(14), py2(0));
-        ctx.lineTo(px(14), py2(4.5));
-        ctx.lineTo(px(7),  py2(4.5));
-        ctx.lineTo(px(7),  py2(10));
-        ctx.lineTo(px(0),  py2(10));
-        ctx.closePath();
-      } else if(shapeKey==="tshape") {
-        // T-shape: zones [[0,0,16,4.5],[5,4.5,6,5.5]]
-        // Top bar: (0,0)→(16,4.5), Stem: (5,4.5)→(11,10)
-        ctx.beginPath();
-        ctx.moveTo(px(0),  py2(0));
-        ctx.lineTo(px(16), py2(0));
-        ctx.lineTo(px(16), py2(4.5));
-        ctx.lineTo(px(11), py2(4.5));
-        ctx.lineTo(px(11), py2(10));
-        ctx.lineTo(px(5),  py2(10));
-        ctx.lineTo(px(5),  py2(4.5));
-        ctx.lineTo(px(0),  py2(4.5));
-        ctx.closePath();
-      } else if(shapeKey==="irregular") {
-        // Irregular: 3 zones with offsets — create asymmetric silhouette
-        // Zone 0: [0,0,12,4], Zone 1: [1.5,4,10,4], Zone 2: [0,8,9,4]
-        ctx.beginPath();
-        ctx.moveTo(px(0),    py2(0));
-        ctx.lineTo(px(12),   py2(0));
-        ctx.lineTo(px(12),   py2(4));
-        ctx.lineTo(px(11.5), py2(4));
-        ctx.lineTo(px(11.5), py2(8));
-        ctx.lineTo(px(9),    py2(8));
-        ctx.lineTo(px(9),    py2(12));
-        ctx.lineTo(px(0),    py2(12));
-        ctx.lineTo(px(0),    py2(8));
-        ctx.lineTo(px(1.5),  py2(8));
-        ctx.lineTo(px(1.5),  py2(4));
-        ctx.lineTo(px(0),    py2(4));
-        ctx.closePath();
-      } else {
-        // Rectangle / Square: simple rect
-        ctx.beginPath();
-        ctx.rect(offX, offY, bw, bh);
-      }
-    };
-
-    // Draw dark blueprint wall fill (clipped to shape)
-    ctx.save();
-    buildClipPath(ctx);
-    ctx.clip();
-    ctx.fillStyle="#111820";  // dark blueprint interior
-    ctx.fillRect(offX-OWT, offY-OWT, bw+OWT*2, bh+OWT*2);
-    // Room fills inside clip
-    laid.forEach(room=>{
-      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
-      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
-      const s=getStyle(room.type);
-      ctx.fillStyle=s.bg; ctx.fillRect(rx,ry,rw,rh);
-    });
-    ctx.restore();
-
-    // Outer wall border — glowing cyan like a blueprint
-    ctx.save();
-    buildClipPath(ctx);
-    ctx.strokeStyle="#1a3040"; ctx.lineWidth=OWT*1.1; ctx.stroke();  // dark fill stroke
-    ctx.restore();
-    ctx.save();
-    buildClipPath(ctx);
-    ctx.strokeStyle="rgba(13,242,242,0.9)"; ctx.lineWidth=2.5; ctx.stroke();  // cyan outline
-    ctx.restore();
-
-    // ── Interior walls (thin cyan lines) ──
-    ctx.strokeStyle="rgba(13,242,242,0.5)"; ctx.lineWidth=IWT*0.8;
-    laid.forEach(room=>{
-      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
-      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
-      if(room.px+room.pw<maxPX-0.01){ ctx.beginPath(); ctx.moveTo(rx+rw,ry); ctx.lineTo(rx+rw,ry+rh); ctx.stroke(); }
-      if(room.py+room.ph<maxPY-0.01){ ctx.beginPath(); ctx.moveTo(rx,ry+rh); ctx.lineTo(rx+rw,ry+rh); ctx.stroke(); }
     });
 
-    // ── Doors (swing arcs) ──
-    laid.forEach((room,idx)=>{
-      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
-      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
-      const dw=Math.min(rw*0.38,SCALE*0.85);
-      ctx.strokeStyle="#1a2530"; ctx.lineWidth=1.5;
-      // Bottom door
-      if(room.py+room.ph<maxPY-0.01){
+    // ── Outer wall border ──
+    ctx.strokeStyle="#1a3040"; ctx.lineWidth=OWT*1.1;
+    ctx.strokeRect(offX, offY, bw, bh);
+    ctx.strokeStyle="rgba(13,242,242,0.9)"; ctx.lineWidth=2.2;
+    ctx.strokeRect(offX, offY, bw, bh);
+
+    // ── Doors (swing arcs at room boundaries) ──
+    const DOOR_M = 0.8;
+    floor1.forEach((room, idx) => {
+      const rx=px(room.x), ry=py(room.y), rw=ps(room.width), rh=ps(room.height);
+      const dw=Math.min(ps(DOOR_M), rw*0.42, rh*0.42);
+      ctx.setLineDash([2,2]); ctx.strokeStyle="rgba(13,242,242,0.5)"; ctx.lineWidth=1.2;
+      // Bottom door (interior)
+      if (room.y + room.height < maxRY - EPS) {
         const dx=rx+(rw-dw)/2; const dy=ry+rh;
-        // Gap in wall
-        ctx.fillStyle="#0d1117";
-        ctx.fillRect(dx, dy-IWT/2, dw, IWT+1);
-        ctx.strokeStyle="rgba(13,242,242,0.5)"; ctx.lineWidth=1.2; ctx.setLineDash([2,2]);
+        ctx.fillStyle="#0d1117"; ctx.fillRect(dx, dy-1, dw, 3);
         ctx.beginPath(); ctx.arc(dx, dy, dw, 0, Math.PI/2); ctx.stroke();
-        ctx.setLineDash([]);
       }
-      // Right door (alternating rooms)
-      if(room.px+room.pw<maxPX-0.01 && idx%3===1){
-        const dh=Math.min(rh*0.38,SCALE*0.75);
+      // Right door (alternate rooms)
+      if (room.x + room.width < maxRX - EPS && idx%2===1) {
+        const dh=Math.min(ps(DOOR_M), rh*0.42);
         const dy2=ry+(rh-dh)/2; const dx2=rx+rw;
-        ctx.fillStyle="#0d1117"; ctx.fillRect(dx2-IWT/2, dy2, IWT+1, dh);
-        ctx.strokeStyle="rgba(13,242,242,0.5)"; ctx.lineWidth=1.2; ctx.setLineDash([2,2]);
+        ctx.fillStyle="#0d1117"; ctx.fillRect(dx2-1, dy2, 3, dh);
         ctx.beginPath(); ctx.arc(dx2, dy2, dh, Math.PI/2, Math.PI); ctx.stroke();
-        ctx.setLineDash([]);
       }
+      ctx.setLineDash([]);
     });
 
-    // ── Windows (architectural style — blue fills with frame marks in outer walls) ──
-    laid.forEach(room=>{
-      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
-      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
+    // ── Windows (on perimeter rooms only) ──
+    floor1.forEach(room => {
+      const rx=px(room.x), ry=py(room.y), rw=ps(room.width), rh=ps(room.height);
       const t2=room.type.toLowerCase();
-      if(t2.includes("bathroom")||t2.includes("utility")) return;
-      const ww=Math.min(rw*0.52,SCALE*1.05);
-      // Helper: draw a window slot
-      const drawWin = (wx: number, wy: number, wWidth: number, wHeight: number, horiz: boolean) => {
-        // Blue transparent glass fill
-        ctx.fillStyle="rgba(64,180,248,0.55)"; ctx.fillRect(wx, wy, wWidth, wHeight);
-        // Bright frame
-        ctx.strokeStyle="#40b8f8"; ctx.lineWidth=2.0;
-        ctx.strokeRect(wx, wy, wWidth, wHeight);
-        // Centre divider
-        if(horiz) {
-          ctx.beginPath(); ctx.moveTo(wx+wWidth/2,wy); ctx.lineTo(wx+wWidth/2,wy+wHeight); ctx.stroke();
-        } else {
-          ctx.beginPath(); ctx.moveTo(wx,wy+wHeight/2); ctx.lineTo(wx+wWidth,wy+wHeight/2); ctx.stroke();
-        }
-        // Side tick marks for window reveal
-        ctx.strokeStyle="#1a2530"; ctx.lineWidth=1.2;
-        if(horiz){
-          ctx.beginPath(); ctx.moveTo(wx,wy); ctx.lineTo(wx,wy-2); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(wx+wWidth,wy); ctx.lineTo(wx+wWidth,wy-2); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(wx,wy+wHeight); ctx.lineTo(wx,wy+wHeight+2); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(wx+wWidth,wy+wHeight); ctx.lineTo(wx+wWidth,wy+wHeight+2); ctx.stroke();
-        }
+      if (t2.includes("bathroom")||t2.includes("utility")||t2.includes("garage")) return;
+      const ww=Math.min(rw*0.5, ps(1.0));
+      const wh=Math.min(rh*0.5, ps(0.8));
+      const drawWin=(wx:number,wy:number,wWidth:number,wHeight:number) => {
+        ctx.fillStyle="rgba(64,180,248,0.5)"; ctx.fillRect(wx,wy,wWidth,wHeight);
+        ctx.strokeStyle="#40b8f8"; ctx.lineWidth=1.8; ctx.strokeRect(wx,wy,wWidth,wHeight);
+        ctx.beginPath(); ctx.moveTo(wx+wWidth/2,wy); ctx.lineTo(wx+wWidth/2,wy+wHeight); ctx.stroke();
       };
-      // Top window (north-facing rooms)
-      if(room.py<0.01){
-        drawWin(rx+(rw-ww)/2, offY-OWT, ww, OWT, true);
-      }
-      // Bottom window (south-facing)
-      if(room.py+room.ph>maxPY-0.01){
-        drawWin(rx+(rw-ww)/2, offY+bh, ww, OWT, true);
-      }
-      // Left window
-      if(room.px<0.01){
-        const wh2=Math.min(rh*0.5,SCALE*1.0);
-        drawWin(offX-OWT, ry+(rh-wh2)/2, OWT, wh2, false);
-      }
-      // Right window
-      if(room.px+room.pw>maxPX-0.01){
-        const wh2=Math.min(rh*0.5,SCALE*1.0);
-        drawWin(offX+bw, ry+(rh-wh2)/2, OWT, wh2, false);
-      }
+      // Perimeter windows only
+      if (room.y - minRY < EPS)   drawWin(rx+(rw-ww)/2, ry-OWT*0.5, ww, OWT*0.7);
+      if (maxRY-(room.y+room.height) < EPS) drawWin(rx+(rw-ww)/2, ry+rh-OWT*0.2, ww, OWT*0.7);
+      if (room.x - minRX < EPS)   drawWin(rx-OWT*0.5, ry+(rh-wh)/2, OWT*0.7, wh);
+      if (maxRX-(room.x+room.width) < EPS) drawWin(rx+rw-OWT*0.2, ry+(rh-wh)/2, OWT*0.7, wh);
     });
 
-    // ── Main entrance (bottom center — with proper door swing arc) ──
-    const entrW=SCALE*1.0;
+    // ── Entrance (bottom centre) ──
+    const entrW=ps(0.9);
     const entrX=offX+bw/2-entrW/2;
-    // Clear the wall section
-    ctx.fillStyle="#0d1117"; ctx.fillRect(entrX, offY+bh, entrW, OWT+2);
-    // Frame lines
+    ctx.fillStyle="#0d1117"; ctx.fillRect(entrX, offY+bh-1, entrW, OWT+3);
     ctx.strokeStyle="#0df2f2"; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(entrX, offY+bh); ctx.lineTo(entrX, offY+bh+OWT); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(entrX+entrW, offY+bh); ctx.lineTo(entrX+entrW, offY+bh+OWT); ctx.stroke();
-    // Door leaf (single 90-degree swing shown as dashed quarter circle)
+    ctx.beginPath(); ctx.moveTo(entrX,offY+bh); ctx.lineTo(entrX,offY+bh+OWT); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(entrX+entrW,offY+bh); ctx.lineTo(entrX+entrW,offY+bh+OWT); ctx.stroke();
     ctx.strokeStyle="rgba(13,242,242,0.6)"; ctx.lineWidth=1.5; ctx.setLineDash([3,3]);
-    ctx.beginPath(); ctx.arc(entrX+entrW, offY+bh, entrW, Math.PI, Math.PI*1.5); ctx.stroke();
+    ctx.beginPath(); ctx.arc(entrX+entrW,offY+bh,entrW,Math.PI,Math.PI*1.5); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.strokeStyle="#0df2f2"; ctx.lineWidth=1.5;
-    ctx.beginPath(); ctx.moveTo(entrX+entrW, offY+bh); ctx.lineTo(entrX+entrW, offY+bh-entrW); ctx.stroke();
-    ctx.strokeStyle="rgba(13,242,242,0.25)"; ctx.lineWidth=0.8;
-    ctx.strokeRect(entrX-4, offY+bh+OWT+2, entrW+8, 5);
-    ctx.strokeRect(entrX-8, offY+bh+OWT+9, entrW+16, 5);
-    // Label
-    ctx.fillStyle="#0df2f2"; ctx.font=`bold ${Math.max(7,SCALE*0.55)}px 'Space Grotesk', monospace`;
-    ctx.textAlign="center";
-    ctx.fillText("ENTRANCE", offX+bw/2, offY+bh+OWT+22);
+    ctx.fillStyle="#0df2f2"; ctx.font=`bold ${Math.max(7,SCALE*0.48)}px 'Space Grotesk',monospace`;
+    ctx.textAlign="center"; ctx.textBaseline="alphabetic";
+    ctx.fillText("ENTRANCE", offX+bw/2, offY+bh+OWT+18);
 
-    // ── Room labels + dimensions (like the reference image) ──
-    laid.forEach(room=>{
-      const rx=offX+room.px*SCALE; const ry=offY+room.py*SCALE;
-      const rw=room.pw*SCALE; const rh=room.ph*SCALE;
-      const s=getStyle(room.type);
+    // ── Room labels + dimensions ──
+    floor1.forEach(room => {
+      const rx=px(room.x), ry=py(room.y), rw=ps(room.width), rh=ps(room.height);
+      const s=getRoomStyle(room.type);
       const cx2=rx+rw/2; const cy2=ry+rh/2;
-      const fz=Math.max(8,Math.min(12,rw/8));
-      // Room name
+      const fz=Math.max(7,Math.min(12,rw/8));
       ctx.fillStyle=s.border; ctx.font=`bold ${fz}px 'Space Grotesk',sans-serif`;
       ctx.textAlign="center"; ctx.textBaseline="middle";
       ctx.fillText(s.label, cx2, cy2-fz*0.7);
       ctx.fillStyle="rgba(180,200,220,0.8)"; ctx.font=`${Math.max(6,fz-2)}px monospace`;
-      ctx.fillText(`${room.pw.toFixed(2)} x ${room.ph.toFixed(2)}`, cx2, cy2+fz*0.5);
-      if(room.orientation){
-        ctx.fillStyle="rgba(13,242,242,0.6)"; ctx.font=`${Math.max(5,fz-3)}px monospace`;
-        ctx.fillText(room.orientation, cx2, cy2+fz*1.5);
+      ctx.fillText(`${room.width.toFixed(2)} x ${room.height.toFixed(2)}`, cx2, cy2+fz*0.4);
+      if (room.orientation) {
+        ctx.fillStyle="rgba(13,242,242,0.5)"; ctx.font=`${Math.max(5,fz-3)}px monospace`;
+        ctx.fillText(room.orientation, cx2, cy2+fz*1.4);
       }
     });
 
-    // ── Animated wind particles (if enabled) ──
-    if(showWindFlow){
-      const T=timeRef.current;
-      if(windParticles.current.length<50){
-        for(let i=0;i<2;i++){
-          const spawnX=windVecLocal.x>0?offX-20:windVecLocal.x<0?offX+bw+20:offX+Math.random()*bw;
-          const spawnY=windVecLocal.y>0?offY-20:windVecLocal.y<0?offY+bh+20:offY+Math.random()*bh;
-          windParticles.current.push({x:spawnX,y:spawnY,life:0,speed:1.5+Math.random()*1.5,alpha:0});
+    // ── Wind particles — flow OVER the building from outside ──
+    if (showWindFlow) {
+      // Spawn particles OUTSIDE the building, flowing across it
+      if (windParticles.current.length < 35) {
+        for (let i=0; i<2; i++) {
+          let spawnX: number, spawnY: number;
+          // Spawn on the windward face OUTSIDE the building
+          if (Math.abs(windVecLocal.x) >= Math.abs(windVecLocal.y)) {
+            // Wind blowing left/right — spawn on left or right face, well outside
+            spawnX = windVecLocal.x > 0 ? offX - ps(1.5) - Math.random()*ps(1) : offX + bw + ps(0.5) + Math.random()*ps(1);
+            spawnY = offY - ps(0.5) + Math.random() * (bh + ps(1));
+          } else {
+            // Wind blowing up/down — spawn on top or bottom face, well outside
+            spawnX = offX - ps(0.5) + Math.random() * (bw + ps(1));
+            spawnY = windVecLocal.y > 0 ? offY - ps(1.5) - Math.random()*ps(1) : offY + bh + ps(0.5) + Math.random()*ps(1);
+          }
+          windParticles.current.push({x:spawnX, y:spawnY, life:0, speed:1.8+Math.random()*1.2, alpha:0});
         }
       }
-      windParticles.current=windParticles.current.filter(p=>p.life<120);
-      windParticles.current.forEach(p=>{
-        p.life++; p.x+=windVecLocal.x*p.speed*1.8; p.y+=windVecLocal.y*p.speed*1.8;
-        const fade=Math.sin(p.life/120*Math.PI); p.alpha=fade*0.8;
-        const len=p.speed*10; const ex=p.x-windVecLocal.x*len; const ey=p.y-windVecLocal.y*len;
-        ctx.save(); ctx.strokeStyle=`rgba(30,120,200,${p.alpha})`; ctx.lineWidth=1.5; ctx.lineCap="round";
+      // Kill old particles and those that have crossed the full building
+      windParticles.current = windParticles.current.filter(p => {
+        if (p.life >= 100) return false;
+        // Kill when 2 building-widths past the leeward edge
+        const pastLeeward =
+          (windVecLocal.x > 0.1 && p.x > offX + bw + ps(2)) ||
+          (windVecLocal.x < -0.1 && p.x < offX - ps(2)) ||
+          (windVecLocal.y > 0.1 && p.y > offY + bh + ps(2)) ||
+          (windVecLocal.y < -0.1 && p.y < offY - ps(2));
+        return !pastLeeward;
+      });
+
+      windParticles.current.forEach(p => {
+        p.life++;
+        p.x += windVecLocal.x * p.speed * 1.6;
+        p.y += windVecLocal.y * p.speed * 1.6;
+        const fade = Math.sin(p.life/100*Math.PI); p.alpha = fade * 0.85;
+        const len = p.speed * 9;
+        const ex = p.x - windVecLocal.x*len; const ey = p.y - windVecLocal.y*len;
+        ctx.strokeStyle=`rgba(60,160,240,${p.alpha})`; ctx.lineWidth=1.5; ctx.lineCap="round";
         ctx.beginPath(); ctx.moveTo(ex,ey); ctx.lineTo(p.x,p.y); ctx.stroke();
         const angle=Math.atan2(windVecLocal.y,windVecLocal.x);
-        ctx.fillStyle=`rgba(60,140,220,${p.alpha})`; ctx.beginPath();
-        ctx.translate(p.x,p.y); ctx.rotate(angle);
-        ctx.moveTo(0,0); ctx.lineTo(-6,-3); ctx.lineTo(-6,3); ctx.closePath(); ctx.fill();
+        ctx.fillStyle=`rgba(80,180,255,${p.alpha})`;
+        ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(angle);
+        ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-5,-2.5); ctx.lineTo(-5,2.5); ctx.closePath(); ctx.fill();
         ctx.restore();
       });
-      ctx.fillStyle="rgba(60,160,240,0.9)"; ctx.font="bold 9px monospace"; ctx.textAlign="left";
-      ctx.fillText(`WIND: ${windDir}`, offX+4, offY-OWT-2);
     }
 
     // ── North arrow ──
-    const nx=W-38; const ny=H-58;
-    ctx.fillStyle="#0df2f2"; ctx.font="bold 10px monospace"; ctx.textAlign="center";
-    ctx.fillText("N", nx, ny-22);
-    ctx.beginPath(); ctx.moveTo(nx,ny-18); ctx.lineTo(nx-6,ny+4); ctx.lineTo(nx,ny+2); ctx.lineTo(nx+6,ny+4); ctx.closePath();
+    const narX=W-38; const narY=H-58;
+    ctx.fillStyle="#0df2f2"; ctx.font="bold 10px monospace"; ctx.textAlign="center"; ctx.textBaseline="alphabetic";
+    ctx.fillText("N", narX, narY-22);
+    ctx.beginPath(); ctx.moveTo(narX,narY-18); ctx.lineTo(narX-6,narY+4); ctx.lineTo(narX,narY+2); ctx.lineTo(narX+6,narY+4); ctx.closePath();
     ctx.fillStyle="#0df2f2"; ctx.fill(); ctx.strokeStyle="#0df2f2"; ctx.lineWidth=1; ctx.stroke();
 
     // ── Scale bar ──
@@ -624,18 +477,20 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
     ctx.fillStyle="rgba(13,242,242,0.7)"; ctx.fillRect(20,H-18,sbPx,2);
     ctx.fillRect(20,H-22,2,6); ctx.fillRect(20+sbPx-2,H-22,2,6);
     ctx.font="7px monospace"; ctx.textAlign="left"; ctx.fillStyle="rgba(13,242,242,0.5)";
+    ctx.textBaseline="alphabetic";
     ctx.fillText("0",20,H-5); ctx.fillText("5m",20+sbPx+2,H-5);
     ctx.textAlign="right"; ctx.fillText(`${lat.toFixed(4)}°N  ${lon.toFixed(4)}°E`,W-20,H-18);
 
     // ── Trees ──
-    trees.slice(0,3).forEach((_,i)=>{
-      const tx=offX-35-i*20; const ty=offY+bh*0.25+i*24;
-      ctx.beginPath(); ctx.arc(tx,ty,11,0,Math.PI*2);
+    trees.slice(0,3).forEach((_,i) => {
+      const ttx=offX-35-i*20; const tty=offY+bh*0.25+i*24;
+      ctx.beginPath(); ctx.arc(ttx,tty,11,0,Math.PI*2);
       ctx.fillStyle="rgba(40,200,80,0.15)"; ctx.fill();
       ctx.strokeStyle="#30d060"; ctx.lineWidth=1.5; ctx.stroke();
-      ctx.fillStyle="#30d060"; ctx.font="7px monospace"; ctx.textAlign="center";
-      ctx.fillText(`T${i+1}`,tx,ty+3);
+      ctx.fillStyle="#30d060"; ctx.font="7px monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(`T${i+1}`,ttx,tty);
     });
+
   }, [rooms, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, windParticles]);
 
   useEffect(() => {
@@ -653,6 +508,367 @@ function BlueprintCanvas({ rooms, trees, lat, lon, zoom, showSolarPath, showWind
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
+function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, floorPlan, plotShape, plotArea, windDir }:
+  { rooms: Room[]; walls: Wall[]; doors: Door[]; windows: WindowEl[]; trees: Tree[]; lat: number; lon: number; zoom: number; showSolarPath: boolean; showWindFlow: boolean; floorPlan: any; plotShape: string; plotArea: number; windDir: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animRef = useRef<number>(0);
+  const windParticles = useRef<Array<{x:number;y:number;life:number;speed:number;alpha:number}>>([]);
+
+  const getRoomStyle = useCallback((type: string) => {
+    const palette: Record<string, { bg: string; border: string; label: string }> = {
+      living: { bg: "rgba(13,200,200,0.10)", border: "#0bc8c8", label: "LIVING ROOM" },
+      bedroom: { bg: "rgba(74,157,232,0.11)", border: "#4a9de8", label: "BEDROOM" },
+      kitchen: { bg: "rgba(44,180,110,0.10)", border: "#2cb46e", label: "KITCHEN" },
+      bathroom: { bg: "rgba(155,114,212,0.11)", border: "#9b72d4", label: "BATHROOM" },
+      office: { bg: "rgba(232,195,58,0.11)", border: "#e8c33a", label: "STUDY" },
+      garage: { bg: "rgba(143,160,160,0.10)", border: "#8fa0a0", label: "GARAGE" },
+      utility: { bg: "rgba(224,128,80,0.10)", border: "#e08050", label: "UTILITY" },
+      dining: { bg: "rgba(232,122,58,0.10)", border: "#e87a3a", label: "DINING" },
+      puja_room: { bg: "rgba(200,160,32,0.10)", border: "#c8a020", label: "PUJA ROOM" },
+    };
+    const key = Object.keys(palette).find(k => type.toLowerCase().replace("_", "").includes(k.replace("_", "")));
+    return key ? palette[key] : { bg: "rgba(13,242,242,0.06)", border: "#0df2f2", label: type.toUpperCase() };
+  }, []);
+
+  const windVec = useMemo(() => {
+    const M: Record<string,[number,number]> = {
+      N:[0,-1],NE:[1,-1],E:[1,0],SE:[1,1],S:[0,1],SW:[-1,1],W:[-1,0],NW:[-1,-1],
+      NNE:[0.5,-1],SSW:[-0.5,1],ENE:[1,-0.5],WSW:[-1,0.5],NNW:[-0.5,-1],SSE:[0.5,1],ESE:[1,0.5],WNW:[-1,-0.5],
+    };
+    const key = Object.keys(M).find(k => windDir.toUpperCase().startsWith(k)) ?? "SW";
+    const [x, y] = M[key];
+    const len = Math.sqrt(x * x + y * y) || 1;
+    return { x: x / len, y: y / len };
+  }, [windDir]);
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const W = canvas.offsetWidth || 700;
+    const H = canvas.offsetHeight || 600;
+    canvas.width = W;
+    canvas.height = H;
+
+    ctx.fillStyle = "#0d1117";
+    ctx.fillRect(0, 0, W, H);
+    const GRID = 22;
+    ctx.strokeStyle = "rgba(13,242,242,0.06)";
+    ctx.lineWidth = 0.5;
+    for (let gx = 0; gx < W; gx += GRID) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke(); }
+    for (let gy = 0; gy < H; gy += GRID) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke(); }
+    ctx.strokeStyle = "rgba(13,242,242,0.11)";
+    ctx.lineWidth = 0.8;
+    for (let gx = 0; gx < W; gx += GRID * 5) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke(); }
+    for (let gy = 0; gy < H; gy += GRID * 5) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke(); }
+
+    const floor1 = rooms.filter(room => (room.floor ?? 1) === 1);
+    const floorWalls = walls.filter(wall => (wall.floor ?? 1) === 1);
+    const floorDoors = doors.filter(door => (door.floor ?? 1) === 1);
+    const floorWindows = windows.filter(window => (window.floor ?? 1) === 1);
+
+    if (floor1.length === 0) {
+      ctx.fillStyle = "#0df2f2";
+      ctx.font = "bold 14px 'Space Grotesk', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("AWAITING FLOOR PLAN GENERATION", W / 2, H / 2 - 10);
+      ctx.fillStyle = "rgba(13,242,242,0.4)";
+      ctx.font = "11px sans-serif";
+      ctx.fillText("Select a plot and run analysis", W / 2, H / 2 + 14);
+      return;
+    }
+
+    const minX = Math.min(...floor1.map(room => room.x));
+    const minY = Math.min(...floor1.map(room => room.y));
+    const maxX = Math.max(...floor1.map(room => room.x + room.width));
+    const maxY = Math.max(...floor1.map(room => room.y + room.height));
+    const scale = Math.min((W - 172) / Math.max(maxX - minX, 0.1), (H - (showSolarPath ? 194 : 150)) / Math.max(maxY - minY, 0.1));
+    const bw = (maxX - minX) * scale;
+    const bh = (maxY - minY) * scale;
+    const offX = (W - bw) / 2;
+    const offY = Math.max(showSolarPath ? 118 : 82, (H - bh) / 2 + 10);
+    const wallThickness = Math.max(6, scale * 0.36);
+    const px = (x: number) => offX + (x - minX) * scale;
+    const py = (y: number) => offY + (y - minY) * scale;
+    const ps = (v: number) => v * scale;
+
+    if (showSolarPath) {
+      const now = new Date();
+      const hour = now.getHours() + now.getMinutes() / 60;
+      const safeLeft = Math.max(28, offX + 6);
+      const safeRight = Math.min(W - 28, offX + bw - 6);
+      const span = Math.max(96, safeRight - safeLeft);
+      const arcBaseY = Math.max(44, offY - 28);
+      const arcAmp = Math.min(38, Math.max(18, arcBaseY - 16));
+      ctx.save();
+      ctx.strokeStyle = "rgba(250,160,20,0.55)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      for (let i = 0; i <= 30; i++) {
+        const sx = safeLeft + span * (i / 30);
+        const sy = arcBaseY - Math.sin((Math.PI * i) / 30) * arcAmp;
+        i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const progress = Math.max(0, Math.min(1, (hour - 6) / 12));
+      const sunX = safeLeft + span * progress;
+      const sunY = arcBaseY - Math.max(0, Math.sin(Math.max(0, (hour - 6) * Math.PI / 12))) * arcAmp;
+      ctx.fillStyle = "#f59e0b";
+      ctx.beginPath();
+      ctx.arc(sunX, sunY, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(245,158,11,0.5)";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(sunX + Math.cos(a) * 8, sunY + Math.sin(a) * 8);
+        ctx.lineTo(sunX + Math.cos(a) * 12, sunY + Math.sin(a) * 12);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "rgba(255,185,30,0.95)";
+      ctx.font = "8px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(`${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`, sunX, sunY - 15);
+      ctx.restore();
+    }
+
+    ctx.fillStyle = "rgba(13,242,242,0.6)";
+    ctx.font = "8px monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(`PLOT: ${plotShape.toUpperCase()} - ${plotArea}m2`, offX + 2, offY - wallThickness - 12);
+    ctx.fillText(`WIND: ${windDir}`, offX + 2, offY - wallThickness - 2);
+
+    ctx.fillStyle = "#111820";
+    ctx.fillRect(offX, offY, bw, bh);
+
+    floor1.forEach(room => {
+      const style = getRoomStyle(room.type);
+      ctx.fillStyle = style.bg;
+      ctx.fillRect(px(room.x), py(room.y), ps(room.width), ps(room.height));
+    });
+
+    floorWalls.forEach(wall => {
+      const horizontal = wall.orientation === "horizontal";
+      const ww = horizontal ? ps(wall.length) : Math.max(3, ps(wall.thickness));
+      const wh = horizontal ? Math.max(3, ps(wall.thickness)) : ps(wall.length);
+      const wx = px(wall.x) - ww / 2;
+      const wy = py(wall.y) - wh / 2;
+      const exterior = wall.type === "exterior";
+      ctx.fillStyle = exterior ? "#1d3737" : "#172c2c";
+      ctx.fillRect(wx, wy, ww, wh);
+      ctx.strokeStyle = exterior ? "rgba(13,242,242,0.84)" : "rgba(13,242,242,0.28)";
+      ctx.lineWidth = exterior ? 1.2 : 0.8;
+      ctx.strokeRect(wx, wy, ww, wh);
+    });
+
+    floorDoors.forEach(door => {
+      const span = ps(door.width);
+      ctx.strokeStyle = "rgba(13,242,242,0.85)";
+      ctx.lineWidth = 1.1;
+      if (door.orientation === "horizontal") {
+        const dx = px(door.x) - span / 2;
+        const dy = py(door.y) - wallThickness / 2;
+        ctx.fillStyle = "#0d1117";
+        ctx.fillRect(dx, dy - 1, span, wallThickness + 2);
+        ctx.beginPath(); ctx.moveTo(dx, dy + wallThickness / 2); ctx.lineTo(dx + span, dy + wallThickness / 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(dx, dy + wallThickness / 2, span, -Math.PI / 2, 0); ctx.stroke();
+      } else {
+        const dy = py(door.y) - span / 2;
+        const dx = px(door.x) - wallThickness / 2;
+        ctx.fillStyle = "#0d1117";
+        ctx.fillRect(dx - 1, dy, wallThickness + 2, span);
+        ctx.beginPath(); ctx.moveTo(dx + wallThickness / 2, dy); ctx.lineTo(dx + wallThickness / 2, dy + span); ctx.stroke();
+        ctx.beginPath(); ctx.arc(dx + wallThickness / 2, dy, span, Math.PI, 1.5 * Math.PI); ctx.stroke();
+      }
+    });
+
+    const drawWindow = (x: number, y: number, w: number, h: number, horizontal: boolean) => {
+      ctx.fillStyle = "rgba(64,180,248,0.46)";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = "#b0d8e8";
+      ctx.lineWidth = 1.4;
+      ctx.strokeRect(x, y, w, h);
+      for (let i = 1; i < 3; i++) {
+        ctx.beginPath();
+        if (horizontal) {
+          const xx = x + (w * i) / 3;
+          ctx.moveTo(xx, y);
+          ctx.lineTo(xx, y + h);
+        } else {
+          const yy = y + (h * i) / 3;
+          ctx.moveTo(x, yy);
+          ctx.lineTo(x + w, yy);
+        }
+        ctx.stroke();
+      }
+    };
+
+    floorWindows.forEach(win => {
+      const parts = win.wall.split("_");
+      const edge = parts[parts.length - 1];
+      const roomId = parts.slice(0, -1).join("_");
+      const room = floor1.find(item => item.id === roomId);
+      if (!room) return;
+      const span = ps(win.width);
+      if (edge === "top") drawWindow(px(room.x + room.width / 2) - span / 2, py(room.y), span, wallThickness, true);
+      if (edge === "bottom") drawWindow(px(room.x + room.width / 2) - span / 2, py(room.y + room.height) - wallThickness, span, wallThickness, true);
+      if (edge === "left") drawWindow(px(room.x), py(room.y + room.height / 2) - span / 2, wallThickness, span, false);
+      if (edge === "right") drawWindow(px(room.x + room.width) - wallThickness, py(room.y + room.height / 2) - span / 2, wallThickness, span, false);
+    });
+
+    floor1.forEach(room => {
+      const style = getRoomStyle(room.type);
+      const rx = px(room.x);
+      const ry = py(room.y);
+      const rw = ps(room.width);
+      const rh = ps(room.height);
+      const cx = rx + rw / 2;
+      const cy = ry + rh / 2;
+      const fs = Math.max(7, Math.min(12, rw / 8));
+      ctx.fillStyle = style.border;
+      ctx.font = `bold ${fs}px 'Space Grotesk',sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(style.label, cx, cy - fs * 0.7);
+      ctx.fillStyle = "rgba(180,200,220,0.82)";
+      ctx.font = `${Math.max(6, fs - 2)}px monospace`;
+      ctx.fillText(`${room.width.toFixed(2)} x ${room.height.toFixed(2)}`, cx, cy + fs * 0.35);
+      if (room.orientation) {
+        ctx.fillStyle = "rgba(13,242,242,0.52)";
+        ctx.font = `${Math.max(5, fs - 3)}px monospace`;
+        ctx.fillText(room.orientation, cx, cy + fs * 1.3);
+      }
+    });
+
+    if (showWindFlow) {
+      if (windParticles.current.length < 35) {
+        for (let i = 0; i < 2; i++) {
+          let spawnX: number;
+          let spawnY: number;
+          if (Math.abs(windVec.x) >= Math.abs(windVec.y)) {
+            spawnX = windVec.x > 0 ? offX - ps(1.5) - Math.random() * ps(1) : offX + bw + ps(0.5) + Math.random() * ps(1);
+            spawnY = offY - ps(0.5) + Math.random() * (bh + ps(1));
+          } else {
+            spawnX = offX - ps(0.5) + Math.random() * (bw + ps(1));
+            spawnY = windVec.y > 0 ? offY - ps(1.5) - Math.random() * ps(1) : offY + bh + ps(0.5) + Math.random() * ps(1);
+          }
+          windParticles.current.push({ x: spawnX, y: spawnY, life: 0, speed: 1.8 + Math.random() * 1.2, alpha: 0 });
+        }
+      }
+
+      windParticles.current = windParticles.current.filter(particle => {
+        if (particle.life >= 100) return false;
+        const pastLeeward =
+          (windVec.x > 0.1 && particle.x > offX + bw + ps(2)) ||
+          (windVec.x < -0.1 && particle.x < offX - ps(2)) ||
+          (windVec.y > 0.1 && particle.y > offY + bh + ps(2)) ||
+          (windVec.y < -0.1 && particle.y < offY - ps(2));
+        return !pastLeeward;
+      });
+
+      windParticles.current.forEach(particle => {
+        particle.life++;
+        particle.x += windVec.x * particle.speed * 1.6;
+        particle.y += windVec.y * particle.speed * 1.6;
+        particle.alpha = Math.sin(particle.life / 100 * Math.PI) * 0.85;
+        const len = particle.speed * 9;
+        const ex = particle.x - windVec.x * len;
+        const ey = particle.y - windVec.y * len;
+        ctx.strokeStyle = `rgba(60,160,240,${particle.alpha})`;
+        ctx.lineWidth = 1.5;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(particle.x, particle.y);
+        ctx.stroke();
+        const angle = Math.atan2(windVec.y, windVec.x);
+        ctx.fillStyle = `rgba(80,180,255,${particle.alpha})`;
+        ctx.save();
+        ctx.translate(particle.x, particle.y);
+        ctx.rotate(angle);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-5, -2.5);
+        ctx.lineTo(-5, 2.5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      });
+    }
+
+    const northX = W - 38;
+    const northY = H - 58;
+    ctx.fillStyle = "#0df2f2";
+    ctx.font = "bold 10px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("N", northX, northY - 22);
+    ctx.beginPath();
+    ctx.moveTo(northX, northY - 18);
+    ctx.lineTo(northX - 6, northY + 4);
+    ctx.lineTo(northX, northY + 2);
+    ctx.lineTo(northX + 6, northY + 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "#0df2f2";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    const sbPx = scale * 5;
+    ctx.fillStyle = "rgba(13,242,242,0.7)";
+    ctx.fillRect(20, H - 18, sbPx, 2);
+    ctx.fillRect(20, H - 22, 2, 6);
+    ctx.fillRect(20 + sbPx - 2, H - 22, 2, 6);
+    ctx.font = "7px monospace";
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(13,242,242,0.5)";
+    ctx.fillText("0", 20, H - 5);
+    ctx.fillText("5m", 20 + sbPx + 2, H - 5);
+    ctx.textAlign = "right";
+    ctx.fillText(`${lat.toFixed(4)}°N  ${lon.toFixed(4)}°E`, W - 20, H - 18);
+
+    trees.slice(0, 3).forEach((_, i) => {
+      const tx = offX - 35 - i * 20;
+      const ty = offY + bh * 0.25 + i * 24;
+      ctx.beginPath();
+      ctx.arc(tx, ty, 11, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(40,200,80,0.15)";
+      ctx.fill();
+      ctx.strokeStyle = "#30d060";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = "#30d060";
+      ctx.font = "7px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`T${i + 1}`, tx, ty);
+    });
+  }, [rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, getRoomStyle]);
+
+  useEffect(() => {
+    let running = true;
+    const loop = () => {
+      if (!running) return;
+      draw();
+      animRef.current = requestAnimationFrame(loop);
+    };
+    animRef.current = requestAnimationFrame(loop);
+    return () => {
+      running = false;
+      cancelAnimationFrame(animRef.current);
+    };
+  }, [draw]);
+
+  return <canvas ref={canvasRef} className="w-full h-full" style={{ display: "block" }} />;
+}
+
 export default function AnalysisPage() {
   const params = useParams(); const router = useRouter();
   const plotId = params.id as string;
@@ -685,19 +901,42 @@ export default function AnalysisPage() {
     { time: "12:04:09", msg: "Cross-ventilation path established via West-East axis." },
   ]);
 
-  const { analysis, floorPlan, selectedLat, selectedLon, setFloorPlan, setGeneratingFloorPlan } = useEco3DStore();
+  const {
+    analysis, floorPlan, selectedLat, selectedLon,
+    setFloorPlan, setFloorPlanVariants, setActiveVariantIndex,
+    floorPlanVariants, activeVariantIndex, setGeneratingFloorPlan,
+  } = useEco3DStore();
   const lat = selectedLat ?? 34.0522;
   const lon = selectedLon ?? -118.2437;
-  const rooms = floorPlan?.layout ?? [];
+
+  // Active variant rooms (carousel drives what's displayed)
+  const activeVariant = floorPlanVariants[activeVariantIndex] ?? null;
+  const rooms = activeVariant?.layout ?? floorPlan?.layout ?? [];
+  const walls = activeVariant?.walls ?? floorPlan?.walls ?? [];
+  const doors = activeVariant?.doors ?? floorPlan?.doors ?? [];
+  const windows = activeVariant?.windows ?? floorPlan?.windows ?? [];
   const trees = analysis?.tree_coordinates?.slice(0,4) ?? [];
-  const ecoScore = floorPlan ? Math.round(floorPlan.fitness_score * 100) : (analysis ? Math.round(analysis.buildability_score) : 71);
-  const solarPct = floorPlan ? Math.round(floorPlan.sunlight_score * 100) : 88;
-  const ventPct = floorPlan ? Math.round(floorPlan.ventilation_score * 100) : 95;
+  const ecoScore = activeVariant
+    ? Math.round(activeVariant.fitness_score * 100)
+    : floorPlan ? Math.round(floorPlan.fitness_score * 100)
+    : (analysis ? Math.round(analysis.buildability_score) : 71);
+  const solarPct = activeVariant
+    ? Math.round(activeVariant.solar_score * 100)
+    : floorPlan ? Math.round(floorPlan.sunlight_score * 100) : 88;
+  const ventPct = activeVariant
+    ? Math.round(activeVariant.ventilation_score * 100)
+    : floorPlan ? Math.round(floorPlan.ventilation_score * 100) : 95;
   const treeDist = floorPlan?.tree_preserved_count ?? 0;
   const windDir = analysis?.environmental?.wind_direction ?? "SW";
 
-  // Compute limits based on area
-  const area = parseFloat(targetArea) || 240;
+  // Area input: user can type sqft or m²
+  const [areaUnit, setAreaUnit] = useState<"sqft"|"sqm">("sqm");
+  const areaInSqm = useMemo(() => {
+    const v = parseFloat(targetArea) || 240;
+    return areaUnit === "sqft" ? Math.round(v * 0.0929) : v;
+  }, [targetArea, areaUnit]);
+  const area = areaInSqm;
+
   const limits = useMemo(() => computeRoomLimits(area), [area]);
 
   const addLog = (msg: string) => {
@@ -708,9 +947,7 @@ export default function AnalysisPage() {
 
   const handleRegenerate = async () => {
     setGenerating(true);
-    addLog(`Generating ${plotShape} plot floor plan for ${houseType}...`);
-    if(maxSun) addLog("Solar optimization: living/bedrooms facing sun.");
-    if(natVent) addLog("Wind cross-ventilation path computed.");
+    addLog(`Generating 5 variants for ${plotShape} · ${area} m²...`);
     try {
       const fp = await generateFloorPlan({
         plot_id: plotId,
@@ -720,25 +957,28 @@ export default function AnalysisPage() {
         plot_shape: plotShape,
         house_type: houseType,
         room_preferences: {
-          bedrooms: numBedrooms,
-          bathrooms: numBathrooms,
-          puja_room: hasPuja,
-          garage: hasGarage,
-          office: hasOffice,
-          dining: hasDining,
-          utility: hasUtility,
+          bedrooms: numBedrooms, bathrooms: numBathrooms,
+          puja_room: hasPuja, garage: hasGarage,
+          office: hasOffice, dining: hasDining, utility: hasUtility,
         },
         maximize_sunlight: maxSun,
         natural_ventilation: natVent,
         sustainability_priority: sustPrio,
       });
-      setFloorPlan(fp); setGeneratingFloorPlan(false);
-      addLog(`✓ ${fp.layout.length} rooms optimized — fitness ${(fp.fitness_score*100).toFixed(0)}%`);
-      if(treePres) addLog(`Tree preservation: ${fp.tree_preserved_count} protected.`);
-      if(maxSun) addLog(`Solar score: ${(fp.sunlight_score*100).toFixed(0)}% — sun-facing rooms aligned.`);
-      if(natVent) addLog(`Ventilation: ${(fp.ventilation_score*100).toFixed(0)}% — cross-ventilation axis set.`);
-    } catch {
-      addLog("Generation failed — check backend.");
+      setFloorPlan(fp);
+      // Extract variants from properly typed response
+      const variants = fp.variants ?? [];
+      const bestIdx  = fp.best_variant_index ?? 0;
+      if (variants.length > 0) {
+        setFloorPlanVariants(variants, bestIdx);
+        addLog(`✓ ${variants.length} variants generated — best: "${variants[bestIdx]?.style}"`);
+        addLog(`Solar: ${Math.round((variants[bestIdx]?.solar_score??0)*100)}% · Vent: ${Math.round((variants[bestIdx]?.ventilation_score??0)*100)}% · Area: ${variants[bestIdx]?.total_area?.toFixed(0)} m²`);
+      } else {
+        addLog(`✓ ${fp.layout.length} rooms — fitness ${(fp.fitness_score*100).toFixed(0)}%`);
+      }
+      setGeneratingFloorPlan(false);
+    } catch (err: any) {
+      addLog(`Generation error: ${err?.message ?? "check backend"}`);
     } finally {
       setGenerating(false);
     }
@@ -835,8 +1075,23 @@ export default function AnalysisPage() {
                 {/* Area & Floors */}
                 <div className="grid grid-cols-2 gap-2 mb-3">
                   <div>
-                    <label className="text-[11px] text-slate-400 mb-1.5 block">Plot Area (m²)</label>
-                    <input type="number" value={targetArea} onChange={e => setTargetArea(e.target.value)} className="w-full glm rounded-lg px-3 py-2.5 text-[12px] text-white focus:outline-none" style={{ background: "rgba(13,242,242,0.04)" }} />
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-[11px] text-slate-400">Floor Area</label>
+                      <div className="flex rounded overflow-hidden border border-white/10" style={{fontSize:9}}>
+                        {(["sqm","sqft"] as const).map(u => (
+                          <button key={u} onClick={() => setAreaUnit(u)}
+                            style={{padding:"2px 7px",background:areaUnit===u?"#0df2f2":"transparent",color:areaUnit===u?"#080e0e":"#64748b",fontWeight:700,cursor:"pointer",border:"none",textTransform:"uppercase"}}>
+                            {u==="sqm"?"m²":"ft²"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <input type="number" value={targetArea} onChange={e => setTargetArea(e.target.value)}
+                      className="w-full glm rounded-lg px-3 py-2.5 text-[12px] text-white focus:outline-none"
+                      style={{ background: "rgba(13,242,242,0.04)" }} />
+                    <div className="text-[9px] text-slate-500 mt-1">
+                      {areaUnit==="sqft" ? `≈ ${area} m²` : `≈ ${Math.round(area/0.0929)} ft²`}
+                    </div>
                   </div>
                   <div>
                     <label className="text-[11px] text-slate-400 mb-1.5 block">Floors</label>
@@ -936,6 +1191,52 @@ export default function AnalysisPage() {
 
           {/* ── CENTER CANVAS ── */}
           <div className="flex-1 flex flex-col min-w-0 border-r border-white/5">
+
+            {/* ── Variant carousel ── */}
+            {floorPlanVariants.length > 0 && (
+              <div style={{ flexShrink:0, background:"rgba(8,14,14,0.98)", borderBottom:"1px solid rgba(255,255,255,0.05)", padding:"10px 16px", display:"flex", alignItems:"center", gap:12 }}>
+                <button
+                  onClick={() => setActiveVariantIndex(Math.max(0, activeVariantIndex - 1))}
+                  disabled={activeVariantIndex === 0}
+                  style={{ width:30, height:30, borderRadius:8, border:"1px solid rgba(13,242,242,0.2)", background:"transparent", color: activeVariantIndex===0?"#334155":"#0df2f2", cursor: activeVariantIndex===0?"not-allowed":"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}
+                >
+                  <span className="material-symbols-outlined" style={{fontSize:18}}>chevron_left</span>
+                </button>
+
+                <div style={{ flex:1, display:"flex", gap:8, overflowX:"auto" }}>
+                  {floorPlanVariants.map((v, i) => (
+                    <button key={v.id} onClick={() => setActiveVariantIndex(i)}
+                      style={{
+                        flexShrink:0, padding:"6px 14px", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer",
+                        border:`1px solid ${i===activeVariantIndex ? "#0df2f2" : "rgba(255,255,255,0.08)"}`,
+                        background: i===activeVariantIndex ? "rgba(13,242,242,0.12)" : "transparent",
+                        color: i===activeVariantIndex ? "#0df2f2" : "#64748b",
+                        display:"flex", flexDirection:"column", alignItems:"center", gap:2, minWidth:100,
+                      }}
+                    >
+                      <span style={{textTransform:"uppercase",letterSpacing:"0.08em"}}>{v.style}</span>
+                      <span style={{fontFamily:"monospace", fontSize:9, color: i===activeVariantIndex?"rgba(13,242,242,0.7)":"#334155"}}>
+                        ECO {Math.round((v.eco_score ?? v.fitness_score)*100)}% · {v.total_area.toFixed(0)}m²
+                      </span>
+                      {v.is_best && <span style={{fontSize:8, color:"#fbbf24", textTransform:"uppercase", letterSpacing:"0.1em"}}>★ Best</span>}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={() => setActiveVariantIndex(Math.min(floorPlanVariants.length-1, activeVariantIndex+1))}
+                  disabled={activeVariantIndex === floorPlanVariants.length-1}
+                  style={{ width:30, height:30, borderRadius:8, border:"1px solid rgba(13,242,242,0.2)", background:"transparent", color: activeVariantIndex===floorPlanVariants.length-1?"#334155":"#0df2f2", cursor: activeVariantIndex===floorPlanVariants.length-1?"not-allowed":"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}
+                >
+                  <span className="material-symbols-outlined" style={{fontSize:18}}>chevron_right</span>
+                </button>
+
+                <div style={{flexShrink:0, borderLeft:"1px solid rgba(255,255,255,0.06)", paddingLeft:12, fontSize:10, color:"#475569", fontFamily:"monospace"}}>
+                  {activeVariantIndex+1} / {floorPlanVariants.length}
+                </div>
+              </div>
+            )}
+
             <div className="flex-shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-white/5" style={{ background: "rgba(8,14,14,0.98)" }}>
               <div className="flex items-center gap-2 glm px-3 py-1.5 rounded-full">
                 <span className="w-2 h-2 rounded-full bg-primary aip" />
@@ -956,7 +1257,7 @@ export default function AnalysisPage() {
               </div>
             </div>
             <div className="flex-1 relative overflow-hidden">
-              <BlueprintCanvas rooms={rooms} trees={trees} lat={lat} lon={lon} zoom={zoom}
+              <BlueprintCanvas rooms={rooms} walls={walls} doors={doors} windows={windows} trees={trees} lat={lat} lon={lon} zoom={zoom}
                 showSolarPath={showSolar} showWindFlow={showWind} floorPlan={floorPlan}
                 plotShape={plotShape} plotArea={area} windDir={windDir} />
               <div className="absolute bottom-4 right-4 flex flex-col gap-1">

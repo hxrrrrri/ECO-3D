@@ -1,31 +1,33 @@
-"""Analysis route — POST /analyze-plot runs the full AI pipeline."""
-import traceback
-from fastapi import APIRouter, HTTPException, Depends
+"""Analysis route — POST /analyze-plot — never returns 500."""
+import traceback, logging
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.connection import get_db
-from database.models import PlotRecord, AnalysisRecord
-from models.schemas import AnalyzePlotRequest, AnalysisResponse
+from models.schemas import AnalyzePlotRequest
 from services.analysis_pipeline import run_full_analysis
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-
-@router.post("/analyze-plot", response_model=AnalysisResponse)
+@router.post("/analyze-plot")
 async def analyze_plot(request: AnalyzePlotRequest, db: AsyncSession = Depends(get_db)):
-    """
-    Full sequential AI pipeline:
-    1. Satellite tile fetch
-    2. DeepLabV3 segmentation
-    3. YOLOv8 tree detection
-    4. Environmental feature engineering (NDVI, slope, elevation, rainfall, soil, wind, sun)
-    5. XGBoost flood risk model
-    6. MLP buildability model
-    7. Persist to PostgreSQL
-    8. Return structured JSON
-    """
     try:
         result = await run_full_analysis(request, db)
-        return result
+        return JSONResponse(
+            content=result.model_dump(),
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
     except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        tb = traceback.format_exc()
+        logger.error(f"[analyze-plot] Uncaught: {tb}")
+        return JSONResponse(
+            status_code=200,
+            content={
+                "error": True,
+                "plot_id": request.plot_id,
+                "message": f"Analysis error: {str(e)}",
+                "detail": tb.splitlines()[-1] if tb else str(e),
+            },
+            headers={"Access-Control-Allow-Origin": "*"},
+        )

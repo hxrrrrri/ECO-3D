@@ -1848,103 +1848,118 @@ const PALETTE_OBJECTS = [
 ];
 
 // ─── Initial scene builder — PROPER GRID LAYOUT matching floor plan ───────────
-function buildInitialObjects(rooms: any[]): SceneObj[] {
-  const floor1 = rooms.filter(r => (r.floor ?? 1) === 1);
-  if (!floor1.length) return [];
+function buildInitialObjects(rooms: any[], walls: any[] = [], doors: any[] = []): SceneObj[] {
+  const allRooms = rooms ?? [];
+  if (!allRooms.length) return [];
 
   const FH = 3.2;
-  const OWT = 0.28;
-  const IWT = 0.14;
-
-  const ORDER = ["living", "kitchen", "dining", "bedroom", "bedroom", "bathroom", "office", "utility", "garage"];
-  const sorted = [...floor1].sort((a, b) => {
-    const ai = ORDER.findIndex(o => a.type.toLowerCase().includes(o));
-    const bi = ORDER.findIndex(o => b.type.toLowerCase().includes(o));
-    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
-  });
-
-  // Group rooms into rows by category (same as floor plan)
-  const pubT = ["living", "kitchen", "dining"];
-  const prvT = ["bedroom", "bathroom"];
-  const svcT = ["office", "utility", "garage", "corridor"];
-  const rows: any[][] = [
-    sorted.filter(r => pubT.some(t => r.type.toLowerCase().includes(t))),
-    sorted.filter(r => prvT.some(t => r.type.toLowerCase().includes(t))),
-    sorted.filter(r => svcT.some(t => r.type.toLowerCase().includes(t))),
-  ].filter(row => row.length > 0);
-
-  const normSz = (r: any) => {
-    const t = r.type.toLowerCase();
-    if (t.includes("living"))   return { w: Math.max(4.5, Math.min(7, r.width ?? 5)),    d: Math.max(4, Math.min(6, r.height ?? 4.5)) };
-    if (t.includes("kitchen"))  return { w: Math.max(3.5, Math.min(5.5, r.width ?? 4)),  d: Math.max(3, Math.min(5, r.height ?? 3.5)) };
-    if (t.includes("dining"))   return { w: Math.max(3, Math.min(5, r.width ?? 3.5)),    d: Math.max(3, Math.min(4.5, r.height ?? 3.5)) };
-    if (t.includes("bedroom"))  return { w: Math.max(3.2, Math.min(5, r.width ?? 4)),    d: Math.max(3, Math.min(4.5, r.height ?? 3.5)) };
-    if (t.includes("bathroom")) return { w: Math.max(2, Math.min(3.5, r.width ?? 2.5)),  d: Math.max(2, Math.min(3.2, r.height ?? 2.5)) };
-    if (t.includes("office"))   return { w: Math.max(3, Math.min(4.5, r.width ?? 3.5)),  d: Math.max(3, Math.min(4, r.height ?? 3)) };
-    if (t.includes("garage"))   return { w: Math.max(4.5, Math.min(7, r.width ?? 5.5)),  d: Math.max(4, Math.min(6, r.height ?? 5)) };
-    return { w: Math.max(2.5, Math.min(4, r.width ?? 3)), d: Math.max(2, Math.min(3.5, r.height ?? 3)) };
-  };
-
-  const rowData = rows.map(row => ({
-    totalW: row.reduce((s: number, r: any) => s + normSz(r).w, 0),
-    maxH: Math.max(...row.map((r: any) => normSz(r).d)),
-    rooms: row,
-  }));
-  const maxW = Math.max(...rowData.map(r => r.totalW));
-
-  type LR = { room: any; px: number; pz: number; pw: number; pd: number };
-  const laid: LR[] = [];
-  let curZ = 0;
-  rowData.forEach(({ totalW, maxH, rooms: row }) => {
-    const scale = totalW < maxW ? maxW / totalW : 1;
-    let curX = 0;
-    row.forEach((r: any) => {
-      const sz = normSz(r);
-      const rw = sz.w * scale;
-      const rd = sz.d;
-      laid.push({ room: r, px: curX, pz: curZ, pw: rw, pd: rd });
-      curX += rw;
-    });
-    curZ += maxH;
-  });
-
-  const totalW = maxW;
-  const totalD = rowData.reduce((s, r) => s + r.maxH, 0);
-  const offX = -totalW / 2;
-  const offZ = -totalD / 2;
+  const allX2 = allRooms.flatMap((r: any) => [r.x, r.x + r.width]);
+  const allY2 = allRooms.flatMap((r: any) => [r.y, r.y + r.height]);
+  const minX = Math.min(...allX2), maxX = Math.max(...allX2);
+  const minY = Math.min(...allY2), maxY = Math.max(...allY2);
+  const totalW = maxX - minX;
+  const totalD = maxY - minY;
+  const offX = -(totalW / 2) - minX;
+  const offZ = -(totalD / 2) - minY;
 
   let id = 0;
   const objs: SceneObj[] = [];
 
-  // Add room floors and ghost walls
-  laid.forEach(({ room, px, pz, pw, pd }) => {
-    const t = room.type.toLowerCase();
-    const floorColor = t.includes("bathroom") ? "#2a3a3a" : t.includes("kitchen") ? "#1e2e2e" : "#1a2828";
-    const cx = offX + px + pw / 2;
-    const cz = offZ + pz + pd / 2;
+  const ROOM_COLORS: Record<string, string> = {
+    living: "#0a1e1e", bedroom: "#0a1422", kitchen: "#0a1c14",
+    bathroom: "#160c26", office: "#1c160a", garage: "#161a1a",
+    utility: "#1a100a", dining: "#1c0c0c", puja_room: "#18160a",
+  };
+  const getRoomColor = (type: string) => {
+    const t = type.toLowerCase().replace("_", "");
+    const k = Object.keys(ROOM_COLORS).find(key => t.includes(key.replace("_", "")));
+    return k ? ROOM_COLORS[k] : "#101818";
+  };
+
+  allRooms.forEach((room: any) => {
+    const floorOffset = ((room.floor ?? 1) - 1) * (FH + 0.25);
     objs.push({
-      id: `room-${id++}`, kind: "room", type: room.type,
-      x: cx, y: FH / 2, z: cz, rotY: 0,
-      w: pw, h: FH, d: pd,
-      color: floorColor,
+      id: `room-${id++}`,
+      kind: "room",
+      type: room.type,
+      x: offX + room.x + room.width / 2,
+      y: floorOffset + FH / 2,
+      z: offZ + room.y + room.height / 2,
+      rotY: 0,
+      w: room.width,
+      h: FH,
+      d: room.height,
+      color: getRoomColor(room.type),
     });
   });
 
-  // Outer perimeter walls
-  objs.push({ id: `wall-n-${id++}`, kind: "wall", type: "Wall", x: 0, y: FH / 2, z: offZ - OWT / 2, rotY: 0, w: totalW + OWT * 2, h: FH, d: OWT, color: "#d8e2e8" });
-  objs.push({ id: `wall-s-${id++}`, kind: "wall", type: "Wall", x: 0, y: FH / 2, z: offZ + totalD + OWT / 2, rotY: 0, w: totalW + OWT * 2, h: FH, d: OWT, color: "#d8e2e8" });
-  objs.push({ id: `wall-w-${id++}`, kind: "wall", type: "Wall", x: offX - OWT / 2, y: FH / 2, z: 0, rotY: 0, w: OWT, h: FH, d: totalD + OWT * 2, color: "#d8e2e8" });
-  objs.push({ id: `wall-e-${id++}`, kind: "wall", type: "Wall", x: offX + totalW + OWT / 2, y: FH / 2, z: 0, rotY: 0, w: OWT, h: FH, d: totalD + OWT * 2, color: "#d8e2e8" });
+  walls.forEach((wall: any) => {
+    const floorOffset = ((wall.floor ?? 1) - 1) * (FH + 0.25);
+    const horizontal = wall.orientation === "horizontal";
+    const wallHeight = wall.height ?? FH;
+    const openings = doors
+      .filter((door: any) => door.floor === wall.floor && ((horizontal && door.orientation === "horizontal") || (!horizontal && door.orientation === "vertical")))
+      .filter((door: any) => Math.abs((horizontal ? door.y : door.x) - (horizontal ? wall.y : wall.x)) < 0.18)
+      .sort((a: any, b: any) => (horizontal ? a.x - b.x : a.y - b.y));
 
-  // Interior divider walls
-  laid.forEach(({ px, pz, pw, pd }) => {
-    const roomRight  = px + pw < totalW - 0.01;
-    const roomBottom = pz + pd < totalD - 0.01;
-    if (roomRight) {
-      objs.push({ id: `iwall-v-${id++}`, kind: "wall", type: "Wall", x: offX + px + pw, y: FH / 2, z: offZ + pz + pd / 2, rotY: 0, w: IWT, h: FH, d: pd, color: "#c8d4da" });
+    if (!openings.length) {
+      objs.push({
+        id: wall.id ?? `wall-${id++}`,
+        kind: "wall",
+        type: wall.type === "exterior" ? "Exterior Wall" : "Interior Wall",
+        x: offX + wall.x,
+        y: floorOffset + wallHeight / 2,
+        z: offZ + wall.y,
+        rotY: 0,
+        w: horizontal ? wall.length : wall.thickness,
+        h: wallHeight,
+        d: horizontal ? wall.thickness : wall.length,
+        color: wall.type === "exterior" ? "#d0dde4" : "#b8c8cc",
+      });
+      return;
     }
-    if (roomBottom) {
-      objs.push({ id: `iwall-h-${id++}`, kind: "wall", type: "Wall", x: offX + px + pw / 2, y: FH / 2, z: offZ + pz + pd, rotY: 0, w: pw, h: FH, d: IWT, color: "#c8d4da" });
+
+    const start = (horizontal ? wall.x : wall.y) - wall.length / 2;
+    const end = (horizontal ? wall.x : wall.y) + wall.length / 2;
+    let cursor = start;
+    openings.forEach((door: any) => {
+      const center = horizontal ? door.x : door.y;
+      const gapHalf = door.width / 2;
+      const gapStart = Math.max(start, center - gapHalf);
+      const gapEnd = Math.min(end, center + gapHalf);
+      const segLen = gapStart - cursor;
+      if (segLen > 0.18) {
+        objs.push({
+          id: `${wall.id ?? `wall-${id++}`}-a-${cursor.toFixed(2)}`,
+          kind: "wall",
+          type: wall.type === "exterior" ? "Exterior Wall" : "Interior Wall",
+          x: offX + (horizontal ? cursor + segLen / 2 : wall.x),
+          y: floorOffset + wallHeight / 2,
+          z: offZ + (horizontal ? wall.y : cursor + segLen / 2),
+          rotY: 0,
+          w: horizontal ? segLen : wall.thickness,
+          h: wallHeight,
+          d: horizontal ? wall.thickness : segLen,
+          color: wall.type === "exterior" ? "#d0dde4" : "#b8c8cc",
+        });
+      }
+      cursor = gapEnd;
+    });
+    const tail = end - cursor;
+    if (tail > 0.18) {
+      objs.push({
+        id: `${wall.id ?? `wall-${id++}`}-b-${cursor.toFixed(2)}`,
+        kind: "wall",
+        type: wall.type === "exterior" ? "Exterior Wall" : "Interior Wall",
+        x: offX + (horizontal ? cursor + tail / 2 : wall.x),
+        y: floorOffset + wallHeight / 2,
+        z: offZ + (horizontal ? wall.y : cursor + tail / 2),
+        rotY: 0,
+        w: horizontal ? tail : wall.thickness,
+        h: wallHeight,
+        d: horizontal ? wall.thickness : tail,
+        color: wall.type === "exterior" ? "#d0dde4" : "#b8c8cc",
+      });
     }
   });
 
@@ -2072,12 +2087,15 @@ function ObjSvg({ type, color }: { type: string; color: string }) {
 export default function Model3DPage() {
   const params = useParams();
   const plotId = params.id as string;
-  const { floorPlan, analysis } = useEco3DStore();
-  const rooms = floorPlan?.layout ?? [];
+  const { floorPlan, analysis, floorPlanVariants, activeVariantIndex } = useEco3DStore();
+  const activeVariant = floorPlanVariants[activeVariantIndex] ?? null;
+  const rooms = activeVariant?.layout ?? floorPlan?.layout ?? [];
+  const walls = activeVariant?.walls ?? floorPlan?.walls ?? [];
+  const doors = activeVariant?.doors ?? floorPlan?.doors ?? [];
   const windDir = analysis?.environmental?.wind_direction ?? "NW";
   const sunHours = analysis?.environmental?.sun_exposure_hours ?? 8.2;
 
-  const [objects, setObjects] = useState<SceneObj[]>(() => buildInitialObjects(rooms));
+  const [objects, setObjects] = useState<SceneObj[]>(() => buildInitialObjects(rooms, walls, doors));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -2105,9 +2123,9 @@ export default function Model3DPage() {
   // Rebuild scene when floor plan data loads
   useEffect(() => {
     if (rooms.length > 0) {
-      setObjects(buildInitialObjects(rooms));
+      setObjects(buildInitialObjects(rooms, walls, doors));
     }
-  }, [floorPlan]);
+  }, [rooms, walls, doors, activeVariantIndex]);
 
   // Compute model bounds for WindSwirl
   const modelBounds = useMemo(() => {
