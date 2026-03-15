@@ -8,7 +8,7 @@ import { generateFloorPlan } from "@/lib/api";
 
 interface Room { id?: string; type: string; width: number; height: number; x: number; y: number; floor: number; orientation: string; }
 interface Wall { id?: string; room_id: string; type: string; orientation: string; x: number; y: number; x2?: number; y2?: number; length: number; thickness: number; floor: number; }
-interface Door { id?: string; room_to: string; type: string; x: number; y: number; width: number; orientation: string; floor: number; }
+interface Door { id?: string; room_to: string; type: string; x: number; y: number; width: number; orientation: string; floor: number; symbol?: string; }
 interface WindowEl { id?: string; wall: string; position?: number; width: number; floor: number; }
 interface Tree { lat: number; lon: number; confidence: number; }
 
@@ -93,6 +93,37 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
       <span className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all duration-300" style={{ left: on ? "22px" : "2px" }} />
     </button>
   );
+}
+
+const WIND_VECTOR_MAP: Record<string, [number, number]> = {
+  N: [0, -1], NE: [1, -1], E: [1, 0], SE: [1, 1], S: [0, 1], SW: [-1, 1], W: [-1, 0], NW: [-1, -1],
+  NNE: [0.5, -1], ENE: [1, -0.5], ESE: [1, 0.5], SSE: [0.5, 1],
+  SSW: [-0.5, 1], WSW: [-1, 0.5], WNW: [-1, -0.5], NNW: [-0.5, -1],
+};
+
+function getWindProfile(direction: string, speed?: number) {
+  const normalizedDirection = (direction || "SW").toUpperCase().replace(/[^A-Z]/g, "");
+  const key = Object.keys(WIND_VECTOR_MAP)
+    .sort((a, b) => b.length - a.length)
+    .find(candidate => normalizedDirection.startsWith(candidate)) ?? "SW";
+  const [x, y] = WIND_VECTOR_MAP[key];
+  const length = Math.hypot(x, y) || 1;
+  const windSpeed = typeof speed === "number" && Number.isFinite(speed) ? Math.max(0, speed) : 3.2;
+  const intensity = Math.max(0.58, Math.min(1.55, 0.72 + windSpeed / 6));
+
+  return {
+    label: key,
+    speed: windSpeed,
+    x: x / length,
+    y: y / length,
+    intensity,
+    particleCap: Math.round(26 + intensity * 24),
+    spawnCount: Math.max(2, Math.min(6, Math.round(1 + intensity * 2.2))),
+    burstMs: Math.round(1025 + windSpeed * 115),
+    gapMs: Math.round(Math.max(6400, 7600 - windSpeed * 140)),
+    trailMultiplier: 0.95 + intensity * 0.45,
+    curveOffset: 18 + windSpeed * 2.8,
+  };
 }
 
 // ── Blueprint Canvas ──────────────────────────────────────────────────────────
@@ -508,362 +539,629 @@ function LegacyBlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, 
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, floorPlan, plotShape, plotArea, windDir }:
-  { rooms: Room[]; walls: Wall[]; doors: Door[]; windows: WindowEl[]; trees: Tree[]; lat: number; lon: number; zoom: number; showSolarPath: boolean; showWindFlow: boolean; floorPlan: any; plotShape: string; plotArea: number; windDir: string }) {
+function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, floorPlan, plotShape, plotArea, windDir, windSpeed }:
+  { rooms: Room[]; walls: Wall[]; doors: Door[]; windows: WindowEl[]; trees: Tree[]; lat: number; lon: number; zoom: number; showSolarPath: boolean; showWindFlow: boolean; floorPlan: any; plotShape: string; plotArea: number; windDir: string; windSpeed: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const windParticles = useRef<Array<{x:number;y:number;life:number;speed:number;alpha:number}>>([]);
+  const windPulseRef = useRef({ burstUntil: 0, nextBurstAt: 0 });
 
-  const getRoomStyle = useCallback((type: string) => {
-    const palette: Record<string, { bg: string; border: string; label: string }> = {
-      living: { bg: "rgba(13,200,200,0.10)", border: "#0bc8c8", label: "LIVING ROOM" },
-      bedroom: { bg: "rgba(74,157,232,0.11)", border: "#4a9de8", label: "BEDROOM" },
-      kitchen: { bg: "rgba(44,180,110,0.10)", border: "#2cb46e", label: "KITCHEN" },
-      bathroom: { bg: "rgba(155,114,212,0.11)", border: "#9b72d4", label: "BATHROOM" },
-      office: { bg: "rgba(232,195,58,0.11)", border: "#e8c33a", label: "STUDY" },
-      garage: { bg: "rgba(143,160,160,0.10)", border: "#8fa0a0", label: "GARAGE" },
-      utility: { bg: "rgba(224,128,80,0.10)", border: "#e08050", label: "UTILITY" },
-      dining: { bg: "rgba(232,122,58,0.10)", border: "#e87a3a", label: "DINING" },
-      puja_room: { bg: "rgba(200,160,32,0.10)", border: "#c8a020", label: "PUJA ROOM" },
-    };
-    const key = Object.keys(palette).find(k => type.toLowerCase().replace("_", "").includes(k.replace("_", "")));
-    return key ? palette[key] : { bg: "rgba(13,242,242,0.06)", border: "#0df2f2", label: type.toUpperCase() };
-  }, []);
+  // Professional CAD colour palette — white paper background
+  const ROOM_FILL: Record<string, string> = {
+    living:    "rgba(13,200,200,0.10)", bedroom:   "rgba(74,157,232,0.11)", kitchen:   "rgba(44,180,110,0.10)",
+    bathroom:  "rgba(155,114,212,0.11)", office:    "rgba(232,195,58,0.11)", garage:    "rgba(143,160,160,0.10)",
+    utility:   "rgba(224,128,80,0.10)", dining:    "rgba(232,122,58,0.10)", puja_room: "rgba(200,160,32,0.10)",
+  };
+  const ROOM_HATCH: Record<string, boolean> = {
+    bathroom: true, utility: true, garage: true,
+  };
+  const ROOM_LABEL: Record<string, string> = {
+    living:"LIVING ROOM", bedroom:"BEDROOM", kitchen:"KITCHEN",
+    bathroom:"BATHROOM", office:"STUDY/OFFICE", garage:"GARAGE",
+    utility:"UTILITY", dining:"DINING ROOM", puja_room:"PUJA ROOM",
+  };
 
-  const windVec = useMemo(() => {
-    const M: Record<string,[number,number]> = {
-      N:[0,-1],NE:[1,-1],E:[1,0],SE:[1,1],S:[0,1],SW:[-1,1],W:[-1,0],NW:[-1,-1],
-      NNE:[0.5,-1],SSW:[-0.5,1],ENE:[1,-0.5],WSW:[-1,0.5],NNW:[-0.5,-1],SSE:[0.5,1],ESE:[1,0.5],WNW:[-1,-0.5],
-    };
-    const key = Object.keys(M).find(k => windDir.toUpperCase().startsWith(k)) ?? "SW";
-    const [x, y] = M[key];
-    const len = Math.sqrt(x * x + y * y) || 1;
-    return { x: x / len, y: y / len };
-  }, [windDir]);
+  const ROOM_STYLE_MAP: Record<string,{bg:string;border:string}> = {
+    living:    {bg:"rgba(13,200,200,0.10)",  border:"#0bc8c8"},
+    bedroom:   {bg:"rgba(74,157,232,0.11)",  border:"#4a9de8"},
+    kitchen:   {bg:"rgba(44,180,110,0.10)",  border:"#2cb46e"},
+    bathroom:  {bg:"rgba(155,114,212,0.11)", border:"#9b72d4"},
+    office:    {bg:"rgba(232,195,58,0.11)",  border:"#e8c33a"},
+    garage:    {bg:"rgba(143,160,160,0.10)", border:"#8fa0a0"},
+    utility:   {bg:"rgba(224,128,80,0.10)",  border:"#e08050"},
+    dining:    {bg:"rgba(232,122,58,0.10)",  border:"#e87a3a"},
+    puja_room: {bg:"rgba(200,160,32,0.10)",  border:"#c8a020"},
+  };
+  const getRoomStyle = (type: string) => {
+    const k = Object.keys(ROOM_STYLE_MAP).find(k =>
+      type.toLowerCase().replace("_","").includes(k.replace("_",""))
+    );
+    return k ? ROOM_STYLE_MAP[k] : {bg:"rgba(13,242,242,0.06)", border:"#0df2f2"};
+  };
+  const getRoomFill = (type: string) => getRoomStyle(type).bg;
+  const getRoomHatch = (type: string) => {
+    const k = Object.keys(ROOM_HATCH).find(k => type.toLowerCase().replace("_","").includes(k.replace("_","")));
+    return k ? ROOM_HATCH[k] : false;
+  };
+  const getRoomLabel = (type: string) => {
+    const k = Object.keys(ROOM_LABEL).find(k => type.toLowerCase().replace("_","").includes(k.replace("_","")));
+    return k ? ROOM_LABEL[k] : type.replace(/_/g," ").toUpperCase();
+  };
+  const getDisplayLabel = (room: Room) => {
+    const match = room.id?.match(/_(\d+)$/);
+    const base = getRoomLabel(room.type);
+    if (match && (room.type.includes("bedroom") || room.type.includes("bathroom"))) {
+      return `${base} ${match[1]}`;
+    }
+    return base;
+  };
+  const getShortLabel = (room: Room) => {
+    const label = getDisplayLabel(room);
+    if (label.includes("LIVING")) return "LIVING";
+    if (label.includes("DINING")) return "DINING";
+    if (label.includes("KITCHEN")) return "KITCHEN";
+    if (label.includes("BEDROOM")) return room.id?.match(/_(\d+)$/) ? `BED ${room.id.match(/_(\d+)$/)?.[1]}` : "BED";
+    if (label.includes("BATHROOM")) return room.id?.match(/_(\d+)$/) ? `BATH ${room.id.match(/_(\d+)$/)?.[1]}` : "BATH";
+    if (label.includes("STUDY")) return "STUDY";
+    if (label.includes("UTILITY")) return "UTILITY";
+    if (label.includes("GARAGE")) return "GARAGE";
+    if (label.includes("PUJA")) return "PUJA";
+    return label;
+  };
+  const parseWindowWall = (wallId: string) => {
+    const parts = wallId.split("_");
+    if (parts[parts.length - 1] === "vent") {
+      return { roomId: parts.slice(0, -2).join("_"), edge: parts[parts.length - 2], isVent: true };
+    }
+    return { roomId: parts.slice(0, -1).join("_"), edge: parts[parts.length - 1], isVent: false };
+  };
+  const drawFurniture = (ctx: CanvasRenderingContext2D, room: Room, rx: number, ry: number, rw: number, rh: number, color: string) => {
+    if (rw < 34 || rh < 24) return;
+    const cx = rx + rw / 2;
+    const cy = ry + rh / 2;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = `${color}22`;
+    ctx.lineWidth = 1;
+    if (room.type.includes("living")) {
+      const sw = Math.min(rw * 0.5, 54);
+      const sh = Math.min(rh * 0.26, 18);
+      ctx.strokeRect(cx - sw / 2, cy - sh / 2, sw, sh);
+      ctx.strokeRect(cx - sw / 2 - 8, cy - sh / 2 + 2, 8, sh - 4);
+      ctx.strokeRect(cx + sw / 2, cy - sh / 2 + 2, 8, sh - 4);
+      ctx.beginPath(); ctx.arc(cx, cy + sh * 0.95, 5, 0, Math.PI * 2); ctx.stroke();
+    } else if (room.type.includes("dining")) {
+      const tw = Math.min(rw * 0.42, 42);
+      const th = Math.min(rh * 0.28, 24);
+      ctx.strokeRect(cx - tw / 2, cy - th / 2, tw, th);
+      [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([mx,my]) => {
+        ctx.beginPath(); ctx.arc(cx + mx * (tw / 2 + 5), cy + my * (th / 2 + 4), 3.5, 0, Math.PI * 2); ctx.stroke();
+      });
+    } else if (room.type.includes("bedroom")) {
+      const bw = Math.min(rw * 0.5, 42);
+      const bh = Math.min(rh * 0.38, 28);
+      ctx.strokeRect(cx - bw / 2, cy - bh / 2, bw, bh);
+      ctx.strokeRect(cx - bw / 2, cy - bh / 2, bw, 7);
+      ctx.strokeRect(cx - bw / 2 + 4, cy - bh / 2 + 1, bw / 2 - 6, 5);
+      ctx.strokeRect(cx + 2, cy - bh / 2 + 1, bw / 2 - 6, 5);
+    } else if (room.type.includes("kitchen")) {
+      const counterH = Math.min(rh * 0.18, 12);
+      ctx.strokeRect(rx + 6, ry + 6, rw - 12, counterH);
+      ctx.strokeRect(rx + 6, ry + rh - counterH - 6, rw - 12, counterH);
+      ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeRect(cx - 10, cy - 8, 20, 16);
+    } else if (room.type.includes("bathroom")) {
+      ctx.beginPath(); ctx.arc(cx - 8, cy - 2, 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeRect(cx + 3, cy - 7, 14, 14);
+      ctx.strokeRect(cx - 16, cy + 8, 32, 6);
+    } else if (room.type.includes("office")) {
+      ctx.strokeRect(cx - 18, cy - 8, 36, 16);
+      ctx.strokeRect(cx - 12, cy + 10, 24, 5);
+      ctx.beginPath(); ctx.arc(cx + 16, cy + 8, 4, 0, Math.PI * 2); ctx.stroke();
+    } else if (room.type.includes("garage")) {
+      ctx.strokeRect(cx - 24, cy - 10, 48, 20);
+      ctx.beginPath(); ctx.arc(cx - 14, cy + 12, 4, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx + 14, cy + 12, 4, 0, Math.PI * 2); ctx.stroke();
+    } else if (room.type.includes("utility")) {
+      ctx.beginPath(); ctx.arc(cx - 8, cy, 7, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx - 8, cy, 2, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeRect(cx + 4, cy - 9, 14, 18);
+    } else if (room.type.includes("puja")) {
+      ctx.strokeRect(cx - 12, cy - 10, 24, 20);
+      ctx.beginPath(); ctx.moveTo(cx - 15, cy - 10); ctx.lineTo(cx, cy - 18); ctx.lineTo(cx + 15, cy - 10); ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  const windVec = useMemo(() => getWindProfile(windDir, windSpeed), [windDir, windSpeed]);
+
+  useEffect(() => {
+    windParticles.current = [];
+    windPulseRef.current = { burstUntil: 0, nextBurstAt: 0 };
+  }, [windVec.label, windVec.speed]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const W = canvas.offsetWidth || 900;
+    const H = canvas.offsetHeight || 700;
+    canvas.width = W; canvas.height = H;
 
-    const W = canvas.offsetWidth || 700;
-    const H = canvas.offsetHeight || 600;
-    canvas.width = W;
-    canvas.height = H;
-
-    ctx.fillStyle = "#0d1117";
+    // ── White paper background (professional CAD look) ──
+    ctx.fillStyle = "#0b1416";
     ctx.fillRect(0, 0, W, H);
-    const GRID = 22;
-    ctx.strokeStyle = "rgba(13,242,242,0.06)";
-    ctx.lineWidth = 0.5;
-    for (let gx = 0; gx < W; gx += GRID) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke(); }
-    for (let gy = 0; gy < H; gy += GRID) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke(); }
-    ctx.strokeStyle = "rgba(13,242,242,0.11)";
-    ctx.lineWidth = 0.8;
-    for (let gx = 0; gx < W; gx += GRID * 5) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke(); }
-    for (let gy = 0; gy < H; gy += GRID * 5) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke(); }
 
-    const floor1 = rooms.filter(room => (room.floor ?? 1) === 1);
-    const floorWalls = walls.filter(wall => (wall.floor ?? 1) === 1);
-    const floorDoors = doors.filter(door => (door.floor ?? 1) === 1);
-    const floorWindows = windows.filter(window => (window.floor ?? 1) === 1);
+    // ── Light grey grid (like CAD grid paper) ──
+    const GRID = 20;
+    ctx.strokeStyle = "rgba(13,242,242,0.055)"; ctx.lineWidth = 0.4;
+    for (let gx=0; gx<W; gx+=GRID) { ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke(); }
+    for (let gy=0; gy<H; gy+=GRID) { ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke(); }
+    ctx.strokeStyle = "rgba(13,242,242,0.10)"; ctx.lineWidth = 0.6;
+    for (let gx=0; gx<W; gx+=GRID*5) { ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke(); }
+    for (let gy=0; gy<H; gy+=GRID*5) { ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke(); }
+
+    const floor1 = rooms.filter(r => (r.floor??1)===1);
+    const floorWalls = walls.filter(w => (w.floor??1)===1);
+    const floorDoors = doors.filter(d => (d.floor??1)===1);
+    const floorWindows = windows.filter(w => (w.floor??1)===1);
 
     if (floor1.length === 0) {
-      ctx.fillStyle = "#0df2f2";
-      ctx.font = "bold 14px 'Space Grotesk', sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("AWAITING FLOOR PLAN GENERATION", W / 2, H / 2 - 10);
-      ctx.fillStyle = "rgba(13,242,242,0.4)";
-      ctx.font = "11px sans-serif";
-      ctx.fillText("Select a plot and run analysis", W / 2, H / 2 + 14);
+      ctx.fillStyle = "#0df2f2"; ctx.font = "bold 15px 'Space Grotesk', sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("AWAITING FLOOR PLAN GENERATION", W/2, H/2-10);
+      ctx.fillStyle = "rgba(13,242,242,0.5)"; ctx.font = "12px sans-serif";
+      ctx.fillText("Configure settings and generate", W/2, H/2+14);
       return;
     }
 
-    const minX = Math.min(...floor1.map(room => room.x));
-    const minY = Math.min(...floor1.map(room => room.y));
-    const maxX = Math.max(...floor1.map(room => room.x + room.width));
-    const maxY = Math.max(...floor1.map(room => room.y + room.height));
-    const scale = Math.min((W - 172) / Math.max(maxX - minX, 0.1), (H - (showSolarPath ? 194 : 150)) / Math.max(maxY - minY, 0.1));
-    const bw = (maxX - minX) * scale;
-    const bh = (maxY - minY) * scale;
-    const offX = (W - bw) / 2;
-    const offY = Math.max(showSolarPath ? 118 : 82, (H - bh) / 2 + 10);
-    const wallThickness = Math.max(6, scale * 0.36);
-    const px = (x: number) => offX + (x - minX) * scale;
-    const py = (y: number) => offY + (y - minY) * scale;
-    const ps = (v: number) => v * scale;
+    const minX = Math.min(...floor1.map(r=>r.x));
+    const minY = Math.min(...floor1.map(r=>r.y));
+    const maxX = Math.max(...floor1.map(r=>r.x+r.width));
+    const maxY = Math.max(...floor1.map(r=>r.y+r.height));
+    const MARGIN_L=90, MARGIN_R=60, MARGIN_T=showSolarPath?120:80, MARGIN_B=70;
+    const baseScale = Math.min(
+      (W-MARGIN_L-MARGIN_R) / Math.max(maxX-minX, 0.1),
+      (H-MARGIN_T-MARGIN_B) / Math.max(maxY-minY, 0.1)
+    );
+    const zoomFactor = Math.min(2.6, Math.max(0.55, Math.pow(1.08, zoom - 14)));
+    const scale = baseScale * zoomFactor;
+    const bw = (maxX-minX)*scale;
+    const bh = (maxY-minY)*scale;
+    const offX = MARGIN_L + (W-MARGIN_L-MARGIN_R-bw)/2;
+    const offY = MARGIN_T + (H-MARGIN_T-MARGIN_B-bh)/2;
 
+    const px = (x:number) => offX + (x-minX)*scale;
+    const py = (y:number) => offY + (y-minY)*scale;
+    const ps = (v:number) => v*scale;
+
+    // ── Solar arc (live sun position) ──
     if (showSolarPath) {
-      const now = new Date();
-      const hour = now.getHours() + now.getMinutes() / 60;
-      const safeLeft = Math.max(28, offX + 6);
-      const safeRight = Math.min(W - 28, offX + bw - 6);
-      const span = Math.max(96, safeRight - safeLeft);
-      const arcBaseY = Math.max(44, offY - 28);
-      const arcAmp = Math.min(38, Math.max(18, arcBaseY - 16));
+      const now = new Date(); const hour = now.getHours()+now.getMinutes()/60;
+      const arcY = offY - 36; const arcAmp = 28;
       ctx.save();
-      ctx.strokeStyle = "rgba(250,160,20,0.55)";
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = "rgba(220,140,20,0.55)"; ctx.lineWidth = 1.5; ctx.setLineDash([6,4]);
       ctx.beginPath();
-      for (let i = 0; i <= 30; i++) {
-        const sx = safeLeft + span * (i / 30);
-        const sy = arcBaseY - Math.sin((Math.PI * i) / 30) * arcAmp;
-        i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
+      for (let i=0; i<=30; i++) {
+        const sx = offX + bw*(i/30);
+        const sy = arcY - Math.sin((Math.PI*i)/30)*arcAmp;
+        i===0 ? ctx.moveTo(sx,sy) : ctx.lineTo(sx,sy);
       }
-      ctx.stroke();
-      ctx.setLineDash([]);
-      const progress = Math.max(0, Math.min(1, (hour - 6) / 12));
-      const sunX = safeLeft + span * progress;
-      const sunY = arcBaseY - Math.max(0, Math.sin(Math.max(0, (hour - 6) * Math.PI / 12))) * arcAmp;
-      ctx.fillStyle = "#f59e0b";
-      ctx.beginPath();
-      ctx.arc(sunX, sunY, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(245,158,11,0.5)";
-      ctx.lineWidth = 1.5;
-      for (let i = 0; i < 8; i++) {
-        const a = (i / 8) * Math.PI * 2;
-        ctx.beginPath();
-        ctx.moveTo(sunX + Math.cos(a) * 8, sunY + Math.sin(a) * 8);
-        ctx.lineTo(sunX + Math.cos(a) * 12, sunY + Math.sin(a) * 12);
-        ctx.stroke();
-      }
-      ctx.fillStyle = "rgba(255,185,30,0.95)";
-      ctx.font = "8px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(`${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`, sunX, sunY - 15);
+      ctx.stroke(); ctx.setLineDash([]);
+      // E/W labels
+      ctx.fillStyle = "rgba(160,120,40,0.7)"; ctx.font = "bold 9px monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("EAST", offX, arcY); ctx.fillText("WEST", offX+bw, arcY);
+      const prog = Math.max(0,Math.min(1,(hour-6)/12));
+      const sunX = offX + bw*prog;
+      const sunY = arcY - Math.max(0,Math.sin(Math.max(0,(hour-6)*Math.PI/12)))*arcAmp;
+      // Sun glow
+      const grad = ctx.createRadialGradient(sunX,sunY,2,sunX,sunY,14);
+      grad.addColorStop(0,"rgba(255,230,0,0.6)"); grad.addColorStop(1,"rgba(255,180,0,0)");
+      ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(sunX,sunY,14,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#f59e0b"; ctx.beginPath(); ctx.arc(sunX,sunY,5,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="rgba(245,158,11,0.6)"; ctx.lineWidth=1.2;
+      for (let i=0;i<8;i++){const a=(i/8)*Math.PI*2;ctx.beginPath();ctx.moveTo(sunX+Math.cos(a)*7,sunY+Math.sin(a)*7);ctx.lineTo(sunX+Math.cos(a)*11,sunY+Math.sin(a)*11);ctx.stroke();}
+      ctx.fillStyle="rgba(200,120,0,0.9)"; ctx.font="bold 8px monospace"; ctx.textAlign="center";
+      ctx.fillText(`${now.getHours().toString().padStart(2,"0")}:${now.getMinutes().toString().padStart(2,"0")}`,sunX,sunY-17);
       ctx.restore();
     }
 
-    ctx.fillStyle = "rgba(13,242,242,0.6)";
-    ctx.font = "8px monospace";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "alphabetic";
-    ctx.fillText(`PLOT: ${plotShape.toUpperCase()} - ${plotArea}m2`, offX + 2, offY - wallThickness - 12);
-    ctx.fillText(`WIND: ${windDir}`, offX + 2, offY - wallThickness - 2);
-
-    ctx.fillStyle = "#111820";
-    ctx.fillRect(offX, offY, bw, bh);
-
+    // ── PASS 1: Room fills ──
     floor1.forEach(room => {
-      const style = getRoomStyle(room.type);
-      ctx.fillStyle = style.bg;
-      ctx.fillRect(px(room.x), py(room.y), ps(room.width), ps(room.height));
-    });
+      const rx=px(room.x), ry=py(room.y), rw=ps(room.width), rh=ps(room.height);
+      ctx.fillStyle = getRoomFill(room.type);
+      ctx.fillRect(rx, ry, rw, rh);
 
-    floorWalls.forEach(wall => {
-      const horizontal = wall.orientation === "horizontal";
-      const ww = horizontal ? ps(wall.length) : Math.max(3, ps(wall.thickness));
-      const wh = horizontal ? Math.max(3, ps(wall.thickness)) : ps(wall.length);
-      const wx = px(wall.x) - ww / 2;
-      const wy = py(wall.y) - wh / 2;
-      const exterior = wall.type === "exterior";
-      ctx.fillStyle = exterior ? "#1d3737" : "#172c2c";
-      ctx.fillRect(wx, wy, ww, wh);
-      ctx.strokeStyle = exterior ? "rgba(13,242,242,0.84)" : "rgba(13,242,242,0.28)";
-      ctx.lineWidth = exterior ? 1.2 : 0.8;
-      ctx.strokeRect(wx, wy, ww, wh);
-    });
-
-    floorDoors.forEach(door => {
-      const span = ps(door.width);
-      ctx.strokeStyle = "rgba(13,242,242,0.85)";
-      ctx.lineWidth = 1.1;
-      if (door.orientation === "horizontal") {
-        const dx = px(door.x) - span / 2;
-        const dy = py(door.y) - wallThickness / 2;
-        ctx.fillStyle = "#0d1117";
-        ctx.fillRect(dx, dy - 1, span, wallThickness + 2);
-        ctx.beginPath(); ctx.moveTo(dx, dy + wallThickness / 2); ctx.lineTo(dx + span, dy + wallThickness / 2); ctx.stroke();
-        ctx.beginPath(); ctx.arc(dx, dy + wallThickness / 2, span, -Math.PI / 2, 0); ctx.stroke();
-      } else {
-        const dy = py(door.y) - span / 2;
-        const dx = px(door.x) - wallThickness / 2;
-        ctx.fillStyle = "#0d1117";
-        ctx.fillRect(dx - 1, dy, wallThickness + 2, span);
-        ctx.beginPath(); ctx.moveTo(dx + wallThickness / 2, dy); ctx.lineTo(dx + wallThickness / 2, dy + span); ctx.stroke();
-        ctx.beginPath(); ctx.arc(dx + wallThickness / 2, dy, span, Math.PI, 1.5 * Math.PI); ctx.stroke();
-      }
-    });
-
-    const drawWindow = (x: number, y: number, w: number, h: number, horizontal: boolean) => {
-      ctx.fillStyle = "rgba(64,180,248,0.46)";
-      ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = "#b0d8e8";
-      ctx.lineWidth = 1.4;
-      ctx.strokeRect(x, y, w, h);
-      for (let i = 1; i < 3; i++) {
-        ctx.beginPath();
-        if (horizontal) {
-          const xx = x + (w * i) / 3;
-          ctx.moveTo(xx, y);
-          ctx.lineTo(xx, y + h);
-        } else {
-          const yy = y + (h * i) / 3;
-          ctx.moveTo(x, yy);
-          ctx.lineTo(x + w, yy);
-        }
-        ctx.stroke();
-      }
-    };
-
-    floorWindows.forEach(win => {
-      const parts = win.wall.split("_");
-      const edge = parts[parts.length - 1];
-      const roomId = parts.slice(0, -1).join("_");
-      const room = floor1.find(item => item.id === roomId);
-      if (!room) return;
-      const span = ps(win.width);
-      if (edge === "top") drawWindow(px(room.x + room.width / 2) - span / 2, py(room.y), span, wallThickness, true);
-      if (edge === "bottom") drawWindow(px(room.x + room.width / 2) - span / 2, py(room.y + room.height) - wallThickness, span, wallThickness, true);
-      if (edge === "left") drawWindow(px(room.x), py(room.y + room.height / 2) - span / 2, wallThickness, span, false);
-      if (edge === "right") drawWindow(px(room.x + room.width) - wallThickness, py(room.y + room.height / 2) - span / 2, wallThickness, span, false);
-    });
-
-    floor1.forEach(room => {
-      const style = getRoomStyle(room.type);
-      const rx = px(room.x);
-      const ry = py(room.y);
-      const rw = ps(room.width);
-      const rh = ps(room.height);
-      const cx = rx + rw / 2;
-      const cy = ry + rh / 2;
-      const fs = Math.max(7, Math.min(12, rw / 8));
-      ctx.fillStyle = style.border;
-      ctx.font = `bold ${fs}px 'Space Grotesk',sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(style.label, cx, cy - fs * 0.7);
-      ctx.fillStyle = "rgba(180,200,220,0.82)";
-      ctx.font = `${Math.max(6, fs - 2)}px monospace`;
-      ctx.fillText(`${room.width.toFixed(2)} x ${room.height.toFixed(2)}`, cx, cy + fs * 0.35);
-      if (room.orientation) {
-        ctx.fillStyle = "rgba(13,242,242,0.52)";
-        ctx.font = `${Math.max(5, fs - 3)}px monospace`;
-        ctx.fillText(room.orientation, cx, cy + fs * 1.3);
-      }
-    });
-
-    if (showWindFlow) {
-      if (windParticles.current.length < 35) {
-        for (let i = 0; i < 2; i++) {
-          let spawnX: number;
-          let spawnY: number;
-          if (Math.abs(windVec.x) >= Math.abs(windVec.y)) {
-            spawnX = windVec.x > 0 ? offX - ps(1.5) - Math.random() * ps(1) : offX + bw + ps(0.5) + Math.random() * ps(1);
-            spawnY = offY - ps(0.5) + Math.random() * (bh + ps(1));
-          } else {
-            spawnX = offX - ps(0.5) + Math.random() * (bw + ps(1));
-            spawnY = windVec.y > 0 ? offY - ps(1.5) - Math.random() * ps(1) : offY + bh + ps(0.5) + Math.random() * ps(1);
-          }
-          windParticles.current.push({ x: spawnX, y: spawnY, life: 0, speed: 1.8 + Math.random() * 1.2, alpha: 0 });
-        }
-      }
-
-      windParticles.current = windParticles.current.filter(particle => {
-        if (particle.life >= 100) return false;
-        const pastLeeward =
-          (windVec.x > 0.1 && particle.x > offX + bw + ps(2)) ||
-          (windVec.x < -0.1 && particle.x < offX - ps(2)) ||
-          (windVec.y > 0.1 && particle.y > offY + bh + ps(2)) ||
-          (windVec.y < -0.1 && particle.y < offY - ps(2));
-        return !pastLeeward;
-      });
-
-      windParticles.current.forEach(particle => {
-        particle.life++;
-        particle.x += windVec.x * particle.speed * 1.6;
-        particle.y += windVec.y * particle.speed * 1.6;
-        particle.alpha = Math.sin(particle.life / 100 * Math.PI) * 0.85;
-        const len = particle.speed * 9;
-        const ex = particle.x - windVec.x * len;
-        const ey = particle.y - windVec.y * len;
-        ctx.strokeStyle = `rgba(60,160,240,${particle.alpha})`;
-        ctx.lineWidth = 1.5;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(ex, ey);
-        ctx.lineTo(particle.x, particle.y);
-        ctx.stroke();
-        const angle = Math.atan2(windVec.y, windVec.x);
-        ctx.fillStyle = `rgba(80,180,255,${particle.alpha})`;
+      // Diagonal hatch for wet/service rooms (architectural convention)
+      if (getRoomHatch(room.type) && rw>14 && rh>14) {
         ctx.save();
-        ctx.translate(particle.x, particle.y);
-        ctx.rotate(angle);
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(-5, -2.5);
-        ctx.lineTo(-5, 2.5);
-        ctx.closePath();
-        ctx.fill();
+        ctx.beginPath(); ctx.rect(rx,ry,rw,rh); ctx.clip();
+        ctx.strokeStyle = "rgba(120,100,160,0.12)"; ctx.lineWidth = 0.6;
+        for (let d=-(rw+rh); d<rw+rh; d+=8) {
+          ctx.beginPath(); ctx.moveTo(rx+d,ry); ctx.lineTo(rx+d+rh,ry+rh); ctx.stroke();
+        }
         ctx.restore();
+      }
+    });
+
+    // ── PASS 2: Walls (thick architectural style) ──
+    const EXT_WALL = Math.max(8, ps(0.23));
+    const INT_WALL = Math.max(3.5, ps(0.12));
+
+    if (floorWalls.length > 0) {
+      floorWalls.forEach(wall => {
+        const horiz = wall.orientation === "horizontal";
+        const wLen = ps(wall.length);
+        const wThk = horiz ? Math.max(4, ps(wall.thickness)) : wLen;
+        const wHgt = horiz ? wLen : Math.max(4, ps(wall.thickness));
+        // x,y is the midpoint of the wall
+        const wx = px(wall.x) - (horiz ? wLen/2 : Math.max(4,ps(wall.thickness))/2);
+        const wy = py(wall.y) - (horiz ? Math.max(4,ps(wall.thickness))/2 : wLen/2);
+        const ww = horiz ? wLen : Math.max(4, ps(wall.thickness));
+        const wh = horiz ? Math.max(4, ps(wall.thickness)) : wLen;
+        const ext = wall.type === "exterior";
+        // Solid dark grey fill (standard CAD wall style)
+        ctx.fillStyle = ext ? "#2a3a3a" : "#3d4d4d";
+        ctx.fillRect(wx, wy, ww, wh);
+        // Hatch exterior walls (concrete indication)
+        if (ext && ww>4 && wh>4) {
+          ctx.save();
+          ctx.beginPath(); ctx.rect(wx,wy,ww,wh); ctx.clip();
+          ctx.strokeStyle="rgba(255,255,255,0.15)"; ctx.lineWidth=0.5;
+          for (let d=-(ww+wh); d<ww+wh; d+=4) {
+            ctx.beginPath(); ctx.moveTo(wx+d,wy); ctx.lineTo(wx+d+wh,wy+wh); ctx.stroke();
+          }
+          ctx.restore();
+        }
+        ctx.strokeStyle = ext ? "#1a2828" : "#2a3838";
+        ctx.lineWidth = ext ? 0.8 : 0.5;
+        ctx.strokeRect(wx,wy,ww,wh);
+        if (ext) {
+          ctx.strokeStyle = "rgba(13,242,242,0.7)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(wx, wy, ww, wh);
+        }
+      });
+    } else {
+      // Fallback: derive actual wall runs from room geometry instead of boxing everything.
+      const EPS = 0.09;
+      const drawn = new Set<string>();
+      floor1.forEach(room => {
+        [
+          { edge: "top", x1: room.x, y1: room.y, x2: room.x + room.width, y2: room.y },
+          { edge: "bottom", x1: room.x, y1: room.y + room.height, x2: room.x + room.width, y2: room.y + room.height },
+          { edge: "left", x1: room.x, y1: room.y, x2: room.x, y2: room.y + room.height },
+          { edge: "right", x1: room.x + room.width, y1: room.y, x2: room.x + room.width, y2: room.y + room.height },
+        ].forEach(({ edge, x1, y1, x2, y2 }) => {
+          const key = `${x1.toFixed(2)}:${y1.toFixed(2)}:${x2.toFixed(2)}:${y2.toFixed(2)}`;
+          const rev = `${x2.toFixed(2)}:${y2.toFixed(2)}:${x1.toFixed(2)}:${y1.toFixed(2)}`;
+          if (drawn.has(key) || drawn.has(rev)) return;
+          drawn.add(key);
+          const shared = floor1.some(other => other.id !== room.id && (
+            ((edge === "top" || edge === "bottom") &&
+              (Math.abs(y1 - other.y) < EPS || Math.abs(y1 - (other.y + other.height)) < EPS) &&
+              Math.min(x2, other.x + other.width) - Math.max(x1, other.x) > 0.25) ||
+            ((edge === "left" || edge === "right") &&
+              (Math.abs(x1 - other.x) < EPS || Math.abs(x1 - (other.x + other.width)) < EPS) &&
+              Math.min(y2, other.y + other.height) - Math.max(y1, other.y) > 0.25)
+          ));
+          const horizontal = edge === "top" || edge === "bottom";
+          const ww = horizontal ? ps(Math.abs(x2 - x1)) : (shared ? INT_WALL : EXT_WALL);
+          const wh = horizontal ? (shared ? INT_WALL : EXT_WALL) : ps(Math.abs(y2 - y1));
+          const wx = horizontal ? px(Math.min(x1, x2)) : px(x1) - ww / 2;
+          const wy = horizontal ? py(y1) - wh / 2 : py(Math.min(y1, y2));
+          ctx.fillStyle = shared ? "#3d4d4d" : "#243838";
+          ctx.fillRect(wx, wy, ww, wh);
+          ctx.strokeStyle = shared ? "#2a3838" : "rgba(13,242,242,0.7)";
+          ctx.lineWidth = shared ? 0.6 : 1;
+          ctx.strokeRect(wx, wy, ww, wh);
+        });
       });
     }
 
-    const northX = W - 38;
-    const northY = H - 58;
-    ctx.fillStyle = "#0df2f2";
-    ctx.font = "bold 10px monospace";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "alphabetic";
-    ctx.fillText("N", northX, northY - 22);
-    ctx.beginPath();
-    ctx.moveTo(northX, northY - 18);
-    ctx.lineTo(northX - 6, northY + 4);
-    ctx.lineTo(northX, northY + 2);
-    ctx.lineTo(northX + 6, northY + 4);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = "#0df2f2";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    const sbPx = scale * 5;
-    ctx.fillStyle = "rgba(13,242,242,0.7)";
-    ctx.fillRect(20, H - 18, sbPx, 2);
-    ctx.fillRect(20, H - 22, 2, 6);
-    ctx.fillRect(20 + sbPx - 2, H - 22, 2, 6);
-    ctx.font = "7px monospace";
-    ctx.textAlign = "left";
-    ctx.fillStyle = "rgba(13,242,242,0.5)";
-    ctx.fillText("0", 20, H - 5);
-    ctx.fillText("5m", 20 + sbPx + 2, H - 5);
-    ctx.textAlign = "right";
-    ctx.fillText(`${lat.toFixed(4)}°N  ${lon.toFixed(4)}°E`, W - 20, H - 18);
-
-    trees.slice(0, 3).forEach((_, i) => {
-      const tx = offX - 35 - i * 20;
-      const ty = offY + bh * 0.25 + i * 24;
-      ctx.beginPath();
-      ctx.arc(tx, ty, 11, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(40,200,80,0.15)";
-      ctx.fill();
-      ctx.strokeStyle = "#30d060";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.fillStyle = "#30d060";
-      ctx.font = "7px monospace";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`T${i + 1}`, tx, ty);
+    // ── PASS 3: Doors (proper architectural swing arcs) ──
+    floorDoors.forEach(door => {
+      const span = ps(door.width);
+      const wallT = Math.max(4, ps(0.15));
+      ctx.strokeStyle = "rgba(13,242,242,0.8)"; ctx.lineWidth = 1.2;
+      if (door.orientation === "horizontal") {
+        const dx = px(door.x) - span/2;
+        const dy = py(door.y) - wallT/2;
+        // Clear the door opening in the wall
+        ctx.fillStyle="#0e1c1c"; ctx.fillRect(dx, dy-2, span, wallT+4);
+        // Door leaf (solid line)
+        ctx.strokeStyle="#1a3030"; ctx.lineWidth=1.4;
+        ctx.beginPath(); ctx.moveTo(dx,dy+wallT/2); ctx.lineTo(dx+span,dy+wallT/2); ctx.stroke();
+        // Swing arc (dashed quarter circle)
+        ctx.strokeStyle="rgba(30,80,80,0.55)"; ctx.lineWidth=0.9; ctx.setLineDash([3,3]);
+        ctx.beginPath(); ctx.arc(dx, dy+wallT/2, span, 0, Math.PI/2); ctx.stroke();
+        ctx.setLineDash([]);
+        // Door type indicator
+        if (door.symbol === "double_door") {
+          ctx.strokeStyle="rgba(30,80,80,0.55)"; ctx.lineWidth=0.9; ctx.setLineDash([3,3]);
+          ctx.beginPath(); ctx.arc(dx+span, dy+wallT/2, span, Math.PI/2, Math.PI); ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      } else {
+        const dy = py(door.y) - span/2;
+        const dx = px(door.x) - wallT/2;
+        ctx.fillStyle="#0e1c1c"; ctx.fillRect(dx-2, dy, wallT+4, span);
+        ctx.strokeStyle="rgba(13,242,242,0.85)"; ctx.lineWidth=1.3;
+        ctx.beginPath(); ctx.moveTo(dx+wallT/2,dy); ctx.lineTo(dx+wallT/2,dy+span); ctx.stroke();
+        ctx.strokeStyle="rgba(13,242,242,0.4)"; ctx.lineWidth=0.9; ctx.setLineDash([3,3]);
+        ctx.beginPath(); ctx.arc(dx+wallT/2, dy, span, Math.PI/2, Math.PI); ctx.stroke();
+        ctx.setLineDash([]);
+      }
     });
-  }, [rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, getRoomStyle]);
+
+    // ── PASS 4: Windows (professional architectural style) ──
+    const drawCADWindow = (wx:number, wy:number, ww:number, wh:number, horiz:boolean) => {
+      // Clear opening in wall
+      ctx.fillStyle="#0e1c1c"; ctx.fillRect(wx-1,wy-1,ww+2,wh+2);
+      // Glass pane — bright translucent blue on dark bg
+      ctx.fillStyle="rgba(100,200,255,0.22)"; ctx.fillRect(wx,wy,ww,wh);
+      // Frame lines (double line = architectural window symbol)
+      ctx.strokeStyle="rgba(130,210,255,0.85)"; ctx.lineWidth=1.0;
+      ctx.strokeRect(wx,wy,ww,wh);
+      // Centre line
+      ctx.strokeStyle="#1a4060"; ctx.lineWidth=0.6;
+      if(horiz) {
+        ctx.beginPath(); ctx.moveTo(wx,wy+wh/2); ctx.lineTo(wx+ww,wy+wh/2); ctx.stroke();
+        // Frame subdivisions (2-pane window)
+        ctx.beginPath(); ctx.moveTo(wx+ww/2,wy); ctx.lineTo(wx+ww/2,wy+wh); ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.moveTo(wx+ww/2,wy); ctx.lineTo(wx+ww/2,wy+wh); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(wx,wy+wh/2); ctx.lineTo(wx+ww,wy+wh/2); ctx.stroke();
+      }
+      // Sill lines (short ticks at window ends)
+      ctx.strokeStyle="rgba(130,210,255,0.75)"; ctx.lineWidth=1.2;
+      if(horiz){
+        ctx.beginPath(); ctx.moveTo(wx,wy-2); ctx.lineTo(wx,wy+wh+2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(wx+ww,wy-2); ctx.lineTo(wx+ww,wy+wh+2); ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.moveTo(wx-2,wy); ctx.lineTo(wx+ww+2,wy); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(wx-2,wy+wh); ctx.lineTo(wx+ww+2,wy+wh); ctx.stroke();
+      }
+    };
+
+    const wallT = Math.max(4, ps(0.23));
+    floorWindows.forEach(win => {
+      const { roomId, edge, isVent } = parseWindowWall(win.wall);
+      const room = floor1.find(r => r.id===roomId);
+      if (!room) return;
+      const span = ps(win.width) * (isVent ? 0.92 : 1);
+      if (span < 6) return;
+      if (edge==="top")    drawCADWindow(px(room.x+room.width/2)-span/2, py(room.y)-wallT/2,    span, wallT, true);
+      if (edge==="bottom") drawCADWindow(px(room.x+room.width/2)-span/2, py(room.y+room.height)-wallT/2, span, wallT, true);
+      if (edge==="left")   drawCADWindow(px(room.x)-wallT/2, py(room.y+room.height/2)-span/2, wallT, span, false);
+      if (edge==="right")  drawCADWindow(px(room.x+room.width)-wallT/2, py(room.y+room.height/2)-span/2, wallT, span, false);
+    });
+
+    // Minimal glass room tags
+    floor1.forEach(room => {
+      const rx=px(room.x), ry=py(room.y), rw=ps(room.width), rh=ps(room.height);
+      const cx=rx+rw/2, cy=ry+rh/2;
+      drawFurniture(ctx, room, rx, ry, rw, rh, `${getRoomStyle(room.type).border}aa`);
+      if (rw < 18 || rh < 12) return;
+
+      const style = getRoomStyle(room.type);
+      const isCompact = rw < 120 || rh < 82;
+      const lbl = isCompact ? getShortLabel(room) : getDisplayLabel(room);
+      const fs = isCompact ? Math.max(6.6, Math.min(8.4, rw/13.5)) : Math.max(7.4, Math.min(9.4, rw/11.2));
+      const subFs = Math.max(5.7, fs - 1.1);
+      const dimFs = Math.max(5.2, fs - 1.9);
+      ctx.font = `bold ${fs}px 'Space Grotesk', sans-serif`;
+      const blockW = Math.min(rw - 12, Math.max(ctx.measureText(lbl).width + 12, isCompact ? 44 : 70));
+      const blockH = isCompact ? 18 : 26;
+      const blockX = rx + 6;
+      const blockY = ry + 6;
+      if (blockW > 28 && rh > 22) {
+        ctx.fillStyle = "rgba(18, 29, 34, 0.42)";
+        ctx.strokeStyle = "rgba(255,255,255,0.06)";
+        ctx.lineWidth = 0.6;
+        ctx.beginPath();
+        ctx.roundRect(blockX, blockY, blockW, blockH, 6);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = "rgba(241,245,249,0.94)";
+        ctx.fillText(lbl, blockX + 5, blockY + 3.5);
+
+        const areaLabel = `${(room.width*room.height).toFixed(1)} sqm`;
+        ctx.font = `bold ${subFs}px monospace`;
+        ctx.fillStyle = "rgba(103,232,249,0.88)";
+        ctx.fillText(areaLabel, blockX + 5, blockY + fs + 3.5);
+
+        if (!isCompact && rh > 58) {
+          const dimLabel = `${room.width.toFixed(1)} x ${room.height.toFixed(1)} m`;
+          ctx.font = `${dimFs}px monospace`;
+          ctx.fillStyle = "rgba(203,213,225,0.72)";
+          ctx.fillText(dimLabel, blockX + 5, blockY + fs + subFs + 4.5);
+        }
+      }
+
+      if (room.orientation && rw>38) {
+        const tagW = Math.min(rw*0.36, 34); const tagH = 9;
+        const tagX = cx-tagW/2; const tagY = cy+fs*1.2;
+        const orientColors: Record<string,string> = {
+          S:'#e8a020',N:'#2080d0',E:'#20a060',W:'#a04020',SE:'#c08030',SW:'#8060a0',NE:'#30c080',NW:'#4060c0'
+        };
+        const tc = orientColors[room.orientation] ?? '#607080';
+        ctx.fillStyle='rgba(18, 29, 34, 0.34)'; ctx.beginPath();
+        ctx.roundRect(tagX,tagY,tagW,tagH,5); ctx.fill();
+        ctx.strokeStyle=tc+'44'; ctx.lineWidth=0.45;
+        ctx.beginPath(); ctx.roundRect(tagX,tagY,tagW,tagH,5); ctx.stroke();
+        ctx.fillStyle=tc; ctx.font=`bold ${Math.max(4.8,fs-2.4)}px monospace`;
+        ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(room.orientation, cx, tagY+4.5);
+      }
+    });
+
+    // ── PASS 6: Dimension lines (CAD style) ──
+    const DL_OFF = 18; // dimension line offset from wall in px
+    const DL_EXT = 6;  // extension line length
+    const drawDimLine = (x1:number,y1:number,x2:number,y2:number,label:string,offset:number,horizontal:boolean) => {
+      ctx.strokeStyle="rgba(13,242,242,0.6)"; ctx.lineWidth=0.7;
+      // Extension lines
+      if(horizontal){
+        ctx.beginPath();ctx.moveTo(x1,y1-DL_EXT);ctx.lineTo(x1,y1+offset+DL_EXT);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(x2,y1-DL_EXT);ctx.lineTo(x2,y1+offset+DL_EXT);ctx.stroke();
+        // Dimension line with arrows
+        ctx.beginPath();ctx.moveTo(x1,y1+offset);ctx.lineTo(x2,y1+offset);ctx.stroke();
+        // Arrowheads
+        ctx.fillStyle="rgba(13,242,242,0.7)";
+        ctx.beginPath();ctx.moveTo(x1,y1+offset);ctx.lineTo(x1+5,y1+offset-3);ctx.lineTo(x1+5,y1+offset+3);ctx.closePath();ctx.fill();
+        ctx.beginPath();ctx.moveTo(x2,y1+offset);ctx.lineTo(x2-5,y1+offset-3);ctx.lineTo(x2-5,y1+offset+3);ctx.closePath();ctx.fill();
+        ctx.fillStyle="rgba(13,242,242,0.7)"; ctx.font="bold 8px monospace"; ctx.textAlign="center"; ctx.textBaseline="bottom";
+        ctx.fillText(label,(x1+x2)/2,y1+offset-1);
+      } else {
+        ctx.beginPath();ctx.moveTo(x1-DL_EXT,y1);ctx.lineTo(x1+offset+DL_EXT,y1);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(x1-DL_EXT,y2);ctx.lineTo(x1+offset+DL_EXT,y2);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(x1+offset,y1);ctx.lineTo(x1+offset,y2);ctx.stroke();
+        ctx.fillStyle="rgba(13,242,242,0.7)";
+        ctx.beginPath();ctx.moveTo(x1+offset,y1);ctx.lineTo(x1+offset-3,y1+5);ctx.lineTo(x1+offset+3,y1+5);ctx.closePath();ctx.fill();
+        ctx.beginPath();ctx.moveTo(x1+offset,y2);ctx.lineTo(x1+offset-3,y2-5);ctx.lineTo(x1+offset+3,y2-5);ctx.closePath();ctx.fill();
+        ctx.save(); ctx.translate(x1+offset+10, (y1+y2)/2); ctx.rotate(-Math.PI/2);
+        ctx.fillStyle="rgba(13,242,242,0.7)"; ctx.font="bold 8px monospace"; ctx.textAlign="center"; ctx.textBaseline="bottom";
+        ctx.fillText(label,0,0); ctx.restore();
+      }
+    };
+    // Overall building dimensions
+    const totalW_m = (maxX-minX).toFixed(2);
+    const totalH_m = (maxY-minY).toFixed(2);
+    drawDimLine(offX, offY, offX+bw, offY, `${totalW_m} m`, -DL_OFF, true);
+    drawDimLine(offX, offY, offX, offY+bh, `${totalH_m} m`, -DL_OFF, false);
+
+    // ── PASS 7: Wind flow visualisation (OUTSIDE building, flowing OVER) ──
+    if (showWindFlow) {
+      const nowMs = performance.now();
+      if (nowMs >= windPulseRef.current.nextBurstAt && nowMs >= windPulseRef.current.burstUntil) {
+        windPulseRef.current.burstUntil = nowMs + windVec.burstMs;
+        windPulseRef.current.nextBurstAt = nowMs + windVec.gapMs;
+      }
+      const burstActive = nowMs < windPulseRef.current.burstUntil;
+      if (burstActive && windParticles.current.length < windVec.particleCap) {
+        for (let i=0; i<windVec.spawnCount; i++) {
+          let spX:number, spY:number;
+          if (Math.abs(windVec.x)>=Math.abs(windVec.y)) {
+            spX = windVec.x>0 ? offX-ps(2.5)-Math.random()*ps(1.5) : offX+bw+ps(0.5)+Math.random()*ps(1.5);
+            spY = offY-ps(0.8)+Math.random()*(bh+ps(1.5));
+          } else {
+            spX = offX-ps(0.8)+Math.random()*(bw+ps(1.5));
+            spY = windVec.y>0 ? offY-ps(2.5)-Math.random()*ps(1.5) : offY+bh+ps(0.5)+Math.random()*ps(1.5);
+          }
+          windParticles.current.push({
+            x: spX,
+            y: spY,
+            life: 0,
+            speed: 1.1 + windVec.intensity * 0.72 + Math.random() * (0.5 + windVec.speed * 0.08),
+            alpha: 0,
+          });
+        }
+      }
+      const corridors = [0.28, 0.5, 0.72];
+      ctx.save();
+      ctx.strokeStyle = burstActive ? `rgba(90,245,255,${Math.min(0.32, 0.14 + windVec.intensity * 0.08)})` : "rgba(90,245,255,0.05)";
+      ctx.lineWidth = burstActive ? 1.05 + windVec.intensity * 0.45 : 0.75;
+      ctx.setLineDash([12,8]);
+      corridors.forEach(offset => {
+        const sx = offX + bw * (windVec.x >= 0 ? 0.06 : 0.94);
+        const sy = offY + bh * offset;
+        const ex = offX + bw * (windVec.x >= 0 ? 0.94 : 0.06);
+        const ey = sy + windVec.y * windVec.curveOffset * 0.7;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.quadraticCurveTo((sx + ex) / 2, sy + windVec.y * windVec.curveOffset, ex, ey);
+        ctx.stroke();
+      });
+      ctx.restore();
+      windParticles.current = windParticles.current.filter(p => {
+        if (p.life>=115) return false;
+        return !(
+          (windVec.x>0.1 && p.x>offX+bw+ps(3)) ||
+          (windVec.x<-0.1 && p.x<offX-ps(3)) ||
+          (windVec.y>0.1 && p.y>offY+bh+ps(3)) ||
+          (windVec.y<-0.1 && p.y<offY-ps(3))
+        );
+      });
+      windParticles.current.forEach(p => {
+        p.life++; p.x+=windVec.x*p.speed*windVec.trailMultiplier; p.y+=windVec.y*p.speed*windVec.trailMultiplier;
+        p.alpha = Math.sin(p.life/115*Math.PI) * (burstActive ? Math.min(0.82, 0.45 + windVec.intensity * 0.16) : 0.2);
+        const len=p.speed*(6.8 + windVec.intensity * 2.6); const ex=p.x-windVec.x*len; const ey=p.y-windVec.y*len;
+        ctx.strokeStyle=`rgba(90,245,255,${p.alpha})`; ctx.lineWidth=1.2 + windVec.intensity * 0.45; ctx.lineCap="round";
+        ctx.beginPath(); ctx.moveTo(ex,ey); ctx.lineTo(p.x,p.y); ctx.stroke();
+        const angle=Math.atan2(windVec.y,windVec.x);
+        ctx.fillStyle=`rgba(170,250,255,${p.alpha})`; ctx.save();
+        ctx.translate(p.x,p.y); ctx.rotate(angle);
+        ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-5,-2.5); ctx.lineTo(-5,2.5); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      });
+      // Wind direction label
+      ctx.fillStyle = burstActive ? "rgba(170,250,255,0.86)" : "rgba(170,250,255,0.42)";
+      ctx.font="bold 9px monospace"; ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+      ctx.fillText(`WIND ${windVec.label} · ${windVec.speed.toFixed(1)} M/S`, offX+4, offY-8);
+    }
+
+    // ── PASS 8: Professional title block ──
+    const TB_H = 38; const TB_Y = H-TB_H;
+    ctx.fillStyle="rgba(8,14,14,0.96)"; ctx.fillRect(0,TB_Y,W,TB_H);
+    ctx.strokeStyle="rgba(13,242,242,0.25)"; ctx.lineWidth=0.8;
+    ctx.beginPath(); ctx.moveTo(0,TB_Y); ctx.lineTo(W,TB_Y); ctx.stroke();
+    const cols=[W*0.2,W*0.4,W*0.6,W*0.8];
+    cols.forEach(cx2=>{ctx.strokeStyle="rgba(13,242,242,0.12)";ctx.beginPath();ctx.moveTo(cx2,TB_Y);ctx.lineTo(cx2,H);ctx.stroke();});
+    const today=new Date();
+    const dateStr=`${today.getDate().toString().padStart(2,"0")}/${(today.getMonth()+1).toString().padStart(2,"0")}/${today.getFullYear()}`;
+    const items=[
+      {label:"PROJECT",value:"ECO-3D STUDIO"},
+      {label:"PLOT",value:plotShape.toUpperCase()+" · "+plotArea+"m²"},
+      {label:"COORDS",value:`${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E`},
+      {label:"SCALE",value:`1:${Math.round(1000/Math.max(scale,0.1))} (approx)`},
+      {label:"DATE",value:dateStr},
+    ];
+    items.forEach((item,i)=>{
+      const tx = i===0 ? 10 : cols[i-1]+8;
+      ctx.fillStyle="rgba(13,242,242,0.4)"; ctx.font="bold 7px monospace"; ctx.textAlign="left"; ctx.textBaseline="top";
+      ctx.fillText(item.label, tx, TB_Y+5);
+      ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.font="bold 9.5px 'Space Grotesk',monospace";
+      ctx.fillText(item.value, tx, TB_Y+16);
+    });
+
+    // ── PASS 9: North arrow + compass rose ──
+    const narX=W-52, narY=offY-10;
+    // Circle background
+    ctx.fillStyle="rgba(8,20,22,0.92)"; ctx.strokeStyle="rgba(13,242,242,0.6)"; ctx.lineWidth=0.8;
+    ctx.beginPath(); ctx.arc(narX,narY,18,0,Math.PI*2); ctx.fill(); ctx.stroke();
+    // N arrow (filled)
+    ctx.fillStyle="rgba(13,242,242,0.9)";
+    ctx.beginPath(); ctx.moveTo(narX,narY-14); ctx.lineTo(narX-5,narY+2); ctx.lineTo(narX,narY+5); ctx.lineTo(narX+5,narY+2); ctx.closePath(); ctx.fill();
+    ctx.fillStyle="rgba(13,242,242,0.2)";
+    ctx.beginPath(); ctx.moveTo(narX,narY+5); ctx.lineTo(narX-5,narY+2); ctx.lineTo(narX,narY-14); ctx.closePath(); ctx.fill();
+    ctx.fillStyle="#0df2f2"; ctx.font="bold 9px monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("N",narX,narY-6);
+
+    // ── PASS 10: Scale bar ──
+    const scaleBarM = 5;
+    const sbPx = scale*scaleBarM;
+    const sbX=offX, sbY=H-TB_H-14;
+    ctx.fillStyle="rgba(13,242,242,0.7)"; ctx.fillRect(sbX,sbY,sbPx,3);
+    ctx.fillRect(sbX,sbY-3,2,9); ctx.fillRect(sbX+sbPx-2,sbY-3,2,9);
+    ctx.font="7.5px monospace"; ctx.textAlign="left"; ctx.fillStyle="#1a3040";
+    ctx.fillText(`0`,sbX,sbY-4); ctx.fillText(`${scaleBarM}m`,sbX+sbPx+3,sbY-4);
+    // Scale bar tick at midpoint
+    ctx.fillRect(sbX+sbPx/2-1,sbY-2,2,7);
+    ctx.fillText(`${scaleBarM/2}m`,sbX+sbPx/2-6,sbY-4);
+
+  }, [rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, getRoomStyle, getRoomFill, getRoomHatch, getRoomLabel, getDisplayLabel, getShortLabel, parseWindowWall, drawFurniture]);
 
   useEffect(() => {
     let running = true;
-    const loop = () => {
-      if (!running) return;
-      draw();
-      animRef.current = requestAnimationFrame(loop);
-    };
+    const loop = () => { if(!running) return; draw(); animRef.current = requestAnimationFrame(loop); };
     animRef.current = requestAnimationFrame(loop);
-    return () => {
-      running = false;
-      cancelAnimationFrame(animRef.current);
-    };
+    return () => { running = false; cancelAnimationFrame(animRef.current); };
   }, [draw]);
 
   return <canvas ref={canvasRef} className="w-full h-full" style={{ display: "block" }} />;
@@ -872,6 +1170,7 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
 export default function AnalysisPage() {
   const params = useParams(); const router = useRouter();
   const plotId = params.id as string;
+  const floorPlanRequestRef = useRef(0);
 
   const [houseType, setHouseType] = useState("Eco-Villa (Single Story)");
   const [plotShape, setPlotShape] = useState("rectangle");
@@ -885,6 +1184,7 @@ export default function AnalysisPage() {
   const [showWind, setShowWind] = useState(true);
   const [zoom, setZoom] = useState(14);
   const [generating, setGenerating] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Room preference state
   const [numBedrooms, setNumBedrooms] = useState(2);
@@ -928,6 +1228,7 @@ export default function AnalysisPage() {
     : floorPlan ? Math.round(floorPlan.ventilation_score * 100) : 95;
   const treeDist = floorPlan?.tree_preserved_count ?? 0;
   const windDir = analysis?.environmental?.wind_direction ?? "SW";
+  const windSpeed = analysis?.environmental?.wind_ms ?? 3.2;
 
   // Area input: user can type sqft or m²
   const [areaUnit, setAreaUnit] = useState<"sqft"|"sqm">("sqm");
@@ -945,16 +1246,18 @@ export default function AnalysisPage() {
     setLogs(prev => [{ time: t, msg }, ...prev].slice(0, 8));
   };
 
-  const handleRegenerate = async () => {
+  const handleRegenerate = async (shapeOverride?: string) => {
+    const requestedShape = shapeOverride ?? plotShape;
+    const requestId = ++floorPlanRequestRef.current;
     setGenerating(true);
-    addLog(`Generating 5 variants for ${plotShape} · ${area} m²...`);
+    addLog(`Generating 5 variants for ${requestedShape} · ${area} m²...`);
     try {
       const fp = await generateFloorPlan({
         plot_id: plotId,
         plot_area_sqm: area,
         num_floors: numFloors,
         preserve_trees: treePres,
-        plot_shape: plotShape,
+        plot_shape: requestedShape,
         house_type: houseType,
         room_preferences: {
           bedrooms: numBedrooms, bathrooms: numBathrooms,
@@ -965,6 +1268,7 @@ export default function AnalysisPage() {
         natural_ventilation: natVent,
         sustainability_priority: sustPrio,
       });
+      if (requestId !== floorPlanRequestRef.current) return;
       setFloorPlan(fp);
       // Extract variants from properly typed response
       const variants = fp.variants ?? [];
@@ -978,16 +1282,19 @@ export default function AnalysisPage() {
       }
       setGeneratingFloorPlan(false);
     } catch (err: any) {
+      if (requestId !== floorPlanRequestRef.current) return;
       addLog(`Generation error: ${err?.message ?? "check backend"}`);
     } finally {
-      setGenerating(false);
+      if (requestId === floorPlanRequestRef.current) setGenerating(false);
     }
   };
 
   useEffect(() => {
-    if (!floorPlan && plotId && analysis) handleRegenerate();
+    if (!plotId || !analysis) return;
+    setActiveVariantIndex(0);
+    handleRegenerate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plotId]);
+  }, [plotId, analysis, plotShape, houseType]);
 
   // Clamp room counts when area changes
   useEffect(() => {
@@ -1017,6 +1324,14 @@ export default function AnalysisPage() {
     { value: "t-shape", label: "T-Shape" },
     { value: "irregular", label: "Irregular" },
   ];
+  const activePlotShapeLabel = PLOT_SHAPES.find(ps => ps.value === plotShape)?.label ?? plotShape;
+  const houseTypeBadge = houseType
+    .split(/[\s(/-]+/)
+    .filter(Boolean)
+    .map(part => part[0])
+    .join("")
+    .slice(0, 4)
+    .toUpperCase();
 
   return (
     <>
@@ -1045,14 +1360,40 @@ export default function AnalysisPage() {
 
         <div className="flex-1 flex overflow-hidden">
           {/* ── LEFT SIDEBAR ── */}
-          <aside className="w-80 flex-shrink-0 flex flex-col border-r border-white/5 overflow-y-auto" style={{ background: "rgba(6,12,12,0.98)" }}>
-            <div className="p-4 flex flex-col gap-4 flex-1">
+          <aside
+            className="flex-shrink-0 flex flex-col border-r border-white/5 overflow-hidden transition-all duration-300"
+            style={{ width: sidebarOpen ? 320 : 88, background: "rgba(6,12,12,0.98)" }}
+          >
+            <div className="p-3 flex flex-col gap-4 h-full min-h-0">
+              <div className={`flex items-center ${sidebarOpen ? "justify-between" : "flex-col gap-3"}`}>
+                <div className={sidebarOpen ? "" : "text-center"}>
+                  <div className="text-[9px] font-bold uppercase tracking-[0.22em] text-primary/80">Controls</div>
+                  <div className={`mt-1 ${sidebarOpen ? "text-[11px] text-slate-500" : "text-[9px] text-slate-600"}`}>
+                    {sidebarOpen ? "Blueprint configuration" : "Plan"}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSidebarOpen(v => !v)}
+                  className="w-10 h-10 rounded-2xl flex items-center justify-center border border-white/10 text-slate-300 hover:text-primary transition-colors"
+                  style={{ background: "rgba(13,242,242,0.05)" }}
+                  title={sidebarOpen ? "Collapse controls" : "Expand controls"}
+                >
+                  <span className="material-symbols-outlined text-[20px]">{sidebarOpen ? "left_panel_close" : "left_panel_open"}</span>
+                </button>
+              </div>
+
+              {sidebarOpen ? (
+                <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+                  <div className="flex flex-col gap-4 min-h-full">
 
               {/* House Type */}
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary mb-3">Configuration</div>
                 <label className="text-[11px] text-slate-400 mb-1.5 block">House Type</label>
-                <select value={houseType} onChange={e => setHouseType(e.target.value)} className="w-full glm rounded-lg px-3 py-2.5 text-[12px] text-white appearance-none cursor-pointer focus:outline-none mb-3" style={{ background: "rgba(13,242,242,0.04)" }}>
+                <select value={houseType} onChange={e => {
+                  setActiveVariantIndex(0);
+                  setHouseType(e.target.value);
+                }} className="w-full glm rounded-lg px-3 py-2.5 text-[12px] text-white appearance-none cursor-pointer focus:outline-none mb-3" style={{ background: "rgba(13,242,242,0.04)" }}>
                   {HOUSE_TYPES.map(t => <option key={t} value={t} style={{ background: "#0a1a1a" }}>{t}</option>)}
                 </select>
 
@@ -1060,7 +1401,10 @@ export default function AnalysisPage() {
                 <label className="text-[11px] text-slate-400 mb-1.5 block">Plot Shape</label>
                 <div className="grid grid-cols-3 gap-1.5 mb-3">
                   {PLOT_SHAPES.map(ps => (
-                    <button key={ps.value} onClick={() => setPlotShape(ps.value)}
+                    <button key={ps.value} onClick={() => {
+                      setActiveVariantIndex(0);
+                      setPlotShape(ps.value);
+                    }}
                       className="py-2 px-1 rounded text-[10px] font-bold uppercase tracking-wide transition-all"
                       style={{
                         background: plotShape === ps.value ? "rgba(13,242,242,0.15)" : "rgba(13,242,242,0.03)",
@@ -1176,7 +1520,7 @@ export default function AnalysisPage() {
 
               {/* Generate Button */}
               <div className="mt-auto flex flex-col gap-3">
-                <button onClick={handleRegenerate} disabled={generating}
+                <button onClick={() => handleRegenerate()} disabled={generating}
                   className="w-full py-3.5 rounded-xl font-bold text-[13px] tracking-wide flex items-center justify-center gap-2 disabled:opacity-60"
                   style={{ background: generating ? "rgba(13,242,242,0.3)" : "#0df2f2", color: "#080e0e", boxShadow: generating ? "none" : "0 0 20px rgba(13,242,242,0.3)" }}>
                   <span className={`material-symbols-outlined text-lg ${generating ? "spin" : ""}`}>{generating ? "sync" : "auto_fix_high"}</span>
@@ -1186,6 +1530,37 @@ export default function AnalysisPage() {
                   <div className="text-[10px] text-slate-400">Eco-Score: <span className="text-primary font-bold">{ecoScore}%</span></div>
                 </div>
               </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col items-center gap-3">
+                  {[
+                    { icon: "home_work", label: houseTypeBadge, sub: "Type" },
+                    { icon: "architecture", label: activePlotShapeLabel.replace("-", " ").slice(0, 6).toUpperCase(), sub: "Shape" },
+                    { icon: "square_foot", label: `${area}`, sub: "sqm" },
+                    { icon: "eco", label: `${ecoScore}%`, sub: "Eco" },
+                  ].map(({ icon, label, sub }) => (
+                    <div
+                      key={`${icon}-${sub}`}
+                      className="w-full rounded-2xl px-2 py-3 border border-white/10 text-center"
+                      style={{ background: "rgba(13,242,242,0.05)" }}
+                    >
+                      <span className="material-symbols-outlined text-[18px] text-primary/80">{icon}</span>
+                      <div className="mt-1 text-[11px] font-bold text-white tracking-wide">{label}</div>
+                      <div className="text-[9px] uppercase tracking-[0.16em] text-slate-500">{sub}</div>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => handleRegenerate()}
+                    disabled={generating}
+                    className="w-full rounded-2xl px-2 py-3 border border-primary/30 text-primary disabled:opacity-60"
+                    style={{ background: "rgba(13,242,242,0.08)" }}
+                    title="Regenerate layout"
+                  >
+                    <span className={`material-symbols-outlined text-[20px] ${generating ? "spin" : ""}`}>{generating ? "sync" : "auto_fix_high"}</span>
+                  </button>
+                </div>
+              )}
             </div>
           </aside>
 
@@ -1259,29 +1634,29 @@ export default function AnalysisPage() {
             <div className="flex-1 relative overflow-hidden">
               <BlueprintCanvas rooms={rooms} walls={walls} doors={doors} windows={windows} trees={trees} lat={lat} lon={lon} zoom={zoom}
                 showSolarPath={showSolar} showWindFlow={showWind} floorPlan={floorPlan}
-                plotShape={plotShape} plotArea={area} windDir={windDir} />
-              <div className="absolute bottom-4 right-4 flex flex-col gap-1">
+                plotShape={plotShape} plotArea={area} windDir={windDir} windSpeed={windSpeed} />
+              <div className="absolute top-3 right-3 flex flex-col gap-1">
                 {[{i:"add",a:()=>setZoom(z=>Math.min(z+2,32))},{i:"remove",a:()=>setZoom(z=>Math.max(z-2,6))},{i:"center_focus_strong",a:()=>setZoom(14)}].map(({i,a}) => (
                   <button key={i} onClick={a} className="w-9 h-9 rounded-lg flex items-center justify-center hover:text-primary transition-all text-slate-600 border border-slate-300/20 bg-white/5">
                     <span className="material-symbols-outlined text-lg">{i}</span>
                   </button>
                 ))}
               </div>
-              <div className="absolute top-3 left-3 flex flex-col gap-1.5">
+              <div className="absolute top-3 left-3 flex flex-col gap-1" style={{zIndex:10}}>
                 {[{l:"Solar",on:showSolar,s:setShowSolar,c:"#e88c00"},{l:"Wind",on:showWind,s:setShowWind,c:"#3b82f6"}].map(({l,on,s,c}) => (
                   <button key={l} onClick={() => s(!on)} className="px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wide transition-all"
-                    style={{background:on?`${c}22`:"rgba(240,240,240,0.8)",border:`1px solid ${on?c:"rgba(50,60,70,0.2)"}`,color:on?c:"#334455"}}>{l}</button>
+                    style={{background:on?`${c}22`:"rgba(8,14,14,0.85)",border:`1px solid ${on?c:"rgba(13,242,242,0.15)"}`,color:on?c:"rgba(13,242,242,0.5)",fontSize:9,padding:"3px 8px"}}>{ l}</button>
                 ))}
               </div>
-              <button onClick={() => router.push(`/model3d/${plotId}`)} className="absolute bottom-4 left-4 flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] font-bold uppercase tracking-widest"
-                style={{background:"#0df2f2",color:"#080e0e",boxShadow:"0 0 16px rgba(13,242,242,0.25)"}}>
-                <span className="material-symbols-outlined text-sm">view_in_ar</span>View 3D Model
-              </button>
+{/* View 3D button moved to footer */}
             </div>
             <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-t border-white/5 text-[10px] font-mono text-slate-500" style={{ background: "rgba(8,14,14,0.98)" }}>
               <span>⬡ PROFESSIONAL BLUEPRINT 3.0</span>
               <span>⊙ SITE: {plotId || "—"} · {plotShape.toUpperCase()}</span>
               <div className="flex items-center gap-3">
+                <button onClick={() => router.push(`/model3d/${plotId}`)} className="flex items-center gap-1 px-3 py-1.5 rounded font-bold text-[10px] uppercase" style={{background:"#0df2f2",color:"#080e0e",gap:4}}>
+                  <span className="material-symbols-outlined" style={{fontSize:13}}>view_in_ar</span>3D Model
+                </button>
                 <button onClick={() => {
                   // Generate a simple DXF-format export
                   let dxf = "0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n";
@@ -1296,7 +1671,7 @@ export default function AnalysisPage() {
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement("a"); a.href = url; a.download = `ECO3D_${plotId}_floorplan.dxf`; a.click(); URL.revokeObjectURL(url);
                 }} className="flex items-center gap-1 text-slate-400 hover:text-white transition-colors"><span className="material-symbols-outlined text-sm">download</span>Export DXF</button>
-                <button onClick={handleRegenerate} className="flex items-center gap-1 px-3 py-1 rounded font-bold text-[10px]" style={{background:"#0df2f2",color:"#080e0e"}}>Save Design</button>
+                <button onClick={() => handleRegenerate()} className="flex items-center gap-1 px-3 py-1 rounded font-bold text-[10px]" style={{background:"#0df2f2",color:"#080e0e"}}>Save Design</button>
               </div>
             </div>
           </div>

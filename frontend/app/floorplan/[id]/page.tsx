@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
@@ -46,35 +46,28 @@ interface WindowEl {
   floor: number;
 }
 
-const PALETTE: Record<string, { fill: string; accent: string; hatch?: boolean }> = {
-  living: { fill: "rgba(13,200,200,0.07)", accent: "#0bc8c8" },
-  bedroom: { fill: "rgba(52,130,210,0.07)", accent: "#3482d2" },
-  kitchen: { fill: "rgba(46,180,100,0.07)", accent: "#2eb464" },
-  bathroom: { fill: "rgba(140,80,170,0.07)", accent: "#8c50aa", hatch: true },
-  office: { fill: "rgba(220,170,10,0.07)", accent: "#dcaa0a" },
-  garage: { fill: "rgba(110,125,125,0.07)", accent: "#6e7d7d" },
-  utility: { fill: "rgba(210,110,20,0.07)", accent: "#d26e14", hatch: true },
-  dining: { fill: "rgba(220,90,90,0.07)", accent: "#df7070" },
-  puja_room: { fill: "rgba(205,185,80,0.07)", accent: "#d4bf5e" },
+const ROOM_FILL_FP: Record<string, string> = {
+  living:"rgba(13,200,200,0.10)", bedroom:"rgba(74,157,232,0.11)", kitchen:"rgba(44,180,110,0.10)",
+  bathroom:"rgba(155,114,212,0.11)", office:"rgba(232,195,58,0.11)", garage:"rgba(143,160,160,0.10)",
+  utility:"rgba(224,128,80,0.10)", dining:"rgba(232,122,58,0.10)", puja_room:"rgba(200,160,32,0.10)",
 };
-
+const ROOM_LABEL_FP: Record<string, string> = {
+  living:"LIVING ROOM", bedroom:"BEDROOM", kitchen:"KITCHEN",
+  bathroom:"BATHROOM", office:"STUDY / OFFICE", garage:"GARAGE",
+  utility:"UTILITY", dining:"DINING ROOM", puja_room:"PUJA ROOM",
+};
 const getPalette = (type: string) => {
-  const key = Object.keys(PALETTE).find(k => type.toLowerCase().includes(k));
-  return key ? PALETTE[key] : { fill: "rgba(80,80,100,0.06)", accent: "#505064" };
+  const fill = getFloorFill(type);
+  return { accent: fill.includes("rgba") ? "#0df2f2" : fill };
 };
+const getFloorFill  = (t:string) => { const k=Object.keys(ROOM_FILL_FP).find(k=>t.toLowerCase().replace("_","").includes(k.replace("_",""))); return k?ROOM_FILL_FP[k]:"#f6f6f6"; };
+const getFloorLabel = (t:string) => { const k=Object.keys(ROOM_LABEL_FP).find(k=>t.toLowerCase().replace("_","").includes(k.replace("_",""))); return k?ROOM_LABEL_FP[k]:t.replace(/_/g," ").toUpperCase(); };
+const isHatch = (t:string) => ["bathroom","utility","garage"].some(k=>t.toLowerCase().replace("_","").includes(k));
 
 function FloorPlanCanvas({
-  rooms,
-  walls,
-  doors,
-  windows,
-  floor,
+  rooms, walls, doors, windows, floor,
 }: {
-  rooms: Room[];
-  walls: Wall[];
-  doors: Door[];
-  windows: WindowEl[];
-  floor: number;
+  rooms: Room[]; walls: Wall[]; doors: Door[]; windows: WindowEl[]; floor: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -83,252 +76,239 @@ function FloorPlanCanvas({
   const floorDoors = useMemo(() => doors.filter(d => d.floor === floor), [doors, floor]);
   const floorWindows = useMemo(() => windows.filter(w => w.floor === floor), [windows, floor]);
 
-  useEffect(() => {
+  const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container || floorRooms.length === 0) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const W = container.clientWidth;
+    const H = container.clientHeight;
+    canvas.width = W; canvas.height = H;
 
-    const redraw = () => {
-      const W = container.clientWidth;
-      const H = container.clientHeight;
-      canvas.width = W;
-      canvas.height = H;
+    // White paper background
+    ctx.fillStyle = "#0b1416"; ctx.fillRect(0,0,W,H);
+    // Grid
+    ctx.strokeStyle="rgba(13,242,242,0.055)"; ctx.lineWidth=0.4;
+    for(let gx=0;gx<W;gx+=20){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
+    for(let gy=0;gy<H;gy+=20){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
+    ctx.strokeStyle="rgba(13,242,242,0.10)"; ctx.lineWidth=0.6;
+    for(let gx=0;gx<W;gx+=100){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
+    for(let gy=0;gy<H;gy+=100){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
 
-      ctx.fillStyle = "#0b1515";
-      ctx.fillRect(0, 0, W, H);
-      ctx.strokeStyle = "rgba(13,242,242,0.025)";
-      ctx.lineWidth = 0.5;
-      for (let x = 0; x < W; x += 28) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-      for (let y = 0; y < H; y += 28) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    const minX=Math.min(...floorRooms.map(r=>r.x));
+    const minY=Math.min(...floorRooms.map(r=>r.y));
+    const maxX=Math.max(...floorRooms.map(r=>r.x+r.width));
+    const maxY=Math.max(...floorRooms.map(r=>r.y+r.height));
+    const MX=90, MY=80, MX2=60, MY2=68;
+    const scale=Math.min((W-MX-MX2)/Math.max(maxX-minX,0.1),(H-MY-MY2)/Math.max(maxY-minY,0.1));
+    const bw=(maxX-minX)*scale; const bh=(maxY-minY)*scale;
+    const offX=MX+(W-MX-MX2-bw)/2; const offY=MY+(H-MY-MY2-bh)/2;
+    const px=(x:number)=>offX+(x-minX)*scale;
+    const py=(y:number)=>offY+(y-minY)*scale;
+    const ps=(v:number)=>v*scale;
+    const WT=Math.max(7,ps(0.23));
+    const IWT=Math.max(3,ps(0.12));
 
-      const minX = Math.min(...floorRooms.map(r => r.x));
-      const minY = Math.min(...floorRooms.map(r => r.y));
-      const maxX = Math.max(...floorRooms.map(r => r.x + r.width));
-      const maxY = Math.max(...floorRooms.map(r => r.y + r.height));
-      const scale = Math.min((W * 0.80) / Math.max(maxX - minX, 1), (H * 0.76) / Math.max(maxY - minY, 1));
-      const offX = (W - (maxX - minX) * scale) / 2 - minX * scale;
-      const offY = (H - (maxY - minY) * scale) / 2 - minY * scale;
-      const px = (x: number) => offX + x * scale;
-      const py = (y: number) => offY + y * scale;
-      const ps = (s: number) => s * scale;
-      const WT = Math.max(6, ps(0.24));
+    // PASS 1: Room fills + hatch
+    floorRooms.forEach(r=>{
+      const rx=px(r.x),ry=py(r.y),rw=ps(r.width),rh=ps(r.height);
+      ctx.fillStyle=getFloorFill(r.type); ctx.fillRect(rx,ry,rw,rh);
+      if(isHatch(r.type)&&rw>12&&rh>12){
+        ctx.save();ctx.beginPath();ctx.rect(rx,ry,rw,rh);ctx.clip();
+        ctx.strokeStyle="rgba(100,80,140,0.14)"; ctx.lineWidth=0.6;
+        for(let d=-(rw+rh);d<rw+rh;d+=8){ctx.beginPath();ctx.moveTo(rx+d,ry);ctx.lineTo(rx+d+rh,ry+rh);ctx.stroke();}
+        ctx.restore();
+      }
+    });
 
-      floorRooms.forEach(room => {
-        const p = getPalette(room.type);
-        const rx = px(room.x) + WT / 2;
-        const ry = py(room.y) + WT / 2;
-        const rw = ps(room.width) - WT;
-        const rh = ps(room.height) - WT;
-        ctx.fillStyle = p.fill;
-        ctx.fillRect(rx, ry, rw, rh);
-        if (p.hatch) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(rx, ry, rw, rh);
-          ctx.clip();
-          ctx.strokeStyle = p.accent + "28";
-          for (let d = -(rw + rh); d < rw + rh; d += 11) {
-            ctx.beginPath();
-            ctx.moveTo(rx + d, ry);
-            ctx.lineTo(rx + d + rh, ry + rh);
-            ctx.stroke();
-          }
+    // PASS 2: Walls
+    if(floorWalls.length>0){
+      floorWalls.forEach(wall=>{
+        const horiz=wall.orientation==="horizontal";
+        const wLen=ps(wall.length); const wThk=Math.max(horiz?4:3.5,ps(wall.thickness));
+        const ww=horiz?wLen:wThk; const wh=horiz?wThk:wLen;
+        const wx=px(wall.x)-(horiz?wLen/2:wThk/2);
+        const wy=py(wall.y)-(horiz?wThk/2:wLen/2);
+        const ext=wall.type==="exterior";
+        ctx.fillStyle=ext?"#2a3a3a":"#3d4d4d"; ctx.fillRect(wx,wy,ww,wh);
+        if(ext&&ww>4&&wh>4){
+          ctx.save();ctx.beginPath();ctx.rect(wx,wy,ww,wh);ctx.clip();
+          ctx.strokeStyle="rgba(255,255,255,0.14)"; ctx.lineWidth=0.5;
+          for(let d=-(ww+wh);d<ww+wh;d+=4){ctx.beginPath();ctx.moveTo(wx+d,wy);ctx.lineTo(wx+d+wh,wy+wh);ctx.stroke();}
           ctx.restore();
         }
+        ctx.strokeStyle=ext?"#1a2828":"#2a3838"; ctx.lineWidth=ext?0.7:0.4; ctx.strokeRect(wx,wy,ww,wh);
       });
+    } else {
+      // Fallback perimeter
+      ctx.fillStyle="#1e3232";
+      ctx.fillRect(offX-WT,offY-WT,bw+WT*2,WT);
+      ctx.fillRect(offX-WT,offY+bh,bw+WT*2,WT);
+      ctx.fillRect(offX-WT,offY-WT,WT,bh+WT*2);
+      ctx.fillRect(offX+bw,offY-WT,WT,bh+WT*2);
+      // Interior walls from adjacency
+      const EPS=0.09; const drawn=new Set<string>();
+      floorRooms.forEach(a=>{ floorRooms.forEach(b=>{
+        if(a===b) return;
+        if(Math.abs((a.x+a.width)-b.x)<EPS){const ov=Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y);if(ov>0.25){const k=`v:${(a.x+a.width).toFixed(2)}:${Math.min(a.y,b.y).toFixed(2)}`;if(!drawn.has(k)){drawn.add(k);ctx.fillStyle="#3d4d4d";ctx.fillRect(px(a.x+a.width)-IWT/2,py(Math.max(a.y,b.y)),IWT,ps(ov));}}}
+        if(Math.abs((a.y+a.height)-b.y)<EPS){const ov=Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x);if(ov>0.25){const k=`h:${Math.min(a.x,b.x).toFixed(2)}:${(a.y+a.height).toFixed(2)}`;if(!drawn.has(k)){drawn.add(k);ctx.fillStyle="#3d4d4d";ctx.fillRect(px(Math.max(a.x,b.x)),py(a.y+a.height)-IWT/2,ps(ov),IWT);}}}
+      });});
+    }
 
-      floorWalls.forEach(wall => {
-        const horiz = wall.orientation === "horizontal";
-        const ww = horiz ? ps(wall.length) : Math.max(3, ps(wall.thickness));
-        const wh = horiz ? Math.max(3, ps(wall.thickness)) : ps(wall.length);
-        const wx = px(wall.x) - ww / 2;
-        const wy = py(wall.y) - wh / 2;
-        const exterior = wall.type === "exterior";
-        ctx.fillStyle = exterior ? "#1e3838" : "#162e2e";
-        ctx.fillRect(wx, wy, ww, wh);
-        if (exterior) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(wx, wy, ww, wh);
-          ctx.clip();
-          ctx.strokeStyle = "rgba(13,242,242,0.18)";
-          for (let d = -(ww + wh); d < ww + wh; d += 5) {
-            ctx.beginPath();
-            ctx.moveTo(wx + d, wy);
-            ctx.lineTo(wx + d + wh, wy + wh);
-            ctx.stroke();
-          }
-          ctx.restore();
-        }
-        ctx.strokeStyle = exterior ? "rgba(13,242,242,0.7)" : "rgba(13,242,242,0.28)";
-        ctx.lineWidth = exterior ? 1.2 : 0.7;
-        ctx.strokeRect(wx, wy, ww, wh);
-      });
+    // PASS 3: Doors
+    floorDoors.forEach(door=>{
+      const span=ps(door.width); const wallT=Math.max(4,ps(0.15));
+      ctx.strokeStyle="#1a3030"; ctx.lineWidth=1.2;
+      if(door.orientation==="horizontal"){
+        const dx=px(door.x)-span/2,dy=py(door.y)-wallT/2;
+        ctx.fillStyle="#0b1416"; ctx.fillRect(dx-1,dy-2,span+2,wallT+4);
+        ctx.strokeStyle="rgba(13,242,242,0.85)"; ctx.lineWidth=1.3;
+        ctx.beginPath();ctx.moveTo(dx,dy+wallT/2);ctx.lineTo(dx+span,dy+wallT/2);ctx.stroke();
+        ctx.strokeStyle="rgba(13,242,242,0.4)"; ctx.lineWidth=0.8; ctx.setLineDash([3,3]);
+        ctx.beginPath();ctx.arc(dx,dy+wallT/2,span,0,Math.PI/2);ctx.stroke();ctx.setLineDash([]);
+      } else {
+        const dy=py(door.y)-span/2,dx=px(door.x)-wallT/2;
+        ctx.fillStyle="#0b1416"; ctx.fillRect(dx-2,dy-1,wallT+4,span+2);
+        ctx.strokeStyle="rgba(13,242,242,0.85)"; ctx.lineWidth=1.3;
+        ctx.beginPath();ctx.moveTo(dx+wallT/2,dy);ctx.lineTo(dx+wallT/2,dy+span);ctx.stroke();
+        ctx.strokeStyle="rgba(13,242,242,0.4)"; ctx.lineWidth=0.8; ctx.setLineDash([3,3]);
+        ctx.beginPath();ctx.arc(dx+wallT/2,dy,span,Math.PI/2,Math.PI);ctx.stroke();ctx.setLineDash([]);
+      }
+    });
 
-      const drawDoor = (door: Door) => {
-        const sw = ps(door.width);
-        ctx.strokeStyle = "rgba(13,242,242,0.85)";
-        ctx.lineWidth = 1;
-        if (door.orientation === "horizontal") {
-          const dx = px(door.x) - sw / 2;
-          const dy = py(door.y) - WT / 2;
-          ctx.fillStyle = "#0b1515";
-          ctx.fillRect(dx, dy - 1, sw, WT + 2);
-          ctx.beginPath(); ctx.moveTo(dx, dy + WT / 2); ctx.lineTo(dx + sw, dy + WT / 2); ctx.stroke();
-          ctx.beginPath(); ctx.arc(dx, dy + WT / 2, sw, -Math.PI / 2, 0); ctx.stroke();
-        } else {
-          const dy = py(door.y) - sw / 2;
-          const dx = px(door.x) - WT / 2;
-          ctx.fillStyle = "#0b1515";
-          ctx.fillRect(dx - 1, dy, WT + 2, sw);
-          ctx.beginPath(); ctx.moveTo(dx + WT / 2, dy); ctx.lineTo(dx + WT / 2, dy + sw); ctx.stroke();
-          ctx.beginPath(); ctx.arc(dx + WT / 2, dy, sw, Math.PI, 3 * Math.PI / 2); ctx.stroke();
-        }
-      };
-      floorDoors.forEach(drawDoor);
-
-      const drawWindow = (x: number, y: number, w: number, h: number, horiz: boolean) => {
-        ctx.fillStyle = "rgba(13,242,242,0.10)";
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeStyle = "rgba(160,240,240,0.9)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y, w, h);
-        for (let i = 1; i < 3; i++) {
-          ctx.beginPath();
-          if (horiz) {
-            const xx = x + (w * i) / 3;
-            ctx.moveTo(xx, y); ctx.lineTo(xx, y + h);
-          } else {
-            const yy = y + (h * i) / 3;
-            ctx.moveTo(x, yy); ctx.lineTo(x + w, yy);
-          }
-          ctx.stroke();
-        }
-      };
-
-      floorWindows.forEach(win => {
-        const parts = win.wall.split("_");
-        const edge = parts[parts.length - 1];
-        const roomId = parts.slice(0, -1).join("_");
-        const room = floorRooms.find(r => r.id === roomId);
-        if (!room) return;
-        const ww = ps(win.width);
-        if (edge === "top") drawWindow(px(room.x + room.width / 2) - ww / 2, py(room.y), ww, WT, true);
-        if (edge === "bottom") drawWindow(px(room.x + room.width / 2) - ww / 2, py(room.y + room.height) - WT, ww, WT, true);
-        if (edge === "left") drawWindow(px(room.x), py(room.y + room.height / 2) - ww / 2, WT, ww, false);
-        if (edge === "right") drawWindow(px(room.x + room.width) - WT, py(room.y + room.height / 2) - ww / 2, WT, ww, false);
-      });
-
-      floorRooms.forEach(room => {
-        const rx = px(room.x);
-        const ry = py(room.y);
-        const rw = ps(room.width);
-        const rh = ps(room.height);
-        const cx = rx + rw / 2;
-        const cy = ry + rh / 2;
-        const fs = Math.max(8, Math.min(13, (rw - WT * 2) * 0.11));
-        ctx.fillStyle = getPalette(room.type).accent;
-        ctx.font = `700 ${fs}px 'Space Grotesk', monospace`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(room.type.replace(/_/g, " ").toUpperCase(), cx, cy - fs * 0.65);
-        ctx.fillStyle = "rgba(255,255,255,0.32)";
-        ctx.font = `${Math.max(7, fs - 2)}px monospace`;
-        ctx.fillText(`${(room.width * room.height).toFixed(1)} m²`, cx, cy + fs * 0.65);
-      });
-
-      ctx.setLineDash([2, 3]);
-      floorRooms.forEach(room => {
-        const rx = px(room.x), ry = py(room.y), rw = ps(room.width), rh = ps(room.height);
-        if (rw > 55) {
-          const yd = ry - 16;
-          ctx.strokeStyle = "rgba(13,242,242,0.38)";
-          ctx.beginPath();
-          ctx.moveTo(rx, ry); ctx.lineTo(rx, yd);
-          ctx.moveTo(rx + rw, ry); ctx.lineTo(rx + rw, yd);
-          ctx.moveTo(rx, yd); ctx.lineTo(rx + rw, yd);
-          ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.fillStyle = "rgba(180,240,240,0.55)";
-          ctx.font = "8px monospace";
-          ctx.fillText(`${room.width.toFixed(1)}m`, rx + rw / 2, yd - 2);
-          ctx.setLineDash([2, 3]);
-        }
-        if (rh > 55) {
-          const xd = rx + rw + 16;
-          ctx.strokeStyle = "rgba(13,242,242,0.38)";
-          ctx.beginPath();
-          ctx.moveTo(rx + rw, ry); ctx.lineTo(xd, ry);
-          ctx.moveTo(rx + rw, ry + rh); ctx.lineTo(xd, ry + rh);
-          ctx.moveTo(xd, ry); ctx.lineTo(xd, ry + rh);
-          ctx.stroke();
-        }
-      });
-      ctx.setLineDash([]);
-
-      const today = new Date();
-      const dateStr = `${today.getDate().toString().padStart(2, "0")}/${(today.getMonth() + 1).toString().padStart(2, "0")}/${today.getFullYear()}`;
-      const totalFloorArea = floorRooms.reduce((sum, room) => sum + room.width * room.height, 0);
-      const TB_H = 42;
-      const TB_Y = H - TB_H;
-      ctx.fillStyle = "rgba(8,16,16,0.92)";
-      ctx.fillRect(0, TB_Y, W, TB_H);
-      ctx.strokeStyle = "rgba(13,242,242,0.35)";
-      ctx.beginPath(); ctx.moveTo(0, TB_Y); ctx.lineTo(W, TB_Y); ctx.stroke();
-      [W * 0.25, W * 0.50, W * 0.75].forEach(v => {
-        ctx.beginPath(); ctx.moveTo(v, TB_Y); ctx.lineTo(v, H); ctx.stroke();
-      });
-      [
-        { label: "PROJECT", value: "ECO-3D STUDIO" },
-        { label: "FLOOR", value: `FLOOR ${floor} — ${floorRooms.length} ROOMS` },
-        { label: "AREA", value: `${totalFloorArea.toFixed(1)} m²` },
-        { label: "DATE", value: dateStr },
-      ].forEach((item, i) => {
-        const x = i === 0 ? 14 : (W * i) / 4 + 10;
-        ctx.fillStyle = "rgba(13,242,242,0.45)";
-        ctx.font = "bold 7px monospace";
-        ctx.textAlign = "left";
-        ctx.fillText(item.label, x, TB_Y + 12);
-        ctx.fillStyle = "rgba(255,255,255,0.82)";
-        ctx.font = "bold 10px 'Space Grotesk', monospace";
-        ctx.fillText(item.value, x, TB_Y + 26);
-      });
+    // PASS 4: Windows (CAD style)
+    const drawWin=(wx:number,wy:number,ww:number,wh:number,horiz:boolean)=>{
+      ctx.fillStyle="#0b1416"; ctx.fillRect(wx-1,wy-1,ww+2,wh+2);
+      ctx.fillStyle="rgba(100,200,255,0.22)"; ctx.fillRect(wx,wy,ww,wh);
+      ctx.strokeStyle="rgba(130,210,255,0.85)"; ctx.lineWidth=0.9; ctx.strokeRect(wx,wy,ww,wh);
+      ctx.strokeStyle="rgba(130,210,255,0.5)"; ctx.lineWidth=0.5;
+      if(horiz){ctx.beginPath();ctx.moveTo(wx,wy+wh/2);ctx.lineTo(wx+ww,wy+wh/2);ctx.stroke();ctx.beginPath();ctx.moveTo(wx+ww/2,wy);ctx.lineTo(wx+ww/2,wy+wh);ctx.stroke();}
+      else{ctx.beginPath();ctx.moveTo(wx+ww/2,wy);ctx.lineTo(wx+ww/2,wy+wh);ctx.stroke();ctx.beginPath();ctx.moveTo(wx,wy+wh/2);ctx.lineTo(wx+ww,wy+wh/2);ctx.stroke();}
+      ctx.strokeStyle="rgba(130,210,255,0.75)"; ctx.lineWidth=1.1;
+      if(horiz){ctx.beginPath();ctx.moveTo(wx,wy-2);ctx.lineTo(wx,wy+wh+2);ctx.stroke();ctx.beginPath();ctx.moveTo(wx+ww,wy-2);ctx.lineTo(wx+ww,wy+wh+2);ctx.stroke();}
+      else{ctx.beginPath();ctx.moveTo(wx-2,wy);ctx.lineTo(wx+ww+2,wy);ctx.stroke();ctx.beginPath();ctx.moveTo(wx-2,wy+wh);ctx.lineTo(wx+ww+2,wy+wh);ctx.stroke();}
     };
+    floorWindows.forEach(win=>{
+      const parts=win.wall.split("_"); const edge=parts[parts.length-1].replace("vent","").trim();
+      const roomId=parts.slice(0,-1).join("_");
+      const room=floorRooms.find(r=>r.id===roomId); if(!room) return;
+      const span=ps(win.width); if(span<6) return;
+      if(edge==="top")    drawWin(px(room.x+room.width/2)-span/2,py(room.y)-WT/2,span,WT,true);
+      if(edge==="bottom") drawWin(px(room.x+room.width/2)-span/2,py(room.y+room.height)-WT/2,span,WT,true);
+      if(edge==="left")   drawWin(px(room.x)-WT/2,py(room.y+room.height/2)-span/2,WT,span,false);
+      if(edge==="right")  drawWin(px(room.x+room.width)-WT/2,py(room.y+room.height/2)-span/2,WT,span,false);
+    });
 
-    redraw();
-    const ro = new ResizeObserver(redraw);
-    ro.observe(container);
-    return () => ro.disconnect();
+    // PASS 5: Labels + dimensions
+    floorRooms.forEach(r=>{
+      const rx=px(r.x),ry=py(r.y),rw=ps(r.width),rh=ps(r.height);
+      const cx=rx+rw/2,cy=ry+rh/2;
+      if(rw<20||rh<14) return;
+      const fs=Math.max(7,Math.min(11,rw/7.5));
+      ctx.fillStyle="#0df2f2"; ctx.font=`bold ${fs}px 'Space Grotesk',sans-serif`;
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(getFloorLabel(r.type),cx,cy-fs*0.9);
+      ctx.fillStyle="rgba(180,200,220,0.82)"; ctx.font=`${Math.max(6,fs-1.5)}px monospace`;
+      ctx.fillText(`${(r.width*r.height).toFixed(1)} m²`,cx,cy+fs*0.1);
+      ctx.fillStyle="rgba(130,160,180,0.75)"; ctx.font=`${Math.max(5.5,fs-2)}px monospace`;
+      ctx.fillText(`${r.width.toFixed(2)} × ${r.height.toFixed(2)} m`,cx,cy+fs*0.95);
+    });
+
+    // PASS 6: Dimension lines
+    const DL=18; const DE=5;
+    const drawDim=(x1:number,y1:number,x2:number,y2:number,lbl:string,off:number,horiz:boolean)=>{
+      ctx.strokeStyle="rgba(13,242,242,0.55)"; ctx.lineWidth=0.6;
+      if(horiz){
+        ctx.beginPath();ctx.moveTo(x1,y1-DE);ctx.lineTo(x1,y1+off+DE);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(x2,y1-DE);ctx.lineTo(x2,y1+off+DE);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(x1,y1+off);ctx.lineTo(x2,y1+off);ctx.stroke();
+        ctx.fillStyle="rgba(13,242,242,0.65)";
+        ctx.beginPath();ctx.moveTo(x1,y1+off);ctx.lineTo(x1+5,y1+off-2.5);ctx.lineTo(x1+5,y1+off+2.5);ctx.closePath();ctx.fill();
+        ctx.beginPath();ctx.moveTo(x2,y1+off);ctx.lineTo(x2-5,y1+off-2.5);ctx.lineTo(x2-5,y1+off+2.5);ctx.closePath();ctx.fill();
+        ctx.fillStyle="rgba(13,242,242,0.65)"; ctx.font="bold 8px monospace"; ctx.textAlign="center"; ctx.textBaseline="bottom";
+        ctx.fillText(lbl,(x1+x2)/2,y1+off-1);
+      } else {
+        ctx.beginPath();ctx.moveTo(x1-DE,y1);ctx.lineTo(x1+off+DE,y1);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(x1-DE,y2);ctx.lineTo(x1+off+DE,y2);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(x1+off,y1);ctx.lineTo(x1+off,y2);ctx.stroke();
+        ctx.fillStyle="rgba(13,242,242,0.65)";
+        ctx.beginPath();ctx.moveTo(x1+off,y1);ctx.lineTo(x1+off-2.5,y1+5);ctx.lineTo(x1+off+2.5,y1+5);ctx.closePath();ctx.fill();
+        ctx.beginPath();ctx.moveTo(x1+off,y2);ctx.lineTo(x1+off-2.5,y2-5);ctx.lineTo(x1+off+2.5,y2-5);ctx.closePath();ctx.fill();
+        ctx.save();ctx.translate(x1+off+12,(y1+y2)/2);ctx.rotate(-Math.PI/2);
+        ctx.fillStyle="rgba(13,242,242,0.65)"; ctx.font="bold 8px monospace"; ctx.textAlign="center"; ctx.textBaseline="bottom";
+        ctx.fillText(lbl,0,0); ctx.restore();
+      }
+    };
+    drawDim(offX,offY,offX+bw,offY,`${(maxX-minX).toFixed(2)} m`,-DL,true);
+    drawDim(offX,offY,offX,offY+bh,`${(maxY-minY).toFixed(2)} m`,-DL,false);
+
+    // PASS 7: Title block
+    const TB=38; const TBY=H-TB;
+    ctx.fillStyle="rgba(8,14,14,0.96)"; ctx.fillRect(0,TBY,W,TB);
+    ctx.strokeStyle="rgba(13,242,242,0.25)"; ctx.lineWidth=0.8;
+    ctx.beginPath();ctx.moveTo(0,TBY);ctx.lineTo(W,TBY);ctx.stroke();
+    const cols2=[W*0.25,W*0.5,W*0.75];
+    cols2.forEach(cx2=>{ctx.strokeStyle="rgba(13,242,242,0.12)";ctx.beginPath();ctx.moveTo(cx2,TBY);ctx.lineTo(cx2,H);ctx.stroke();});
+    const today=new Date();
+    const dd=`${today.getDate().toString().padStart(2,"0")}/${(today.getMonth()+1).toString().padStart(2,"0")}/${today.getFullYear()}`;
+    [{l:"FLOOR",v:`FLOOR ${floor}`},{l:"ROOMS",v:`${floorRooms.length} rooms`},{l:"AREA",v:`${floorRooms.reduce((s,r)=>s+r.width*r.height,0).toFixed(0)} m²`},{l:"DATE",v:dd}].forEach((it,i)=>{
+      const tx=i===0?10:cols2[i-1]+8;
+      ctx.fillStyle="rgba(13,242,242,0.4)"; ctx.font="bold 7px monospace"; ctx.textAlign="left"; ctx.textBaseline="top";
+      ctx.fillText(it.l,tx,TBY+5);
+      ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.font="bold 9.5px 'Space Grotesk',monospace";
+      ctx.fillText(it.v,tx,TBY+16);
+    });
+
+    // PASS 8: North arrow
+    const NAX=W-48, NAY=offY-14;
+    ctx.fillStyle="rgba(8,20,22,0.92)"; ctx.strokeStyle="rgba(13,242,242,0.55)"; ctx.lineWidth=0.7;
+    ctx.beginPath();ctx.arc(NAX,NAY,16,0,Math.PI*2);ctx.fill();ctx.stroke();
+    ctx.fillStyle="rgba(13,242,242,0.9)";
+    ctx.beginPath();ctx.moveTo(NAX,NAY-12);ctx.lineTo(NAX-4,NAY+2);ctx.lineTo(NAX,NAY+4);ctx.lineTo(NAX+4,NAY+2);ctx.closePath();ctx.fill();
+    ctx.fillStyle="#0df2f2"; ctx.font="bold 8px monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("N",NAX,NAY-5);
+
+    // PASS 9: Scale bar
+    const sbM=5; const sbPx2=scale*sbM; const sbX2=offX; const sbY2=H-TB-12;
+    ctx.fillStyle="rgba(13,242,242,0.7)"; ctx.fillRect(sbX2,sbY2,sbPx2,2.5);
+    ctx.fillRect(sbX2,sbY2-3,1.5,7.5); ctx.fillRect(sbX2+sbPx2-1.5,sbY2-3,1.5,7.5);
+    ctx.font="7.5px monospace"; ctx.textAlign="left"; ctx.fillStyle="rgba(13,242,242,0.55)";
+    ctx.fillText("0",sbX2,sbY2-4); ctx.fillText(`${sbM}m`,sbX2+sbPx2+3,sbY2-4);
   }, [floorRooms, floorWalls, floorDoors, floorWindows, floor]);
+
+  useEffect(()=>{
+    redraw();
+    const ro=new ResizeObserver(redraw);
+    if(containerRef.current) ro.observe(containerRef.current);
+    return ()=>ro.disconnect();
+  }, [redraw]);
 
   if (floorRooms.length === 0) {
     return (
-      <div ref={containerRef} className="w-full h-full flex items-center justify-center">
-        <p className="text-slate-500 text-sm">No rooms on floor {floor}</p>
+      <div ref={containerRef} className="w-full h-full flex items-center justify-center" style={{background:"#ffffff"}}>
+        <p style={{color:"rgba(13,242,242,0.5)",fontSize:14}}>No rooms on floor {floor}</p>
       </div>
     );
   }
 
   return (
-    <div ref={containerRef} className="w-full h-full">
-      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
+    <div ref={containerRef} className="w-full h-full" style={{background:"#0b1416"}}>
+      <canvas ref={canvasRef} style={{ width:"100%", height:"100%", display:"block" }} />
     </div>
   );
 }
 
 function ScoreCard({ icon, label, value }: { icon: string; label: string; value: string }) {
   return (
-    <div className="rounded-xl p-5 flex flex-col gap-3" style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.1)" }}>
-      <span className="material-symbols-outlined text-primary text-2xl">{icon}</span>
-      <div>
-        <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">{label}</div>
-        <div className="text-2xl font-black text-white mt-0.5">{value}</div>
-      </div>
+    <div className="flex flex-col items-center gap-1 px-4 py-2 rounded-lg" style={{background:"rgba(13,242,242,0.04)",border:"1px solid rgba(13,242,242,0.08)"}}>
+      <span className="material-symbols-outlined text-primary text-base">{icon}</span>
+      <span className="text-[9px] text-slate-400 uppercase tracking-widest">{label}</span>
+      <span className="text-[13px] font-bold text-white">{value}</span>
     </div>
   );
 }
+
 
 export default function FloorPlanPage() {
   const params = useParams();
