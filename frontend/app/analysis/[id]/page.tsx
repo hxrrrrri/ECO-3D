@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
 import { generateFloorPlan } from "@/lib/api";
+import { fetchLiveEnvironment } from "@/lib/liveEnvironment";
 
 interface Room { id?: string; type: string; width: number; height: number; x: number; y: number; floor: number; orientation: string; }
 interface Wall { id?: string; room_id: string; type: string; orientation: string; x: number; y: number; x2?: number; y2?: number; length: number; thickness: number; floor: number; }
@@ -101,12 +102,16 @@ const WIND_VECTOR_MAP: Record<string, [number, number]> = {
   SSW: [-0.5, 1], WSW: [-1, 0.5], WNW: [-1, -0.5], NNW: [-0.5, -1],
 };
 
-function getWindProfile(direction: string, speed?: number) {
+function getWindProfile(direction: string, speed?: number, directionDegrees?: number) {
   const normalizedDirection = (direction || "SW").toUpperCase().replace(/[^A-Z]/g, "");
+  const useDegrees = typeof directionDegrees === "number" && Number.isFinite(directionDegrees);
   const key = Object.keys(WIND_VECTOR_MAP)
     .sort((a, b) => b.length - a.length)
     .find(candidate => normalizedDirection.startsWith(candidate)) ?? "SW";
-  const [x, y] = WIND_VECTOR_MAP[key];
+  const [fallbackX, fallbackY] = WIND_VECTOR_MAP[key];
+  const radians = useDegrees ? (directionDegrees * Math.PI) / 180 : 0;
+  const x = useDegrees ? Math.sin(radians) : fallbackX;
+  const y = useDegrees ? -Math.cos(radians) : fallbackY;
   const length = Math.hypot(x, y) || 1;
   const windSpeed = typeof speed === "number" && Number.isFinite(speed) ? Math.max(0, speed) : 3.2;
   const intensity = Math.max(0.58, Math.min(1.55, 0.72 + windSpeed / 6));
@@ -539,8 +544,8 @@ function LegacyBlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, 
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, floorPlan, plotShape, plotArea, windDir, windSpeed }:
-  { rooms: Room[]; walls: Wall[]; doors: Door[]; windows: WindowEl[]; trees: Tree[]; lat: number; lon: number; zoom: number; showSolarPath: boolean; showWindFlow: boolean; floorPlan: any; plotShape: string; plotArea: number; windDir: string; windSpeed: number }) {
+function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, floorPlan, plotShape, plotArea, windDir, windSpeed, windDirectionDeg, sunAzimuthDeg, sunElevationDeg }:
+  { rooms: Room[]; walls: Wall[]; doors: Door[]; windows: WindowEl[]; trees: Tree[]; lat: number; lon: number; zoom: number; showSolarPath: boolean; showWindFlow: boolean; floorPlan: any; plotShape: string; plotArea: number; windDir: string; windSpeed: number; windDirectionDeg?: number; sunAzimuthDeg?: number; sunElevationDeg?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const windParticles = useRef<Array<{x:number;y:number;life:number;speed:number;alpha:number}>>([]);
@@ -673,7 +678,7 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
     ctx.restore();
   };
 
-  const windVec = useMemo(() => getWindProfile(windDir, windSpeed), [windDir, windSpeed]);
+  const windVec = useMemo(() => getWindProfile(windDir, windSpeed, windDirectionDeg), [windDir, windSpeed, windDirectionDeg]);
 
   useEffect(() => {
     windParticles.current = [];
@@ -738,7 +743,7 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
 
     // ── Solar arc (live sun position) ──
     if (showSolarPath) {
-      const now = new Date(); const hour = now.getHours()+now.getMinutes()/60;
+      const now = new Date();
       const arcY = offY - 36; const arcAmp = 28;
       ctx.save();
       ctx.strokeStyle = "rgba(220,140,20,0.55)"; ctx.lineWidth = 1.5; ctx.setLineDash([6,4]);
@@ -753,9 +758,12 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
       ctx.fillStyle = "rgba(160,120,40,0.7)"; ctx.font = "bold 9px monospace";
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText("EAST", offX, arcY); ctx.fillText("WEST", offX+bw, arcY);
-      const prog = Math.max(0,Math.min(1,(hour-6)/12));
+      const safeAzimuth = typeof sunAzimuthDeg === "number" && Number.isFinite(sunAzimuthDeg) ? sunAzimuthDeg : 180;
+      const safeElevation = typeof sunElevationDeg === "number" && Number.isFinite(sunElevationDeg) ? sunElevationDeg : 0;
+      const prog = Math.max(0, Math.min(1, (safeAzimuth - 90) / 180));
+      const elevRatio = Math.max(0, Math.min(1, safeElevation / 90));
       const sunX = offX + bw*prog;
-      const sunY = arcY - Math.max(0,Math.sin(Math.max(0,(hour-6)*Math.PI/12)))*arcAmp;
+      const sunY = arcY - elevRatio * arcAmp;
       // Sun glow
       const grad = ctx.createRadialGradient(sunX,sunY,2,sunX,sunY,14);
       grad.addColorStop(0,"rgba(255,230,0,0.6)"); grad.addColorStop(1,"rgba(255,180,0,0)");
@@ -764,7 +772,7 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
       ctx.strokeStyle="rgba(245,158,11,0.6)"; ctx.lineWidth=1.2;
       for (let i=0;i<8;i++){const a=(i/8)*Math.PI*2;ctx.beginPath();ctx.moveTo(sunX+Math.cos(a)*7,sunY+Math.sin(a)*7);ctx.lineTo(sunX+Math.cos(a)*11,sunY+Math.sin(a)*11);ctx.stroke();}
       ctx.fillStyle="rgba(200,120,0,0.9)"; ctx.font="bold 8px monospace"; ctx.textAlign="center";
-      ctx.fillText(`${now.getHours().toString().padStart(2,"0")}:${now.getMinutes().toString().padStart(2,"0")}`,sunX,sunY-17);
+      ctx.fillText(`${now.getHours().toString().padStart(2,"0")}:${now.getMinutes().toString().padStart(2,"0")} · ${safeAzimuth.toFixed(0)}°`,sunX,sunY-17);
       ctx.restore();
     }
 
@@ -1155,7 +1163,7 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
     ctx.fillRect(sbX+sbPx/2-1,sbY-2,2,7);
     ctx.fillText(`${scaleBarM/2}m`,sbX+sbPx/2-6,sbY-4);
 
-  }, [rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, getRoomStyle, getRoomFill, getRoomHatch, getRoomLabel, getDisplayLabel, getShortLabel, parseWindowWall, drawFurniture]);
+  }, [rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, getRoomStyle, getRoomFill, getRoomHatch, getRoomLabel, getDisplayLabel, getShortLabel, parseWindowWall, drawFurniture, sunAzimuthDeg, sunElevationDeg]);
 
   useEffect(() => {
     let running = true;
@@ -1208,6 +1216,37 @@ export default function AnalysisPage() {
   } = useEco3DStore();
   const lat = selectedLat ?? 34.0522;
   const lon = selectedLon ?? -118.2437;
+  const [liveEnv, setLiveEnv] = useState<Awaited<ReturnType<typeof fetchLiveEnvironment>> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId: number | null = null;
+
+    const refreshLiveEnv = async () => {
+      try {
+        const snapshot = await fetchLiveEnvironment(lat, lon);
+        if (!cancelled) {
+          setLiveEnv(snapshot);
+        }
+      } catch {
+        if (!cancelled) {
+          setLiveEnv(null);
+        }
+      }
+    };
+
+    void refreshLiveEnv();
+    intervalId = window.setInterval(() => {
+      void refreshLiveEnv();
+    }, 45000);
+
+    return () => {
+      cancelled = true;
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [lat, lon]);
 
   // Active variant rooms (carousel drives what's displayed)
   const activeVariant = floorPlanVariants[activeVariantIndex] ?? null;
@@ -1227,8 +1266,15 @@ export default function AnalysisPage() {
     ? Math.round(activeVariant.ventilation_score * 100)
     : floorPlan ? Math.round(floorPlan.ventilation_score * 100) : 95;
   const treeDist = floorPlan?.tree_preserved_count ?? 0;
-  const windDir = analysis?.environmental?.wind_direction ?? "SW";
-  const windSpeed = analysis?.environmental?.wind_ms ?? 3.2;
+  const isLiveEnvReady = liveEnv !== null;
+  const windDir = liveEnv?.windDirectionCardinal ?? "—";
+  const windSpeed = liveEnv?.windSpeedMs ?? 0;
+  const windDirectionDeg = liveEnv?.windDirectionDeg;
+  const sunAzimuthDeg = liveEnv?.sunAzimuthDeg;
+  const sunElevationDeg = liveEnv?.sunElevationDeg;
+  const sunPositionLabel = typeof sunAzimuthDeg === "number" && typeof sunElevationDeg === "number"
+    ? `AZ ${Math.round(sunAzimuthDeg)}° · EL ${Math.max(0, sunElevationDeg).toFixed(0)}°`
+    : "LIVE DATA REQUIRED";
 
   // Area input: user can type sqft or m²
   const [areaUnit, setAreaUnit] = useState<"sqft"|"sqm">("sqm");
@@ -1620,6 +1666,15 @@ export default function AnalysisPage() {
               <div className="flex items-center gap-2">
                 <div className="glm px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-slate-300">X: {lat.toFixed(4)}°N</div>
                 <div className="glm px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-slate-300">Y: {lon.toFixed(4)}°E</div>
+                <div className="px-2.5 py-1.5 rounded-lg text-[10px] font-mono"
+                  style={{
+                    color: liveEnv ? "#8ef0ff" : "#64748b",
+                    background: liveEnv ? "rgba(56,189,248,0.12)" : "rgba(100,116,139,0.14)",
+                    border: `1px solid ${liveEnv ? "rgba(56,189,248,0.35)" : "rgba(100,116,139,0.25)"}`,
+                  }}
+                >
+                  {liveEnv ? "LIVE FROM OPEN-METEO" : "LIVE MODE: WAITING FOR OPEN-METEO"}
+                </div>
               </div>
               <div className="gl px-3 py-2 rounded-lg">
                 <div className="text-[9px] font-bold uppercase tracking-widest text-slate-500 mb-1">Legend</div>
@@ -1633,8 +1688,9 @@ export default function AnalysisPage() {
             </div>
             <div className="flex-1 relative overflow-hidden">
               <BlueprintCanvas rooms={rooms} walls={walls} doors={doors} windows={windows} trees={trees} lat={lat} lon={lon} zoom={zoom}
-                showSolarPath={showSolar} showWindFlow={showWind} floorPlan={floorPlan}
-                plotShape={plotShape} plotArea={area} windDir={windDir} windSpeed={windSpeed} />
+                showSolarPath={showSolar && isLiveEnvReady} showWindFlow={showWind && isLiveEnvReady} floorPlan={floorPlan}
+                plotShape={plotShape} plotArea={area} windDir={windDir} windSpeed={windSpeed} windDirectionDeg={windDirectionDeg}
+                sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} />
               <div className="absolute top-3 right-3 flex flex-col gap-1">
                 {[{i:"add",a:()=>setZoom(z=>Math.min(z+2,32))},{i:"remove",a:()=>setZoom(z=>Math.max(z-2,6))},{i:"center_focus_strong",a:()=>setZoom(14)}].map(({i,a}) => (
                   <button key={i} onClick={a} className="w-9 h-9 rounded-lg flex items-center justify-center hover:text-primary transition-all text-slate-600 border border-slate-300/20 bg-white/5">
@@ -1643,6 +1699,22 @@ export default function AnalysisPage() {
                 ))}
               </div>
               <div className="absolute top-3 left-3 flex flex-col gap-1" style={{zIndex:10}}>
+                <div
+                  className="px-2.5 py-1 rounded text-[9px] font-bold uppercase tracking-wide"
+                  style={{
+                    background: liveEnv ? "rgba(56,189,248,0.18)" : "rgba(71,85,105,0.22)",
+                    border: `1px solid ${liveEnv ? "rgba(56,189,248,0.45)" : "rgba(71,85,105,0.35)"}`,
+                    color: liveEnv ? "#7dd3fc" : "#94a3b8",
+                  }}
+                >
+                  {liveEnv ? "LIVE FROM OPEN-METEO" : "LIVE DATA UNAVAILABLE"}
+                </div>
+                <div
+                  className="px-2.5 py-1 rounded text-[9px] font-bold uppercase tracking-wide"
+                  style={{ background: "rgba(245,158,11,0.18)", border: "1px solid rgba(245,158,11,0.42)", color: "#fbbf24" }}
+                >
+                  SUN POSITION: {sunPositionLabel}
+                </div>
                 {[{l:"Solar",on:showSolar,s:setShowSolar,c:"#e88c00"},{l:"Wind",on:showWind,s:setShowWind,c:"#3b82f6"}].map(({l,on,s,c}) => (
                   <button key={l} onClick={() => s(!on)} className="px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wide transition-all"
                     style={{background:on?`${c}22`:"rgba(8,14,14,0.85)",border:`1px solid ${on?c:"rgba(13,242,242,0.15)"}`,color:on?c:"rgba(13,242,242,0.5)",fontSize:9,padding:"3px 8px"}}>{ l}</button>

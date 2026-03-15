@@ -7,6 +7,7 @@ import { OrbitControls, Text } from "@react-three/drei";
 
 import * as THREE from "three";
 import { useEco3DStore } from "@/store/useEco3DStore";
+import { fetchLiveEnvironment } from "@/lib/liveEnvironment";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NOOP_RAYCAST = () => {};
@@ -377,9 +378,28 @@ function makeMat(color: string, tex?: TexType, roughness = 0.78) {
 }
 
 // ─── Lighting ─────────────────────────────────────────────────────────────────
-function Lighting({ dir, sunOn, nightLightOn }: { dir: string; sunOn: boolean; nightLightOn: boolean }) {
-  const P: Record<string, [number, number, number]> = { N: [0, 15, -14], NE: [10, 15, -10], E: [15, 15, 0], SE: [10, 15, 10], S: [0, 15, 14], SW: [-10, 15, 10], W: [-15, 15, 0], NW: [-10, 15, -10] };
-  const pos = P[dir.slice(0, 2)] ?? P["SE"];
+function sunAnglesToScenePosition(azimuthDeg: number, elevationDeg: number, radius: number): [number, number, number] {
+  const azimuthRad = (azimuthDeg * Math.PI) / 180;
+  const elevationRad = (Math.max(-15, Math.min(85, elevationDeg)) * Math.PI) / 180;
+  const horizontal = Math.cos(elevationRad) * radius;
+  const x = Math.sin(azimuthRad) * horizontal;
+  const z = -Math.cos(azimuthRad) * horizontal;
+  const y = Math.max(1.2, Math.sin(elevationRad) * radius + 6);
+  return [x, y, z];
+}
+
+function Lighting({
+  sunAzimuthDeg,
+  sunElevationDeg,
+  sunOn,
+  nightLightOn,
+}: {
+  sunAzimuthDeg: number;
+  sunElevationDeg: number;
+  sunOn: boolean;
+  nightLightOn: boolean;
+}) {
+  const pos = sunAnglesToScenePosition(sunAzimuthDeg, sunElevationDeg, 24);
   const studioMode = nightLightOn;
   return <>
     <ambientLight intensity={studioMode ? 1.6 : (sunOn ? 0.55 : 0.95)} color={studioMode ? "#ffffff" : "#e8f4ff"} />
@@ -396,28 +416,15 @@ function Lighting({ dir, sunOn, nightLightOn }: { dir: string; sunOn: boolean; n
 }
 
 // ─── Sun Sphere ───────────────────────────────────────────────────────────────
-function SunSphere({ dir }: { dir: string }) {
+function SunSphere({ sunAzimuthDeg, sunElevationDeg }: { sunAzimuthDeg: number; sunElevationDeg: number }) {
   const sunRef = useRef<THREE.Group>(null);
   const ringRef = useRef<THREE.Mesh>(null);
+  const belowHorizon = sunElevationDeg <= -1;
 
-  const getSunPos = (): [number, number, number] => {
-    const now = new Date();
-    const h = now.getHours() + now.getMinutes() / 60;
-    const hourAngle = ((h - 12) / 12) * Math.PI;
-    const elev = Math.cos(hourAngle) * 0.8;
-    const azim = hourAngle;
-    const D: Record<string, [number, number]> = {
-      N:[0,-1],NE:[0.7,-0.7],E:[1,0],SE:[0.7,0.7],
-      S:[0,1],SW:[-0.7,0.7],W:[-1,0],NW:[-0.7,-0.7],
-    };
-    const k = Object.keys(D).find(k => dir.startsWith(k)) ?? "S";
-    const [dx, dz] = D[k];
-    const radius = 18;
-    const x = Math.sin(azim) * radius * 0.8 + dx * 4;
-    const y = Math.max(2, elev * 16 + 6);
-    const z = Math.cos(azim) * radius * 0.4 + dz * 4;
-    return [x, y, z];
-  };
+  const getSunPos = useCallback(
+    (): [number, number, number] => sunAnglesToScenePosition(sunAzimuthDeg, sunElevationDeg, 20),
+    [sunAzimuthDeg, sunElevationDeg]
+  );
 
   const pos = getSunPos();
 
@@ -429,39 +436,32 @@ function SunSphere({ dir }: { dir: string }) {
     }
   });
 
-  const h = new Date().getHours();
-  if (h < 6 || h > 18) return null;
-
   return (
     <group ref={sunRef} position={pos}>
-      <mesh><sphereGeometry args={[0.65, 20, 20]} /><meshStandardMaterial color="#fcd34d" emissive="#f59e0b" emissiveIntensity={2.0} /></mesh>
-      <mesh ref={ringRef}><torusGeometry args={[1.0, 0.06, 8, 32]} /><meshStandardMaterial color="#f59e0b" emissive="#f59e0b" emissiveIntensity={1.5} /></mesh>
+      <mesh><sphereGeometry args={[0.65, 20, 20]} /><meshStandardMaterial color={belowHorizon ? "#fbbf24" : "#fcd34d"} emissive={belowHorizon ? "#f59e0b" : "#f59e0b"} emissiveIntensity={belowHorizon ? 0.9 : 2.0} /></mesh>
+      <mesh ref={ringRef}><torusGeometry args={[1.0, 0.06, 8, 32]} /><meshStandardMaterial color="#f59e0b" emissive="#f59e0b" emissiveIntensity={belowHorizon ? 0.5 : 1.5} /></mesh>
       {Array.from({ length: 8 }).map((_, i) => {
         const a = (i / 8) * Math.PI * 2;
         return <mesh key={i} position={[Math.cos(a) * 1.3, Math.sin(a) * 1.3, 0]} rotation={[0, 0, a]}>
           <boxGeometry args={[0.5, 0.04, 0.04]} />
-          <meshStandardMaterial color="#fcd34d" emissive="#fbbf24" emissiveIntensity={1.5} />
+          <meshStandardMaterial color="#fcd34d" emissive="#fbbf24" emissiveIntensity={belowHorizon ? 0.45 : 1.5} />
         </mesh>;
       })}
-      <pointLight intensity={4.0} color="#fcd34d" distance={60} decay={1.5} />
+      <pointLight intensity={belowHorizon ? 1.0 : 4.0} color="#fcd34d" distance={60} decay={1.5} />
     </group>
   );
 }
 
 // ─── Wind Swirl ───────────────────────────────────────────────────────────────
 // Uses imperative buffer setup to avoid R3F bufferAttribute JSX artifact bug
-function WindSwirl({ dir, modelW, modelD }: { dir: string; modelW: number; modelD: number }) {
+function WindSwirl({ windDirectionDeg, modelW, modelD }: { windDirectionDeg: number; modelW: number; modelD: number }) {
   const v = useMemo(() => {
-    const M: Record<string, [number, number]> = {
-      N:[0,-1], NNE:[0.38,-0.92], NE:[0.71,-0.71], ENE:[0.92,-0.38],
-      E:[1,0],  ESE:[0.92,0.38],  SE:[0.71,0.71],  SSE:[0.38,0.92],
-      S:[0,1],  SSW:[-0.38,0.92], SW:[-0.71,0.71], WSW:[-0.92,0.38],
-      W:[-1,0], WNW:[-0.92,-0.38],NW:[-0.71,-0.71],NNW:[-0.38,-0.92],
-    };
-    const k = Object.keys(M).find(k => dir.startsWith(k)) ?? "SW";
-    const [x, z] = M[k]; const l = Math.sqrt(x*x+z*z)||1;
+    const radians = (windDirectionDeg * Math.PI) / 180;
+    const x = Math.sin(radians);
+    const z = -Math.cos(radians);
+    const l = Math.sqrt(x*x+z*z)||1;
     return { x:x/l, z:z/l };
-  }, [dir]);
+  }, [windDirectionDeg]);
   const perp = useMemo(() => ({ x:-v.z, z:v.x }), [v]);
 
   const COUNT = 320;
@@ -2087,13 +2087,53 @@ function ObjSvg({ type, color }: { type: string; color: string }) {
 export default function Model3DPage() {
   const params = useParams();
   const plotId = params.id as string;
-  const { floorPlan, analysis, floorPlanVariants, activeVariantIndex } = useEco3DStore();
+  const { floorPlan, analysis, floorPlanVariants, activeVariantIndex, selectedLat, selectedLon } = useEco3DStore();
   const activeVariant = floorPlanVariants[activeVariantIndex] ?? null;
   const rooms = activeVariant?.layout ?? floorPlan?.layout ?? [];
   const walls = activeVariant?.walls ?? floorPlan?.walls ?? [];
   const doors = activeVariant?.doors ?? floorPlan?.doors ?? [];
-  const windDir = analysis?.environmental?.wind_direction ?? "NW";
+  const lat = selectedLat ?? 34.0522;
+  const lon = selectedLon ?? -118.2437;
+  const [liveEnv, setLiveEnv] = useState<Awaited<ReturnType<typeof fetchLiveEnvironment>> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId: number | null = null;
+
+    const refreshLiveEnv = async () => {
+      try {
+        const snapshot = await fetchLiveEnvironment(lat, lon);
+        if (!cancelled) {
+          setLiveEnv(snapshot);
+        }
+      } catch {
+        // Keep the last known real snapshot if a refresh fails temporarily.
+      }
+    };
+
+    void refreshLiveEnv();
+    intervalId = window.setInterval(() => {
+      void refreshLiveEnv();
+    }, 45000);
+
+    return () => {
+      cancelled = true;
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [lat, lon]);
+
+  const isLiveEnvReady = liveEnv !== null;
+  const windDir = liveEnv?.windDirectionCardinal ?? "—";
+  const windDirectionDeg = liveEnv?.windDirectionDeg ?? 0;
   const sunHours = analysis?.environmental?.sun_exposure_hours ?? 8.2;
+  const sunAzimuthDeg = liveEnv?.sunAzimuthDeg ?? 0;
+  const sunElevationDeg = liveEnv?.sunElevationDeg ?? -90;
+  const sunVectorLabel = isLiveEnvReady
+    ? `${Math.round(sunAzimuthDeg)}° az · ${Math.max(0, sunElevationDeg).toFixed(0)}° el`
+    : "LIVE DATA REQUIRED";
+  const meteoBadgeLabel = liveEnv ? "LIVE FROM OPEN-METEO" : "LIVE MODE: WAITING FOR OPEN-METEO";
 
   const [objects, setObjects] = useState<SceneObj[]>(() => buildInitialObjects(rooms, walls, doors));
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2229,7 +2269,7 @@ export default function Model3DPage() {
 
         {/* Left sidebar */}
         <div style={{ width: 136, flexShrink: 0, background: "rgba(5,9,9,0.98)", padding: "10px 9px", display: "flex", flexDirection: "column", gap: 7, borderRight: "1px solid rgba(255,255,255,0.05)", overflowY: "auto" }}>
-          {[{ l: "Sun", v: `${windDir} · ${sunHours.toFixed(1)}h` }, { l: "Wind", v: `Prevailing ${windDir}` }, { l: "Objects", v: `${objects.length} in scene` }].map(({ l, v }) => (
+          {[{ l: "Live", v: meteoBadgeLabel }, { l: "Sun", v: `${sunVectorLabel} · ${sunHours.toFixed(1)}h` }, { l: "Wind", v: `Prevailing ${windDir}` }, { l: "Objects", v: `${objects.length} in scene` }].map(({ l, v }) => (
             <div key={l} style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)", borderRadius: 6, padding: "7px 9px" }}>
               <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 3 }}>{l}</div>
               <div style={{ fontSize: 10, color: "white", fontWeight: 600, lineHeight: 1.4 }}>{v}</div>
@@ -2282,7 +2322,7 @@ export default function Model3DPage() {
                 <PBREnvironment sunOn={showSun} nightMode={showMoon || (!showSun && !nightLight)} />
 
                 {/* Scene lights + weather effects */}
-                <Lighting dir={windDir} sunOn={showSun} nightLightOn={nightLight} />
+                <Lighting sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunOn={showSun && isLiveEnvReady} nightLightOn={nightLight} />
 
                 {/* Shader ground replaces plain mesh ground */}
                 <PBRGround showGrid={showGrid} wet={showFlood} />
@@ -2297,8 +2337,8 @@ export default function Model3DPage() {
                 ))}
 
                 {/* Sky & environment overlays */}
-                {showSun && <SunSphere dir={windDir} />}
-                {showWind && <WindSwirl dir={windDir} modelW={modelBounds.w} modelD={modelBounds.d} />}
+                {showSun && isLiveEnvReady && <SunSphere sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} />}
+                {showWind && isLiveEnvReady && <WindSwirl windDirectionDeg={windDirectionDeg} modelW={modelBounds.w} modelD={modelBounds.d} />}
                 {showRain && <Rain />}
                 {showSnow && <Snow />}
                 {showMoon && <Moonlight />}
@@ -2363,9 +2403,17 @@ export default function Model3DPage() {
 
           {/* HUD */}
           <div style={{ position: "absolute", top: 10, left: 10, display: "flex", flexDirection: "column", gap: 5, pointerEvents: "none" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: liveEnv ? "rgba(56,189,248,0.12)" : "rgba(71,85,105,0.16)", border: `1px solid ${liveEnv ? "rgba(56,189,248,0.28)" : "rgba(71,85,105,0.28)"}`, borderRadius: 6 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 12, color: liveEnv ? "#7dd3fc" : "#94a3b8" }}>cloud</span>
+              <span style={{ fontSize: 8.5, color: liveEnv ? "#bae6fd" : "#cbd5e1", fontFamily: "'DM Mono',monospace" }}>{meteoBadgeLabel}</span>
+            </div>
             {showSun && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: 6 }}>
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#f59e0b" }}>wb_sunny</span>
-              <span style={{ fontSize: 8.5, color: "#fbbf24", fontFamily: "'DM Mono',monospace" }}>SUN {windDir} · {sunHours.toFixed(1)}h/day</span>
+              <span style={{ fontSize: 8.5, color: "#fbbf24", fontFamily: "'DM Mono',monospace" }}>SUN {sunVectorLabel} · {sunHours.toFixed(1)}h/day</span>
+            </div>}
+            {showSun && isLiveEnvReady && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 6 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#fcd34d" }}>explore</span>
+              <span style={{ fontSize: 8.5, color: "#fde68a", fontFamily: "'DM Mono',monospace" }}>SUN POSITION: AZ {Math.round(sunAzimuthDeg)}° · EL {Math.max(0, sunElevationDeg).toFixed(0)}°</span>
             </div>}
             {showWind && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)", borderRadius: 6 }}>
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#60a5fa" }}>air</span>
