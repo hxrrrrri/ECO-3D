@@ -25,18 +25,18 @@ export default function MapComponent({
   const [showResults, setShowResults] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Photon geocoding — only navigates map, does NOT trigger onLocationSelect
+  // leaflet-geosearch OpenStreetMapProvider — same provider from working ac1ffe8 commit
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim() || q.length < 2) { setResults([]); setShowResults(false); return; }
     setSearching(true);
     try {
-      const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=7&lang=en`);
-      const data = await res.json();
-      const items = (data.features ?? []).map((f: any) => ({
-        name: [f.properties.name, f.properties.city, f.properties.state, f.properties.country]
-          .filter(Boolean).join(", "),
-        lat: f.geometry.coordinates[1],
-        lon: f.geometry.coordinates[0],
+      const { OpenStreetMapProvider } = await import("leaflet-geosearch");
+      const provider = new OpenStreetMapProvider();
+      const searchResults = await provider.search({ query: q });
+      const items = searchResults.map((r: any) => ({
+        name: r.label,
+        lat: r.y,
+        lon: r.x,
       }));
       setResults(items);
       setShowResults(true);
