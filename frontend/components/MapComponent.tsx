@@ -25,19 +25,50 @@ export default function MapComponent({
   const [showResults, setShowResults] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // leaflet-geosearch OpenStreetMapProvider — same provider from working ac1ffe8 commit
+  // Multi-provider geocoding: Photon (primary, better India/Kerala coverage) + Nominatim fallback
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim() || q.length < 2) { setResults([]); setShowResults(false); return; }
     setSearching(true);
     try {
-      const { OpenStreetMapProvider } = await import("leaflet-geosearch");
-      const provider = new OpenStreetMapProvider();
-      const searchResults = await provider.search({ query: q });
-      const items = searchResults.map((r: any) => ({
-        name: r.label,
-        lat: r.y,
-        lon: r.x,
-      }));
+      // 1. Photon by Komoot — free, no token, much better coverage for Indian colleges/places
+      const photonRes = await fetch(
+        `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lang=en`,
+        { headers: { "User-Agent": "eco3d-platform/2.0" } }
+      );
+      let items: { name: string; lat: number; lon: number }[] = [];
+      if (photonRes.ok) {
+        const photonData = await photonRes.json();
+        items = (photonData.features ?? []).map((f: any) => {
+          const p = f.properties ?? {};
+          const parts = [p.name, p.district, p.city, p.state, p.country].filter(Boolean);
+          return {
+            name: parts.join(", "),
+            lat: f.geometry.coordinates[1] as number,
+            lon: f.geometry.coordinates[0] as number,
+          };
+        });
+      }
+
+      // 2. Nominatim fallback — if Photon returns nothing, try OSM Nominatim
+      if (items.length === 0) {
+        const nomParams = new URLSearchParams({
+          q, format: "json", limit: "8",
+          "accept-language": "en", addressdetails: "1", dedupe: "1",
+        });
+        const nomRes = await fetch(
+          `https://nominatim.openstreetmap.org/search?${nomParams}`,
+          { headers: { "Accept-Language": "en", "User-Agent": "eco3d-platform/2.0" } }
+        );
+        if (nomRes.ok) {
+          const nomData: any[] = await nomRes.json();
+          items = nomData.map((r) => ({
+            name: r.display_name as string,
+            lat: parseFloat(r.lat),
+            lon: parseFloat(r.lon),
+          }));
+        }
+      }
+
       setResults(items);
       setShowResults(true);
     } catch {
