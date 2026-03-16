@@ -402,15 +402,15 @@ function Lighting({
   const pos = sunAnglesToScenePosition(sunAzimuthDeg, sunElevationDeg, 24);
   const studioMode = nightLightOn;
   return <>
-    <ambientLight intensity={studioMode ? 1.6 : (sunOn ? 0.55 : 0.95)} color={studioMode ? "#ffffff" : "#e8f4ff"} />
-    <hemisphereLight args={studioMode ? ["#ffffff","#aabbaa",1.0] : ["#c8e4ff", "#182020", 0.4]} />
+    <ambientLight intensity={studioMode ? 1.6 : (sunOn ? 0.9 : 0.95)} color={studioMode ? "#ffffff" : "#e8f4ff"} />
+    <hemisphereLight args={studioMode ? ["#ffffff","#aabbaa",1.0] : ["#c8e4ff", "#182020", 0.72]} />
     {studioMode && <>
       <directionalLight position={[14, 20, 10]} intensity={2.2} color="#ffffff" castShadow shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-left={-32} shadow-camera-right={32} shadow-camera-top={32} shadow-camera-bottom={-32} shadow-camera-near={0.5} shadow-camera-far={100} />
       <directionalLight position={[-12, 15, -8]} intensity={1.2} color="#d8eeff" />
       <directionalLight position={[0, 10, -16]} intensity={0.8} color="#ffeedd" />
       <pointLight position={[0, 6, 0]} intensity={1.0} color="#ffe8cc" distance={40} decay={1.2} />
     </>}
-    {!studioMode && sunOn && <directionalLight position={pos} intensity={2.6} castShadow color="#fff5d0" shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-near={0.5} shadow-camera-far={120} shadow-camera-left={-35} shadow-camera-right={35} shadow-camera-top={35} shadow-camera-bottom={-35} />}
+    {!studioMode && sunOn && <directionalLight position={pos} intensity={4.3} castShadow color="#fff5d0" shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-near={0.5} shadow-camera-far={120} shadow-camera-left={-35} shadow-camera-right={35} shadow-camera-top={35} shadow-camera-bottom={-35} />}
     {!studioMode && !sunOn && <><pointLight position={[0, 14, 0]} intensity={2} color="#ffffff" /><pointLight position={[-10, 8, -10]} intensity={0.6} color="#c8d8ff" /><pointLight position={[10, 8, 10]} intensity={0.6} color="#ffd8c8" /></>}
   </>;
 }
@@ -422,7 +422,11 @@ function SunSphere({ sunAzimuthDeg, sunElevationDeg }: { sunAzimuthDeg: number; 
   const belowHorizon = sunElevationDeg <= -1;
 
   const getSunPos = useCallback(
-    (): [number, number, number] => sunAnglesToScenePosition(sunAzimuthDeg, sunElevationDeg, 20),
+    (): [number, number, number] => {
+      // Keep the visual sun in the sky arc while still following realtime azimuth.
+      const displayElevationDeg = Math.max(12, sunElevationDeg);
+      return sunAnglesToScenePosition(sunAzimuthDeg, displayElevationDeg, 20);
+    },
     [sunAzimuthDeg, sunElevationDeg]
   );
 
@@ -1193,7 +1197,7 @@ function PBREnvironment({ sunOn, nightMode }: { sunOn: boolean; nightMode: boole
 
     const envMap = pmrem.fromEquirectangular(tex).texture;
     scene.environment = envMap;
-    (scene as any).environmentIntensity = nightMode ? 0.08 : sunOn ? 0.55 : 0.22;
+    (scene as any).environmentIntensity = nightMode ? 0.08 : sunOn ? 0.95 : 0.22;
 
     return () => {
       scene.environment = null;
@@ -2142,6 +2146,8 @@ export default function Model3DPage() {
   const [activeTab, setActiveTab] = useState<"rooms" | "walls" | "objects" | "glass">("rooms");
   const [showGrid, setShowGrid] = useState(true);
   const [showSun, setShowSun] = useState(true);
+  const liveSunVisible = isLiveEnvReady && showSun;
+  const liveSunLightVisible = liveSunVisible && (liveEnv?.isDay ?? sunElevationDeg > -2);
   const [showWind, setShowWind] = useState(false);
   const [nightLight, setNightLight] = useState(false);
   const [showRain, setShowRain] = useState(false);
@@ -2319,10 +2325,10 @@ export default function Model3DPage() {
               onPointerMissed={() => { if (editMode) setSelectedId(null); }}>
               <Suspense fallback={null}>
                 {/* PBR environment — IBL image-based lighting for all surfaces */}
-                <PBREnvironment sunOn={showSun} nightMode={showMoon || (!showSun && !nightLight)} />
+                <PBREnvironment sunOn={liveSunLightVisible} nightMode={showMoon || (!showSun && !nightLight)} />
 
                 {/* Scene lights + weather effects */}
-                <Lighting sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunOn={showSun && isLiveEnvReady} nightLightOn={nightLight} />
+                <Lighting sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunOn={liveSunLightVisible} nightLightOn={nightLight} />
 
                 {/* Shader ground replaces plain mesh ground */}
                 <PBRGround showGrid={showGrid} wet={showFlood} />
@@ -2337,7 +2343,7 @@ export default function Model3DPage() {
                 ))}
 
                 {/* Sky & environment overlays */}
-                {showSun && isLiveEnvReady && <SunSphere sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} />}
+                {liveSunVisible && <SunSphere sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} />}
                 {showWind && isLiveEnvReady && <WindSwirl windDirectionDeg={windDirectionDeg} modelW={modelBounds.w} modelD={modelBounds.d} />}
                 {showRain && <Rain />}
                 {showSnow && <Snow />}
