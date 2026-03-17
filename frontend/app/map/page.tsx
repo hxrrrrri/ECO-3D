@@ -56,7 +56,7 @@ export default function MapPage() {
   const router = useRouter();
   const {
     selectedLat, selectedLon, currentPlotId, isAnalyzing, error,
-    setSelectedLocation, setAnalysis, setFloorPlan, setAnalyzing, setError,
+    setSelectedLocation, setSelectedPlotArea, setAnalysis, setFloorPlan, setAnalyzing, setError,
   } = useEco3DStore();
 
   const [stage, setStage] = useState<"idle" | "locating" | "ready" | "analyzing" | "done">("idle");
@@ -90,17 +90,25 @@ export default function MapPage() {
         const data = await resp.json();
         setPlotBoundary(data.boundary ?? null);
         setBuildability({ ok: !!data.is_buildable, reason: data.reason ?? "" });
-        if (data.area_sqm) setPlotArea(Math.round(data.area_sqm));
+        if (data.area_sqm) {
+          const area = Math.round(data.area_sqm);
+          setPlotArea(area);
+          setSelectedPlotArea(area);
+        } else {
+          setSelectedPlotArea(null);
+        }
       } else {
         setBuildability({ ok: true, reason: "Boundary check unavailable — proceeding." });
+        setSelectedPlotArea(null);
       }
     } catch {
       setBuildability({ ok: true, reason: "Boundary check unavailable — proceeding." });
+      setSelectedPlotArea(null);
     }
 
     setStage("ready");
     setStatusMsg("");
-  }, [setSelectedLocation, setError]);
+  }, [setSelectedLocation, setSelectedPlotArea, setError]);
 
   const handleLandLookup = async () => {
     setLrLoading(true);
@@ -126,7 +134,10 @@ export default function MapPage() {
           // boundary is [[lon,lat],...] — convert to [[lat,lon]] for MapComponent
           const converted = data.boundary.map((c: number[]) => [c[1], c[0]]);
           setPlotBoundary(converted);
-          if (data.area_sqm) setPlotArea(data.area_sqm);
+          if (data.area_sqm) {
+            setPlotArea(data.area_sqm);
+            setSelectedPlotArea(data.area_sqm);
+          }
           if (!selectedLat && data.boundary[0]) {
             setSelectedLocation(data.boundary[0][1], data.boundary[0][0]);
           }
@@ -174,9 +185,10 @@ export default function MapPage() {
 
       const fp = await generateFloorPlan({
         plot_id: currentPlotId,
-        plot_area_sqm: plotArea ?? 200,
+        plot_area_sqm: plotArea ?? 240,
         num_floors: 2,
         preserve_trees: true,
+        layout_mode: "fit_boundary",
       });
       setFloorPlan(fp);
       setStage("done");

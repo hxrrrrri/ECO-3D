@@ -1181,6 +1181,7 @@ export default function AnalysisPage() {
   const floorPlanRequestRef = useRef(0);
 
   const [houseType, setHouseType] = useState("Eco-Villa (Single Story)");
+  const [generationMethod, setGenerationMethod] = useState<"deterministic" | "ga">("deterministic");
   const [plotShape, setPlotShape] = useState("rectangle");
   const [targetArea, setTargetArea] = useState("240");
   const [numFloors, setNumFloors] = useState(1);
@@ -1296,7 +1297,7 @@ export default function AnalysisPage() {
     const requestedShape = shapeOverride ?? plotShape;
     const requestId = ++floorPlanRequestRef.current;
     setGenerating(true);
-    addLog(`Generating 5 variants for ${requestedShape} · ${area} m²...`);
+    addLog(`Generating 5 variants for ${requestedShape} · ${area} m² · ${generationMethod.toUpperCase()}...`);
     try {
       const fp = await generateFloorPlan({
         plot_id: plotId,
@@ -1313,6 +1314,7 @@ export default function AnalysisPage() {
         maximize_sunlight: maxSun,
         natural_ventilation: natVent,
         sustainability_priority: sustPrio,
+        generation_method: generationMethod,
       });
       if (requestId !== floorPlanRequestRef.current) return;
       setFloorPlan(fp);
@@ -1340,7 +1342,7 @@ export default function AnalysisPage() {
     setActiveVariantIndex(0);
     handleRegenerate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plotId, analysis, plotShape, houseType]);
+  }, [plotId, analysis, plotShape, houseType, generationMethod]);
 
   // Clamp room counts when area changes
   useEffect(() => {
@@ -1441,6 +1443,20 @@ export default function AnalysisPage() {
                   setHouseType(e.target.value);
                 }} className="w-full glm rounded-lg px-3 py-2.5 text-[12px] text-white appearance-none cursor-pointer focus:outline-none mb-3" style={{ background: "rgba(13,242,242,0.04)" }}>
                   {HOUSE_TYPES.map(t => <option key={t} value={t} style={{ background: "#0a1a1a" }}>{t}</option>)}
+                </select>
+
+                <label className="text-[11px] text-slate-400 mb-1.5 block">Generation Method</label>
+                <select
+                  value={generationMethod}
+                  onChange={e => {
+                    setActiveVariantIndex(0);
+                    setGenerationMethod(e.target.value as "deterministic" | "ga");
+                  }}
+                  className="w-full glm rounded-lg px-3 py-2.5 text-[12px] text-white appearance-none cursor-pointer focus:outline-none mb-3"
+                  style={{ background: "rgba(13,242,242,0.04)" }}
+                >
+                  <option value="deterministic" style={{ background: "#0a1a1a" }}>Deterministic (Default)</option>
+                  <option value="ga" style={{ background: "#0a1a1a" }}>GA Optimizer (Premium)</option>
                 </select>
 
                 {/* Plot Shape */}

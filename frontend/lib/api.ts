@@ -70,6 +70,10 @@ export interface GenerateFloorPlanRequest {
   maximize_sunlight?: boolean;
   natural_ventilation?: boolean;
   sustainability_priority?: boolean;
+  generation_method?: "deterministic" | "ga";
+  ga_seed?: number;
+  ga_time_budget_ms?: number;
+  layout_mode?: "default" | "fit_boundary";
 }
 
 export interface FloorPlanVariant {
@@ -186,6 +190,7 @@ export interface FloorPlanResponse {
   orientation_degrees: number;
   variants?: FloorPlanVariant[];
   best_variant_index?: number;
+  generation_method?: "deterministic" | "ga";
 }
 
 export const analyzePlot = async (req: AnalyzePlotRequest): Promise<AnalysisResponse> => {

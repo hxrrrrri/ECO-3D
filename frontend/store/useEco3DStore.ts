@@ -5,6 +5,7 @@ interface Eco3DState {
   selectedLat: number | null;
   selectedLon: number | null;
   selectedPolygon: number[][] | null;
+  selectedPlotArea: number | null;
   currentPlotId: string | null;
   analysis: AnalysisResponse | null;
   floorPlan: FloorPlanResponse | null;
@@ -16,6 +17,7 @@ interface Eco3DState {
   isGeneratingFloorPlan: boolean;
   error: string | null;
   setSelectedLocation: (lat: number, lon: number, polygon?: number[][]) => void;
+  setSelectedPlotArea: (area: number | null) => void;
   setAnalysis: (analysis: AnalysisResponse) => void;
   setFloorPlan: (fp: FloorPlanResponse) => void;
   setFloorPlanVariants: (variants: FloorPlanVariant[], bestIndex: number) => void;
@@ -27,7 +29,7 @@ interface Eco3DState {
 }
 
 export const useEco3DStore = create<Eco3DState>((set) => ({
-  selectedLat: null, selectedLon: null, selectedPolygon: null, currentPlotId: null,
+  selectedLat: null, selectedLon: null, selectedPolygon: null, selectedPlotArea: null, currentPlotId: null,
   analysis: null, floorPlan: null, floorPlanData: null,
   floorPlanVariants: [], activeVariantIndex: 0,
   environmentalData: null,
@@ -37,6 +39,7 @@ export const useEco3DStore = create<Eco3DState>((set) => ({
     selectedLat: lat, selectedLon: lon, selectedPolygon: polygon || null,
     currentPlotId: `PLOT${Math.abs(Math.floor(lat * 1000))}X${Math.abs(Math.floor(lon * 1000))}`,
   }),
+  setSelectedPlotArea: (selectedPlotArea) => set({ selectedPlotArea }),
   setAnalysis: (analysis) => set({ analysis, environmentalData: analysis.environmental }),
   setFloorPlan: (floorPlan) => set({ floorPlan, floorPlanData: floorPlan }),
   setFloorPlanVariants: (variants, bestIndex) => set({
@@ -52,6 +55,7 @@ export const useEco3DStore = create<Eco3DState>((set) => ({
     floorPlanVariants: [], activeVariantIndex: 0,
     environmentalData: null, error: null,
     isAnalyzing: false, isGeneratingFloorPlan: false,
+    selectedPlotArea: null,
   }),
 }));
 

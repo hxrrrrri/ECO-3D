@@ -11,7 +11,7 @@ Key fixes over v5:
 - Perimeter walls always drawn regardless of wall data.
 - Wind particles bright cyan, visible on dark background.
 """
-import logging, math
+import logging, math, random, time, hashlib
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -539,6 +539,232 @@ def _score(rooms:List[Room],site:Site,windows:List[Window])->Dict[str,float]:
     eco=0.25*solar+0.25*vent+0.18*compact+0.14*sc+0.10*struct+0.08
     return {"solar":round(solar,3),"ventilation":round(vent,3),"eco":round(min(0.99,eco),3)}
 
+
+def _stable_seed(req: GenerateFloorPlanRequest, site: Site, total: float, shape: str, house_type: str) -> int:
+    if req.ga_seed is not None:
+        return int(req.ga_seed)
+    payload = f"{req.plot_id}|{total:.2f}|{shape}|{house_type}|{site.lat:.5f}|{site.lon:.5f}|{site.wind}|{site.slope:.3f}|{site.flood:.3f}"
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+    return int(digest, 16)
+
+
+def _room_overlap_ratio(rooms: List[Room]) -> float:
+    if not rooms:
+        return 0.0
+    total = sum(max(0.0, r.width * r.height) for r in rooms) or 1.0
+    overlap = 0.0
+    for i in range(len(rooms)):
+        a = rooms[i]
+        for b in rooms[i + 1:]:
+            if a.floor != b.floor:
+                continue
+            ox = _ov(a.x, a.x + a.width, b.x, b.x + b.width)
+            oy = _ov(a.y, a.y + a.height, b.y, b.y + b.height)
+            overlap += ox * oy
+    return overlap / total
+
+
+def _repair_layout(rooms: List[Room], site: Site, total: float, floors: int) -> List[Room]:
+    if not rooms:
+        return rooms
+    fw, fh = _fp(site, total, floors)
+    ox = max(0.0, (site.w - fw) / 2)
+    oy = max(0.0, (site.h - fh) / 2)
+
+    fixed: List[Room] = []
+    for r in rooms:
+        min_w = 1.8 if r.type in ("bathroom", "utility", "puja_room") else 2.2
+        min_h = 1.8 if r.type in ("bathroom", "utility", "puja_room") else 2.2
+        w = max(min_w, min(r.width, fw))
+        h = max(min_h, min(r.height, fh))
+        x = min(max(r.x, ox), ox + fw - w)
+        y = min(max(r.y, oy), oy + fh - h)
+        fixed.append(Room(id=r.id, type=r.type, width=round(w, 2), height=round(h, 2), x=round(x, 2), y=round(y, 2), floor=r.floor, orientation=r.orientation))
+
+    for _ in range(3):
+        moved = False
+        for i in range(len(fixed)):
+            a = fixed[i]
+            for j in range(i + 1, len(fixed)):
+                b = fixed[j]
+                if a.floor != b.floor:
+                    continue
+                oxv = _ov(a.x, a.x + a.width, b.x, b.x + b.width)
+                oyv = _ov(a.y, a.y + a.height, b.y, b.y + b.height)
+                if oxv * oyv <= 0.01:
+                    continue
+                nx = min(max(b.x + oxv + 0.15, ox), ox + fw - b.width)
+                ny = min(max(b.y + oyv + 0.15, oy), oy + fh - b.height)
+                fixed[j] = Room(id=b.id, type=b.type, width=b.width, height=b.height, x=round(nx, 2), y=round(ny, 2), floor=b.floor, orientation=b.orientation)
+                moved = True
+        if not moved:
+            break
+    return fixed
+
+
+def _layout_penalty(rooms: List[Room], site: Site, total: float, floors: int) -> float:
+    if not rooms:
+        return 1.0
+    fw, fh = _fp(site, total, floors)
+    ox = max(0.0, (site.w - fw) / 2)
+    oy = max(0.0, (site.h - fh) / 2)
+    total_area = sum(r.width * r.height for r in rooms)
+    area_dev = abs(total_area - total) / max(total, 1.0)
+    overlap = _room_overlap_ratio(rooms)
+    out_of_bounds = 0.0
+    for r in rooms:
+        if r.x < ox - 1e-6 or r.y < oy - 1e-6 or r.x + r.width > ox + fw + 1e-6 or r.y + r.height > oy + fh + 1e-6:
+            out_of_bounds += 1.0
+    return min(1.0, 0.45 * area_dev + 0.45 * overlap + 0.10 * (out_of_bounds / max(len(rooms), 1)))
+
+
+def _mutate_types(types: List[str], rng: random.Random) -> List[str]:
+    pub = [t for t in types if CLASS.get(t) == "pub"]
+    prv = [t for t in types if CLASS.get(t) == "prv"]
+    svc = [t for t in types if CLASS.get(t) == "svc"]
+    rng.shuffle(pub)
+    rng.shuffle(prv)
+    rng.shuffle(svc)
+    return pub + prv + svc
+
+
+def _mutate_area_map(types: List[str], base_map: Dict[str, List[float]], total: float, rng: random.Random) -> Dict[str, List[float]]:
+    counters: Dict[str, int] = {}
+    items = []
+    for t in types:
+        i = counters.get(t, 0)
+        vals = base_map.get(t, [RMIN.get(t, 4.0)])
+        v = vals[i] if i < len(vals) else vals[-1]
+        counters[t] = i + 1
+        jitter = rng.uniform(0.88, 1.12)
+        nv = max(RMIN.get(t, 4.0), min(RMAX.get(t, 30.0), v * jitter))
+        items.append((t, nv))
+    s = sum(v for _, v in items) or 1.0
+    scaled = [(t, v * total / s) for t, v in items]
+    out: Dict[str, List[float]] = {}
+    for t, v in scaled:
+        out.setdefault(t, []).append(round(v, 2))
+    return out
+
+
+def _ga_search_variants(
+    req: GenerateFloorPlanRequest,
+    site: Site,
+    total: float,
+    floors: int,
+    shape: str,
+    types: List[str],
+    base_amap: Dict[str, List[float]],
+) -> Tuple[List[FloorPlanVariant], int]:
+    budget_ms = max(1200, min(int(req.ga_time_budget_ms or 2500), 8000))
+    seed = _stable_seed(req, site, total, shape, req.house_type or "Eco-Villa (Single Story)")
+    rng = random.Random(seed)
+    start = time.perf_counter()
+
+    pop_size = 18
+    elitism = 3
+    max_gens = 80
+
+    population = []
+    for i in range(pop_size):
+        population.append({
+            "variant": i % 6,
+            "types": _mutate_types(types[:], rng) if i > 5 else types[:],
+            "amap": _mutate_area_map(types, base_amap, total, rng) if i > 5 else base_amap,
+        })
+
+    def evaluate(ind):
+        layout = _make_layout(ind["types"], ind["amap"], site, total, floors, shape, ind["variant"])
+        layout = _repair_layout(layout, site, total, floors)
+        if not layout:
+            return None
+        walls, doors, windows = _explicit_geometry(layout, site)
+        scores = _score(layout, site, windows)
+        penalty = _layout_penalty(layout, site, total, floors)
+        bonus = 0.015 * min(1.0, site.ndvi) if req.preserve_trees else 0.0
+        fitness = max(0.0, scores["eco"] + bonus - penalty)
+        return {
+            "layout": layout,
+            "walls": walls,
+            "doors": doors,
+            "windows": windows,
+            "scores": scores,
+            "fitness": round(fitness, 4),
+            "variant": ind["variant"],
+        }
+
+    best_snapshots = []
+    gen = 0
+    while gen < max_gens and (time.perf_counter() - start) * 1000 < budget_ms:
+        scored = []
+        for ind in population:
+            ev = evaluate(ind)
+            if ev:
+                scored.append((ev["fitness"], ind, ev))
+        if not scored:
+            break
+        scored.sort(key=lambda x: x[0], reverse=True)
+        best_snapshots.extend([s[2] for s in scored[:2]])
+        best_snapshots = sorted(best_snapshots, key=lambda x: x["fitness"], reverse=True)[:14]
+
+        elites = [s[1] for s in scored[:elitism]]
+        next_pop = [{"variant": e["variant"], "types": e["types"][:], "amap": e["amap"]} for e in elites]
+        top = scored[: max(6, len(scored) // 2)]
+        while len(next_pop) < pop_size:
+            p1 = rng.choice(top)[1]
+            p2 = rng.choice(top)[1]
+            child_types = p1["types"][:] if rng.random() < 0.5 else p2["types"][:]
+            if rng.random() < 0.8:
+                child_types = _mutate_types(child_types, rng)
+            child_amap = p1["amap"] if rng.random() < 0.5 else p2["amap"]
+            if rng.random() < 0.85:
+                child_amap = _mutate_area_map(child_types, child_amap, total, rng)
+            child_variant = p1["variant"] if rng.random() < 0.5 else p2["variant"]
+            if rng.random() < 0.35:
+                child_variant = (child_variant + rng.choice([-1, 1])) % 6
+            next_pop.append({"variant": child_variant, "types": child_types, "amap": child_amap})
+
+        population = next_pop
+        gen += 1
+
+    if not best_snapshots:
+        return [], 0
+
+    uniq = []
+    seen = set()
+    for cand in best_snapshots:
+        sig = tuple((r.type, r.x, r.y, r.width, r.height, r.orientation) for r in cand["layout"])
+        if sig in seen:
+            continue
+        seen.add(sig)
+        uniq.append(cand)
+        if len(uniq) >= 6:
+            break
+    if not uniq:
+        return [], 0
+
+    variants: List[FloorPlanVariant] = []
+    for i, cand in enumerate(uniq):
+        va = round(sum(r.width * r.height for r in cand["layout"]), 1)
+        variants.append(FloorPlanVariant(
+            id=i + 1,
+            style=f"GA Evolution {i + 1}",
+            layout=cand["layout"],
+            total_area=va,
+            solar_score=cand["scores"]["solar"],
+            ventilation_score=cand["scores"]["ventilation"],
+            fitness_score=cand["fitness"],
+            eco_score=cand["fitness"],
+            walls=cand["walls"],
+            doors=cand["doors"],
+            windows=cand["windows"],
+            is_best=False,
+        ))
+
+    bidx = max(range(len(variants)), key=lambda i: variants[i].fitness_score)
+    variants[bidx].is_best = True
+    return variants, bidx
+
 async def _load_site(req:GenerateFloorPlanRequest,db:AsyncSession)->Site:
     lat,lon,wind,slope,flood,ndvi,sun_h=10.0,76.0,"SW",4.0,0.25,0.45,8.0
     sw=sh=math.sqrt(req.plot_area_sqm or 150)*1.8
@@ -573,20 +799,28 @@ async def generate_floor_plan(req:GenerateFloorPlanRequest,db:AsyncSession)->Flo
     types=_prog(total,req.room_preferences,house_type)
     amap=_alloc(types,total,house_type)
     shape=req.plot_shape or "rectangle"
+    method=(req.generation_method or "deterministic").strip().lower()
     variants:List[FloorPlanVariant]=[]; bidx=0; beco=-1.0
-    for vi in range(6):
-        layout=_make_layout(types,amap,site,total,floors,shape,vi)
-        if not layout: continue
-        walls,doors,windows=_explicit_geometry(layout,site)
-        scores=_score(layout,site,windows)
-        va=round(sum(r.width*r.height for r in layout),1)
-        variants.append(FloorPlanVariant(
-            id=vi+1,style=VNAMES[vi],layout=layout,total_area=va,
-            solar_score=scores["solar"],ventilation_score=scores["ventilation"],
-            fitness_score=scores["eco"],eco_score=scores["eco"],
-            walls=walls,doors=doors,windows=windows,is_best=False,
-        ))
-        if scores["eco"]>beco: beco=scores["eco"]; bidx=len(variants)-1
+
+    if method == "ga":
+        variants, bidx = _ga_search_variants(req, site, total, floors, shape, types, amap)
+
+    # Safe fallback to deterministic if GA returns no valid candidates.
+    if not variants:
+        method = "deterministic"
+        for vi in range(6):
+            layout=_make_layout(types,amap,site,total,floors,shape,vi)
+            if not layout: continue
+            walls,doors,windows=_explicit_geometry(layout,site)
+            scores=_score(layout,site,windows)
+            va=round(sum(r.width*r.height for r in layout),1)
+            variants.append(FloorPlanVariant(
+                id=vi+1,style=VNAMES[vi],layout=layout,total_area=va,
+                solar_score=scores["solar"],ventilation_score=scores["ventilation"],
+                fitness_score=scores["eco"],eco_score=scores["eco"],
+                walls=walls,doors=doors,windows=windows,is_best=False,
+            ))
+            if scores["eco"]>beco: beco=scores["eco"]; bidx=len(variants)-1
     if not variants: raise ValueError("No variants generated")
     variants[bidx].is_best=True; best=variants[bidx]
     try:
@@ -596,6 +830,7 @@ async def generate_floor_plan(req:GenerateFloorPlanRequest,db:AsyncSession)->Flo
                          "walls":[w.model_dump() for w in best.walls or []],
                          "doors":[d.model_dump() for d in best.doors or []],
                          "windows":[w.model_dump() for w in best.windows or []],
+                         "generation_method": method,
                          "variants":[v.model_dump() for v in variants]},
             fitness_score=float(best.fitness_score),generation_count=len(variants),
         ))
@@ -612,4 +847,5 @@ async def generate_floor_plan(req:GenerateFloorPlanRequest,db:AsyncSession)->Flo
         ventilation_score=float(best.ventilation_score),
         tree_preserved_count=max(0,int(round(site.ndvi*8))+(2 if req.preserve_trees else 0)),
         orientation_degrees=float(_brg(site.wind)),variants=variants,best_variant_index=bidx,
+        generation_method=method,
     )

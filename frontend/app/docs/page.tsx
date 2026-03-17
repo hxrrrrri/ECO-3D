@@ -153,7 +153,7 @@ Returns: segmentation, tree_coordinates, environmental, flood_probability, build
       {
         heading: "POST /generate-floorplan",
         body: `Generates an optimized floor plan.\n
-Request body: { plot_id, plot_area_sqm, num_floors, plot_shape, house_type, room_preferences: { bedrooms, bathrooms, puja_room, garage, office, dining, utility }, maximize_sunlight, natural_ventilation, sustainability_priority, preserve_trees }
+    Request body: { plot_id, plot_area_sqm, num_floors, plot_shape, house_type, room_preferences: { bedrooms, bathrooms, puja_room, garage, office, dining, utility }, maximize_sunlight, natural_ventilation, sustainability_priority, preserve_trees, generation_method: "deterministic"|"ga", ga_seed?, ga_time_budget_ms? }
 Returns: layout (rooms array), fitness_score, sunlight_score, ventilation_score, tree_preserved_count`
       },
       {

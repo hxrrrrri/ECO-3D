@@ -83,6 +83,31 @@ class GenerateFloorPlanRequest(BaseModel):
     maximize_sunlight: bool = True
     natural_ventilation: bool = True
     sustainability_priority: bool = True
+    generation_method: str = "deterministic"  # deterministic (default) | ga
+    ga_seed: Optional[int] = None
+    ga_time_budget_ms: int = 2500
+    layout_mode: str = "default"  # default | fit_boundary
+
+    @field_validator("generation_method")
+    @classmethod
+    def validate_generation_method(cls, v: str) -> str:
+        method = (v or "deterministic").strip().lower()
+        if method not in {"deterministic", "ga"}:
+            return "deterministic"
+        return method
+
+    @field_validator("ga_time_budget_ms")
+    @classmethod
+    def validate_ga_time_budget(cls, v: int) -> int:
+        return max(1200, min(int(v), 8000))
+
+    @field_validator("layout_mode")
+    @classmethod
+    def validate_layout_mode(cls, v: str) -> str:
+        mode = (v or "default").strip().lower()
+        if mode not in {"default", "fit_boundary"}:
+            return "default"
+        return mode
 
 
 class Room(BaseModel):
@@ -166,6 +191,7 @@ class FloorPlanResponse(BaseModel):
     orientation_degrees: float
     variants: Optional[List[FloorPlanVariant]] = None
     best_variant_index: Optional[int] = None
+    generation_method: str = "deterministic"
 
 
 class UserCreate(BaseModel):
