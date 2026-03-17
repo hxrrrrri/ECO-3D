@@ -2,8 +2,11 @@ import Link from "next/link";
 
 export default function InDepthDocumentationPage() {
   return (
-    <main className="min-h-screen bg-background-dark text-slate-100">
-      <header className="sticky top-0 z-20 border-b border-primary/10 bg-background-dark/95 backdrop-blur">
+    <main className="relative min-h-screen overflow-hidden bg-background-dark text-slate-100">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(13,242,242,0.12),transparent_35%),radial-gradient(circle_at_85%_30%,rgba(13,242,242,0.06),transparent_45%)]" />
+      <div className="pointer-events-none absolute inset-0 grid-overlay" />
+
+      <header className="sticky top-0 z-20 border-b border-primary/10 bg-background-dark/90 backdrop-blur">
         <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between px-4 py-3 sm:px-6">
           <div>
             <h1 className="text-sm font-bold uppercase tracking-[0.14em] text-primary">ECO-3D Documentation</h1>
@@ -26,12 +29,14 @@ export default function InDepthDocumentationPage() {
         </div>
       </header>
 
-      <section className="mx-auto w-full max-w-[1400px] px-2 py-2 sm:px-4 sm:py-4">
-        <iframe
-          src="/docs/eco3d_full_documentation.html"
-          title="ECO-3D In-depth Documentation"
-          className="h-[calc(100vh-110px)] w-full rounded-md border border-primary/10 bg-background-dark"
-        />
+      <section className="relative z-10 mx-auto w-full max-w-[1400px] px-2 py-2 sm:px-4 sm:py-4">
+        <div className="neon-border rounded-md bg-[#080b0b]/80 p-2">
+          <iframe
+            src="/docs/eco3d_full_documentation.html"
+            title="ECO-3D In-depth Documentation"
+            className="h-[calc(100vh-118px)] w-full rounded-[6px] border border-primary/15 bg-background-dark"
+          />
+        </div>
       </section>
     </main>
   );
