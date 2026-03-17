@@ -1182,6 +1182,7 @@ export default function AnalysisPage() {
 
   const [houseType, setHouseType] = useState("Eco-Villa (Single Story)");
   const [generationMethod, setGenerationMethod] = useState<"deterministic" | "ga">("deterministic");
+  const [layoutMode, setLayoutMode] = useState<"default" | "fit_boundary">("fit_boundary");
   const [plotShape, setPlotShape] = useState("rectangle");
   const [targetArea, setTargetArea] = useState("240");
   const [numFloors, setNumFloors] = useState(1);
@@ -1213,7 +1214,7 @@ export default function AnalysisPage() {
   const {
     analysis, floorPlan, selectedLat, selectedLon,
     setFloorPlan, setFloorPlanVariants, setActiveVariantIndex,
-    floorPlanVariants, activeVariantIndex, setGeneratingFloorPlan,
+    floorPlanVariants, activeVariantIndex, setGeneratingFloorPlan, selectedPlotArea,
   } = useEco3DStore();
   const lat = selectedLat ?? 34.0522;
   const lon = selectedLon ?? -118.2437;
@@ -1280,10 +1281,18 @@ export default function AnalysisPage() {
   // Area input: user can type sqft or m²
   const [areaUnit, setAreaUnit] = useState<"sqft"|"sqm">("sqm");
   const areaInSqm = useMemo(() => {
-    const v = parseFloat(targetArea) || 240;
+    const parsed = parseFloat(targetArea);
+    const fallback = selectedPlotArea && selectedPlotArea > 0 ? selectedPlotArea : 240;
+    const v = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
     return areaUnit === "sqft" ? Math.round(v * 0.0929) : v;
-  }, [targetArea, areaUnit]);
+  }, [targetArea, areaUnit, selectedPlotArea]);
   const area = areaInSqm;
+
+  useEffect(() => {
+    if (!selectedPlotArea || selectedPlotArea <= 0) return;
+    setAreaUnit("sqm");
+    setTargetArea(String(Math.round(selectedPlotArea)));
+  }, [selectedPlotArea, plotId]);
 
   const limits = useMemo(() => computeRoomLimits(area), [area]);
 
@@ -1295,16 +1304,18 @@ export default function AnalysisPage() {
 
   const handleRegenerate = async (shapeOverride?: string) => {
     const requestedShape = shapeOverride ?? plotShape;
+    const requestedArea = Math.max(45, Math.round(area));
     const requestId = ++floorPlanRequestRef.current;
     setGenerating(true);
-    addLog(`Generating 5 variants for ${requestedShape} · ${area} m² · ${generationMethod.toUpperCase()}...`);
+    addLog(`Generating 5 variants for ${requestedShape} · ${requestedArea} m² · ${generationMethod.toUpperCase()} · ${layoutMode === "fit_boundary" ? "BOUNDARY-FIT" : "DEFAULT"}...`);
     try {
       const fp = await generateFloorPlan({
         plot_id: plotId,
-        plot_area_sqm: area,
+        plot_area_sqm: requestedArea,
         num_floors: numFloors,
         preserve_trees: treePres,
         plot_shape: requestedShape,
+        layout_mode: layoutMode,
         house_type: houseType,
         room_preferences: {
           bedrooms: numBedrooms, bathrooms: numBathrooms,
@@ -1342,7 +1353,7 @@ export default function AnalysisPage() {
     setActiveVariantIndex(0);
     handleRegenerate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plotId, analysis, plotShape, houseType, generationMethod]);
+  }, [plotId, analysis, plotShape, houseType, generationMethod, layoutMode]);
 
   // Clamp room counts when area changes
   useEffect(() => {
@@ -1459,6 +1470,20 @@ export default function AnalysisPage() {
                   <option value="ga" style={{ background: "#0a1a1a" }}>GA Optimizer (Premium)</option>
                 </select>
 
+                <label className="text-[11px] text-slate-400 mb-1.5 block">Floor Plan Layout</label>
+                <select
+                  value={layoutMode}
+                  onChange={e => {
+                    setActiveVariantIndex(0);
+                    setLayoutMode(e.target.value as "default" | "fit_boundary");
+                  }}
+                  className="w-full glm rounded-lg px-3 py-2.5 text-[12px] text-white appearance-none cursor-pointer focus:outline-none mb-3"
+                  style={{ background: "rgba(13,242,242,0.04)" }}
+                >
+                  <option value="fit_boundary" style={{ background: "#0a1a1a" }}>Fit inside bounded plot (near plot shape)</option>
+                  <option value="default" style={{ background: "#0a1a1a" }}>Default layout styles</option>
+                </select>
+
                 {/* Plot Shape */}
                 <label className="text-[11px] text-slate-400 mb-1.5 block">Plot Shape</label>
                 <div className="grid grid-cols-3 gap-1.5 mb-3">
@@ -1511,6 +1536,11 @@ export default function AnalysisPage() {
                 <div className="text-[9px] text-primary/50 mb-3">
                   Area: {area}m² → max: {limits.bedrooms} beds, {limits.bathrooms} baths
                 </div>
+                {layoutMode === "fit_boundary" && (
+                  <div className="text-[9px] text-sky-300/70 mb-3">
+                    Boundary-fit mode uses detected plot boundary and inferred shape (rectangle/square/circle/irregular).
+                  </div>
+                )}
               </div>
 
               <div className="h-px bg-white/5" />
@@ -1600,6 +1630,7 @@ export default function AnalysisPage() {
                     { icon: "home_work", label: houseTypeBadge, sub: "Type" },
                     { icon: "architecture", label: activePlotShapeLabel.replace("-", " ").slice(0, 6).toUpperCase(), sub: "Shape" },
                     { icon: "square_foot", label: `${area}`, sub: "sqm" },
+                    { icon: "grid_view", label: layoutMode === "fit_boundary" ? "BOUND" : "DFLT", sub: "Layout" },
                     { icon: "eco", label: `${ecoScore}%`, sub: "Eco" },
                   ].map(({ icon, label, sub }) => (
                     <div
