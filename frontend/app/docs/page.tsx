@@ -185,6 +185,7 @@ export default function DocsPage() {
           </Link>
           <nav style={{ display: "flex", gap: 24 }}>
             <Link href="/" style={{ color: "#64748b", fontSize: 12, textDecoration: "none", fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.1em" }} className="hover:text-primary">Home</Link>
+            <Link href="/docs/in-depth" style={{ color: "#0df2f2", fontSize: 12, textDecoration: "none", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>View Documentation (In-Depth)</Link>
             <Link href="/map" style={{ color: "#0df2f2", fontSize: 12, textDecoration: "none", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Launch App →</Link>
           </nav>
         </header>

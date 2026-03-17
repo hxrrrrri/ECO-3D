@@ -301,6 +301,12 @@ export default function HomePage() {
                 >
                   Documentation
                 </a>
+                <a
+                  href="/docs/in-depth"
+                  className="glass-panel text-white px-10 py-5 rounded-sm font-bold text-sm uppercase tracking-[0.15em] hover:bg-white/5 transition-all duration-200 hover:border-primary/30"
+                >
+                  View Documentation (In-Depth)
+                </a>
               </div>
             </div>
 

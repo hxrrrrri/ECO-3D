@@ -1,0 +1,2058 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ECO-3D Studio — Complete Technical Documentation</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#080808;--surface:#0d1520;--surface2:#111d2e;--border:#1a2d45;--border2:#22364f;
+  --accent:#00e5ff;--accent2:#7c3aed;--accent3:#10b981;
+  --text:#e2f0ff;--text2:#7a9fc0;--text3:#3d6080;
+  --pink:#ec4899;--amber:#f59e0b;
+  --mono:'Space Mono',monospace;--sans:'Space Grotesk',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.75;overflow-x:hidden;}
+
+/* NAV */
+#nav{position:fixed;top:0;left:0;width:260px;height:100vh;background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;z-index:900;padding:24px 0;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
+#nav::-webkit-scrollbar{width:4px;}
+#nav::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+.nav-logo{padding:0 20px 20px;border-bottom:1px solid var(--border);margin-bottom:12px;}
+.nav-logo h1{font-size:14px;font-weight:800;color:var(--accent);letter-spacing:.12em;text-transform:uppercase;}
+.nav-logo p{font-size:10px;color:var(--text3);margin-top:3px;font-family:var(--mono);}
+.nav-sh{font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.14em;padding:16px 20px 6px;}
+.nav-link{display:block;padding:6px 20px;font-size:12px;color:var(--text2);text-decoration:none;border-left:2px solid transparent;transition:all .15s;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.nav-link:hover,.nav-link.active{color:var(--accent);border-left-color:var(--accent);background:#00e5ff08;}
+
+/* MAIN */
+#content{margin-left:260px;min-height:100vh;}
+
+/* HERO */
+#hero{position:relative;overflow:hidden;padding:80px 64px 64px;border-bottom:1px solid var(--border);}
+.hero-grid{position:absolute;inset:0;opacity:.06;background-image:linear-gradient(var(--border2) 1px,transparent 1px),linear-gradient(90deg,var(--border2) 1px,transparent 1px);background-size:40px 40px;}
+.hero-badge{display:inline-flex;align-items:center;gap:8px;background:#00e5ff12;border:1px solid #00e5ff30;border-radius:4px;padding:4px 12px;font-size:10px;font-family:var(--mono);color:var(--accent);letter-spacing:.1em;text-transform:uppercase;margin-bottom:20px;}
+.hero-badge::before{content:"";width:6px;height:6px;background:var(--accent);border-radius:50%;animation:blink 1.4s ease-in-out infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+#hero h1{font-size:52px;font-weight:800;line-height:1.05;letter-spacing:-.02em;background:linear-gradient(135deg,#e2f0ff 0%,#00e5ff 50%,#7c3aed 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:16px;}
+#hero p.sub{font-size:16px;color:var(--text2);max-width:640px;line-height:1.65;margin-bottom:32px;}
+.hero-stats{display:flex;gap:24px;flex-wrap:wrap;}
+.stat-pill{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 18px;}
+.stat-pill .num{font-size:22px;font-weight:700;color:var(--accent);font-family:var(--mono);}
+.stat-pill .lbl{font-size:11px;color:var(--text3);margin-top:2px;}
+
+/* SECTIONS */
+.doc-section{padding:56px 64px;border-bottom:1px solid var(--border);}
+.sec-num{font-size:10px;font-family:var(--mono);color:var(--accent);letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:8px;}
+.sec-num::before{content:"";flex:1;height:1px;background:var(--border);}
+.sec-num::after{content:"";flex:8;height:1px;background:var(--border);}
+.doc-section h2{font-size:32px;font-weight:800;color:var(--text);letter-spacing:-.02em;margin-bottom:24px;line-height:1.2;}
+.doc-section h3{font-size:18px;font-weight:700;color:var(--accent);margin:36px 0 14px;padding-left:12px;border-left:3px solid var(--accent);}
+.doc-section h4{font-size:14px;font-weight:700;color:var(--text);margin:24px 0 10px;}
+.doc-section p{color:var(--text2);line-height:1.8;margin-bottom:14px;max-width:820px;}
+
+/* TABLES */
+.table-wrap{overflow-x:auto;margin:20px 0;}
+table{width:100%;border-collapse:collapse;font-size:13px;font-family:var(--mono);}
+thead tr{background:var(--surface2);border-bottom:2px solid var(--accent);}
+thead th{padding:10px 14px;text-align:left;color:var(--accent);font-size:11px;letter-spacing:.08em;text-transform:uppercase;}
+tbody tr{border-bottom:1px solid var(--border);transition:background .1s;}
+tbody tr:hover{background:#00e5ff06;}
+tbody td{padding:9px 14px;color:var(--text2);vertical-align:top;line-height:1.5;}
+tbody td:first-child{color:var(--text);font-weight:700;}
+tbody td code{color:var(--accent);font-size:12px;background:#00e5ff10;padding:1px 5px;border-radius:3px;}
+
+/* CODE */
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px 24px;overflow-x:auto;margin:20px 0;font-family:var(--mono);font-size:12.5px;line-height:1.7;color:#a8d8ff;border-left:3px solid var(--accent2);}
+code{font-family:var(--mono);font-size:12.5px;}
+p code,li code{background:#7c3aed18;color:#c4b5fd;padding:1px 6px;border-radius:3px;font-size:12.5px;}
+
+/* CALLOUT */
+.callout{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin:20px 0;border-left:4px solid var(--accent3);}
+.callout.info{border-left-color:var(--accent);}
+.callout p{margin:0;font-size:13.5px;}
+
+/* EQ */
+.eq-block{background:#7c3aed12;border:1px solid #7c3aed40;border-radius:8px;padding:18px 24px;margin:20px 0;font-family:var(--mono);font-size:13px;color:#d4bcff;line-height:2.0;white-space:pre-wrap;}
+
+/* PILLS */
+.pill-row{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0;}
+.pill{background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--text2);font-family:var(--mono);}
+
+/* DIAGRAM WRAPPER */
+.diagram-container{margin:32px 0;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+.diagram-header{padding:14px 20px;background:var(--surface2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;}
+.diagram-header h4{font-size:13px;font-weight:700;color:var(--text);margin:0;}
+.diagram-header .tag{font-size:10px;font-family:var(--mono);color:var(--accent);background:#00e5ff12;border:1px solid #00e5ff30;padding:2px 8px;border-radius:3px;}
+.diagram-inner{position:relative;background:#0f1117;}
+
+/* INTAKE */
+.intake-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:24px 0;}
+.intake-card{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:18px 20px;}
+.intake-card h4{font-size:12px;font-family:var(--mono);color:var(--accent3);margin-bottom:10px;text-transform:uppercase;letter-spacing:.1em;}
+.intake-card ul{padding-left:16px;}
+.intake-card li{font-size:12px;font-family:var(--mono);color:var(--text2);margin-bottom:4px;}
+
+/* DECISION */
+.decision-block{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin:24px 0;}
+.decision-block .dt{font-size:14px;font-weight:700;color:var(--accent);margin-bottom:12px;font-family:var(--mono);}
+
+/* LISTS */
+ul,ol{padding-left:24px;margin:12px 0;}
+li{color:var(--text2);margin-bottom:6px;line-height:1.7;}
+li strong{color:var(--text);}
+
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-track{background:var(--bg);}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+
+@media(max-width:960px){#nav{width:200px;}#content{margin-left:200px;}#hero,.doc-section{padding-left:32px;padding-right:32px;}#hero h1{font-size:36px;}.intake-grid{grid-template-columns:1fr;}}
+</style>
+
+<!-- ═══ SCOPED DIAGRAM STYLES ═══════════════════════════════════════════════ -->
+<style>
+/* ── Arch Diagram ── */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; }
+#canvas-wrap { position: relative; width: 100%; height: 720px; overflow: hidden; cursor: grab; }
+#canvas-wrap.dragging { cursor: grabbing; }
+svg { width: 100%; height: 100%; }
+.node-group { cursor: pointer; }
+.node-rect { transition: filter 0.2s; }
+.node-group:hover .node-rect { filter: brightness(1.35) drop-shadow(0 0 10px currentColor); }
+.tooltip {
+  position: absolute; background: #1e293b; border: 1px solid #334155;
+  border-radius: 10px; padding: 12px 14px; font-size: 12px; pointer-events: none;
+  opacity: 0; transition: opacity 0.18s; max-width: 230px; z-index: 200;
+  box-shadow: 0 4px 24px #0008; color: #cbd5e1; line-height: 1.5;
+}
+.tooltip strong { color: #f1f5f9; font-size: 13px; display: block; margin-bottom: 4px; }
+.tooltip .file { color: #94a3b8; font-size: 11px; font-family: monospace; }
+.tooltip .tech { color: #7dd3fc; font-size: 11px; margin-top: 4px; }
+@keyframes flowPulse {
+  0% { stroke-dashoffset: 100; opacity: 0.35; }
+  50% { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0.35; }
+}
+.flow-arrow { stroke-dasharray: 9 5; animation: flowPulse 2.2s linear infinite; }
+.flow-arrow-slow { stroke-dasharray: 9 5; animation: flowPulse 3.2s linear infinite; }
+.flow-arrow-fast { stroke-dasharray: 7 3; animation: flowPulse 1.4s linear infinite; }
+@keyframes nodePulse {
+  0%,100%{opacity:1} 50%{opacity:0.72}
+}
+.pulse-node { animation: nodePulse 2.8s ease-in-out infinite; }
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #94a3b8; margin-bottom: 5px; }
+.legend-dot { width: 13px; height: 13px; border-radius: 3px; flex-shrink: 0; }
+#legend {
+  position: absolute; bottom: 16px; left: 16px; background: #1e293b;
+  border: 1px solid #334155; border-radius: 10px; padding: 12px 14px;
+  z-index: 100; min-width: 180px;
+}
+#legend h4 { font-size: 12px; color: #64748b; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.08em; }
+#zoom-controls {
+  position: absolute; top: 14px; right: 14px; display: flex; flex-direction: column; gap: 6px; z-index: 100;
+}
+.zoom-btn {
+  background: #1e293b; border: 1px solid #334155; color: #94a3b8;
+  width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 16px;
+  display: flex; align-items: center; justify-content: center; transition: background 0.15s;
+}
+.zoom-btn:hover { background: #334155; color: #f1f5f9; }
+#title-bar { position: absolute; top: 14px; left: 14px; z-index: 100; }
+#title-bar h2 { font-size: 15px; font-weight: 600; color: #f1f5f9; }
+#title-bar p { font-size: 12px; color: #64748b; margin-top: 2px; }
+
+/* ── DataFlow Diagram ── */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; min-height: 100vh; }
+#container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+h2 { font-size: 15px; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
+p.sub { font-size: 12px; color: #64748b; margin-bottom: 18px; }
+.flow-wrap { position: relative; }
+svg#flow { display: block; width: 100%; }
+
+/* Animated data packets */
+@keyframes travel { from { stroke-dashoffset: 400; } to { stroke-dashoffset: -400; } }
+.packet-path { animation: travel 2.4s linear infinite; }
+.packet-path-slow { animation: travel 3.5s linear infinite; }
+
+/* Node hover */
+.step-node { cursor: pointer; transition: all 0.2s; }
+.step-node:hover rect.nr { filter: brightness(1.3); }
+
+/* Detail card */
+#detail-card {
+  display: none;
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: #1e293b; border: 1px solid #334155; border-radius: 14px;
+  padding: 22px; width: 480px; max-width: 95vw; z-index: 500;
+  box-shadow: 0 8px 48px #0009;
+}
+#detail-card h3 { font-size: 15px; font-weight: 600; color: #f1f5f9; margin-bottom: 14px; }
+#detail-card .close-btn {
+  position: absolute; top: 14px; right: 14px;
+  background: none; border: none; color: #64748b; cursor: pointer; font-size: 18px;
+}
+#detail-card .close-btn:hover { color: #f1f5f9; }
+.field { margin-bottom: 10px; }
+.field-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px; }
+.field-val { font-size: 13px; color: #cbd5e1; }
+.field-val code { background: #0f172a; color: #7dd3fc; padding: 2px 6px; border-radius: 5px; font-size: 12px; }
+.field-val.eq { font-family: monospace; color: #a78bfa; background: #0f172a; padding: 8px 10px; border-radius: 6px; display: block; font-size: 12px; margin-top: 4px; }
+#overlay { display: none; position: fixed; inset: 0; background: #0009; z-index: 400; }
+
+/* ── Class Diagram ── */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+#stage { position: relative; width: 100%; height: 820px; overflow: hidden; cursor: default; }
+.uml-card {
+  position: absolute; background: #0f172a; border: 1.5px solid #334155;
+  border-radius: 10px; cursor: grab; user-select: none; min-width: 200px;
+  transition: box-shadow 0.2s;
+}
+.uml-card.active, .uml-card:hover { box-shadow: 0 0 0 2px #8b5cf6, 0 6px 28px #0009; z-index: 100; }
+.uml-card.dragging { cursor: grabbing; box-shadow: 0 0 0 3px #a78bfa, 0 12px 40px #0008; }
+.uml-header { padding: 8px 12px; border-radius: 8px 8px 0 0; cursor: grab; }
+.uml-header h4 { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+.uml-header p { font-size: 11px; opacity: 0.7; margin-top: 2px; font-family: monospace; }
+.uml-section { border-top: 1px solid #1e293b; padding: 6px 12px; }
+.uml-section .row { font-size: 11.5px; color: #94a3b8; padding: 2px 0; line-height: 1.4; }
+.uml-section .row .type { color: #7dd3fc; font-family: monospace; }
+.uml-section .row .method-name { color: #c4b5fd; }
+.uml-section .row .attr-name { color: #fcd34d; }
+.uml-section-title { font-size: 10px; color: #475569; text-transform: uppercase; letter-spacing: 0.06em; padding: 4px 12px 2px; background: #0a0f1a; }
+
+#sidebar {
+  position: absolute; right: 0; top: 0; width: 280px; height: 100%;
+  background: #1e293b; border-left: 1px solid #334155; overflow-y: auto;
+  transform: translateX(100%); transition: transform 0.3s;
+  padding: 16px; z-index: 200;
+}
+#sidebar.open { transform: translateX(0); }
+#sidebar h3 { font-size: 14px; font-weight: 600; color: #f1f5f9; margin-bottom: 12px; }
+#sidebar .close-btn { float: right; background: none; border: none; color: #64748b; cursor: pointer; font-size: 16px; }
+#sidebar table { width: 100%; border-collapse: collapse; font-size: 12px; }
+#sidebar table th { color: #64748b; padding: 4px 6px; border-bottom: 1px solid #334155; text-align: left; }
+#sidebar table td { color: #94a3b8; padding: 4px 6px; border-bottom: 1px solid #1e293b; vertical-align: top; }
+#sidebar table td:first-child { color: #fcd34d; font-family: monospace; }
+#sidebar table td code { color: #7dd3fc; }
+#sidebar .section-head { font-size: 11px; color: #475569; text-transform: uppercase; margin: 12px 0 6px; }
+svg#arrows { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.uml-card { z-index: 2; }
+@keyframes dashAnim { to { stroke-dashoffset: -24; } }
+.dep-line { stroke-dasharray: 6 3; animation: dashAnim 1.8s linear infinite; }
+#instructions {
+  position: absolute; bottom: 12px; left: 12px; background: #1e293b;
+  border: 1px solid #334155; border-radius: 8px; padding: 8px 12px;
+  font-size: 11px; color: #64748b; z-index: 300;
+}
+
+/* ── Sequence Diagram ── */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+#container { padding: 20px; max-width: 1200px; margin: 0 auto; }
+h2 { font-size: 15px; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
+p.sub { font-size: 12px; color: #64748b; margin-bottom: 14px; }
+#controls {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+  background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px;
+}
+.ctrl-btn {
+  background: #0f172a; border: 1px solid #334155; color: #94a3b8;
+  padding: 6px 14px; border-radius: 7px; cursor: pointer; font-size: 13px; font-family: inherit;
+  transition: all 0.15s;
+}
+.ctrl-btn:hover { background: #1e293b; color: #f1f5f9; }
+.ctrl-btn.active { background: #8b5cf620; border-color: #8b5cf6; color: #c4b5fd; }
+#speed-label { font-size: 12px; color: #64748b; }
+#speed { width: 100px; }
+#step-indicator { font-size: 12px; color: #64748b; margin-left: auto; }
+#progress-bar-wrap { width: 200px; height: 4px; background: #1e293b; border-radius: 2px; overflow: hidden; }
+#progress-bar { height: 100%; background: #8b5cf6; transition: width 0.3s; width: 0%; }
+
+#seq-canvas { position: relative; overflow-x: auto; }
+svg#seq { display: block; }
+
+/* Animated messages */
+@keyframes msgTravel {
+  from { stroke-dashoffset: 400; opacity: 0.2; }
+  to   { stroke-dashoffset: 0; opacity: 1; }
+}
+.msg-arrow.animating {
+  stroke-dasharray: 400;
+  animation: msgTravel 0.5s ease-out forwards;
+}
+
+/* Active highlight */
+.msg-group.active rect { stroke: #a78bfa; filter: drop-shadow(0 0 6px #8b5cf688); }
+.msg-group.passed rect { opacity: 0.45; }
+.msg-group.passed text { opacity: 0.45; }
+.msg-group.passed line { opacity: 0.35; }
+
+/* Swimlane lifeline pulse */
+@keyframes lifelinePulse { 0%,100%{opacity:0.35} 50%{opacity:0.9} }
+.lifeline-active { animation: lifelinePulse 0.8s ease-in-out; }
+
+</style>
+<style>
+  body {
+    font-family: 'Space Grotesk', sans-serif !important;
+    background: #080808 !important;
+  }
+</style>
+</head>
+<body>
+
+<nav id="nav">
+  <div class="nav-logo"><h1>ECO-3D Docs</h1><p>v2.0.0 · Technical Reference</p></div>
+  <div class="nav-sh">Overview</div>
+  <a class="nav-link" href="#intake">Project Intake</a>
+  <a class="nav-link" href="#s1">§1 Overview</a>
+  <a class="nav-link" href="#s2">§2 Datasets</a>
+  <div class="nav-sh">Diagrams</div>
+  <a class="nav-link" href="#s3">§3 Architecture</a>
+  <a class="nav-link" href="#s4">§4 Data Flow</a>
+  <a class="nav-link" href="#s5">§5 Class / UML</a>
+  <a class="nav-link" href="#s6">§6 Sequence</a>
+  <div class="nav-sh">Deep Dive</div>
+  <a class="nav-link" href="#s7-dlv3">§7.1 DeepLabV3</a>
+  <a class="nav-link" href="#s7-yolo">§7.2 YOLOv8n</a>
+  <a class="nav-link" href="#s7-xgb">§7.3 XGBoost</a>
+  <a class="nav-link" href="#s7-mlp">§7.4 MLP Network</a>
+  <a class="nav-link" href="#s7-ga">§7.5 Genetic Algo</a>
+  <a class="nav-link" href="#s7-env">§7.6 Env APIs</a>
+  <div class="nav-sh">Reference</div>
+  <a class="nav-link" href="#s8">§8 Pipeline Walk</a>
+  <a class="nav-link" href="#s9">§9 Commands</a>
+  <a class="nav-link" href="#s10">§10 Design Decisions</a>
+</nav>
+
+<main id="content">
+
+<section id="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-badge">Live Documentation</div>
+  <h1>ECO-3D Studio<br>Technical Reference</h1>
+  <p class="sub">Complete graduate-level documentation for a geospatial AI platform for sustainable architecture — every model, algorithm, API, data pipeline, and design decision with full mathematical foundations and four live animated diagrams.</p>
+  <div class="hero-stats">
+    <div class="stat-pill"><div class="num">70+</div><div class="lbl">Source files</div></div>
+    <div class="stat-pill"><div class="num">5</div><div class="lbl">AI/ML layers</div></div>
+    <div class="stat-pill"><div class="num">7</div><div class="lbl">External APIs</div></div>
+    <div class="stat-pill"><div class="num">~12k</div><div class="lbl">Lines of code</div></div>
+    <div class="stat-pill"><div class="num">4</div><div class="lbl">Live diagrams</div></div>
+  </div>
+</section>
+
+<section class="doc-section" id="intake">
+  <div class="sec-num">Phase 0</div>
+  <h2>Project Intake Summary</h2>
+  <div class="intake-grid">
+    <div class="intake-card"><h4>Entry Points</h4><ul><li>backend/main.py — FastAPI app</li><li>frontend/app/page.tsx — Next.js root</li><li>frontend/app/map/page.tsx — User entry</li><li>backend/start.sh — Production start</li></ul></div>
+    <div class="intake-card"><h4>Model Files</h4><ul><li>ai/flood/weights/flood_xgboost.pkl</li><li>ai/buildability/weights/buildability_model.pkl</li><li>yolov8n.pt — detection backbone</li><li>DeepLabV3 — runtime torchvision</li></ul></div>
+    <div class="intake-card"><h4>Dependencies</h4><ul><li>FastAPI, Uvicorn, SQLAlchemy, Pydantic v2</li><li>PyTorch, XGBoost, sklearn, Ultralytics</li><li>Next.js 14, React 18, Three.js 0.167</li><li>Zustand, Leaflet, Framer Motion, Axios</li></ul></div>
+    <div class="intake-card"><h4>Datasets</h4><ul><li>data/flood_training.csv — 5000 rows</li><li>data/buildability_training.csv — 5000 rows</li><li>data/segmentation_labels.csv — reference</li><li>7 live external APIs (no download needed)</li></ul></div>
+  </div>
+  <div class="pill-row">
+    <span class="pill">Python 3.11</span><span class="pill">TypeScript 5</span><span class="pill">FastAPI 0.111</span><span class="pill">Next.js 14</span><span class="pill">PyTorch 2.0</span><span class="pill">XGBoost 2.0</span><span class="pill">Three.js 0.167</span><span class="pill">SQLAlchemy 2.0</span><span class="pill">Zustand 4.5</span><span class="pill">Tailwind CSS 3</span><span class="pill">Leaflet 1.9</span><span class="pill">Framer Motion 11</span>
+  </div>
+</section>
+
+<section class="doc-section" id="s1">
+  <div class="sec-num">Section 01</div>
+  <h2>Project Overview</h2>
+  <p>ECO-3D Studio is a <strong>geospatial AI platform for sustainable architecture site analysis and floor plan generation</strong>. It solves the problem that traditional building site assessment requires expensive on-site surveys, manual environmental research, and separate architectural tools — a process that takes weeks and costs thousands. ECO-3D collapses this into a ~10-second automated pipeline driven by a GPS coordinate.</p>
+  <h3>Full Pipeline</h3>
+  <ol style="margin:16px 0;padding-left:24px">
+    <li style="margin-bottom:10px"><strong>User selects a plot</strong> by clicking on a Leaflet satellite map. Coordinates and polygon captured.</li>
+    <li style="margin-bottom:10px"><strong>Satellite tile fetched</strong> (224×224 Mapbox). DeepLabV3 ResNet-50 classifies every pixel: vegetation, water, urban, road, bare soil.</li>
+    <li style="margin-bottom:10px"><strong>YOLOv8n detects trees</strong> on the same tile, converting bounding boxes to geographic lat/lon coordinates.</li>
+    <li style="margin-bottom:10px"><strong>7 public APIs queried in parallel</strong>: Open-Elevation, Open-Meteo (wind + ERA5 rainfall), SoilGrids v2, NASA POWER, GloFAS, OSM Overpass, NOAA formula.</li>
+    <li style="margin-bottom:10px"><strong>XGBoost</strong> predicts flood probability. <strong>MLP neural network</strong> (64→32→16) predicts buildability score [0–100].</li>
+    <li style="margin-bottom:10px"><strong>Genetic Algorithm</strong> (pop=60, gen=80) generates an eco-optimized floor plan with rooms, walls, doors, windows.</li>
+    <li style="margin-bottom:10px"><strong>3D model</strong> rendered in WebGL via React Three Fiber with procedural textures and live sun simulation.</li>
+  </ol>
+  <h3>Tech Stack</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Layer</th><th>Technologies</th></tr></thead>
+    <tbody>
+      <tr><td>Frontend</td><td>Next.js 14, React 18, TypeScript, Tailwind CSS, Zustand 4.5</td></tr>
+      <tr><td>3D Rendering</td><td>Three.js 0.167, React Three Fiber, @react-three/drei</td></tr>
+      <tr><td>Backend</td><td>FastAPI 0.111, Uvicorn, Python 3.11, Pydantic v2</td></tr>
+      <tr><td>Database</td><td>SQLAlchemy 2.0, aiosqlite (dev), asyncpg (prod)</td></tr>
+      <tr><td>AI / ML</td><td>PyTorch + DeepLabV3, XGBoost, sklearn MLP, Ultralytics YOLOv8</td></tr>
+      <tr><td>External APIs</td><td>Open-Elevation, Open-Meteo, SoilGrids v2, NASA POWER, GloFAS, OSM Overpass</td></tr>
+      <tr><td>Deploy</td><td>Nixpacks, Railway / Heroku, Vercel (frontend)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="doc-section" id="s2">
+  <div class="sec-num">Section 02</div>
+  <h2>Datasets</h2>
+  <h3>Flood Risk Training Data</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Type</th><th>Range</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>elevation_m</td><td>float</td><td>0–500</td><td>Plot elevation in metres (SRTM proxy)</td></tr>
+      <tr><td>slope_deg</td><td>float</td><td>0–30</td><td>Terrain slope in degrees</td></tr>
+      <tr><td>ndvi</td><td>float</td><td>-0.1–0.9</td><td>Normalised Difference Vegetation Index</td></tr>
+      <tr><td>rainfall_mm</td><td>float</td><td>200–3000</td><td>Annual rainfall in millimetres</td></tr>
+      <tr><td>soil_stability</td><td>float</td><td>0–1</td><td>Load-bearing capacity proxy</td></tr>
+      <tr><td>distance_to_water_m</td><td>float</td><td>0–5000</td><td>Distance to nearest water body</td></tr>
+      <tr><td>flood_probability</td><td>float</td><td>0–1</td><td><strong>Target:</strong> physics-derived label</td></tr>
+    </tbody>
+  </table></div>
+  <div class="eq-block">risk = 0.5/(1+elev/50) + 0.2/(1+slope/5) + 0.1×(1−ndvi) + 0.15×(rain/3000) + 0.05/(1+dist/200)
+risk = clip(risk + N(0, 0.05), 0, 1)</div>
+  <h3>Buildability Score Training Data</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>flood_probability</td><td>float 0–1</td><td>Flood risk (output of XGBoost model)</td></tr>
+      <tr><td>slope_norm</td><td>float 0–1</td><td>slope / 30 normalised</td></tr>
+      <tr><td>soil_stability</td><td>float 0–1</td><td>Load-bearing capacity</td></tr>
+      <tr><td>vegetation_density</td><td>float 0–1</td><td>NDVI proxy</td></tr>
+      <tr><td>wind_exposure</td><td>float 0–1</td><td>wind_ms / 15</td></tr>
+      <tr><td>sun_score</td><td>float 0–1</td><td>sun_hours / 10</td></tr>
+      <tr><td>buildability_score</td><td>float 0–100</td><td><strong>Target:</strong> composite suitability score</td></tr>
+    </tbody>
+  </table></div>
+  <div class="eq-block">score = 30×(1−flood_p) + 20×(1−slope/30) + 20×soil_stability + 10×(1−veg×0.3) + 10×(1−wind) + 10×(sun/10)
+score = clip(score + N(0,3), 0, 100)</div>
+</section>
+
+<!-- ═══ DIAGRAM SECTIONS ═══════════════════════════════════════════════════ -->
+
+<section class="doc-section" id="s3">
+  <div class="sec-num">Section 03</div>
+  <h2>Animated System Architecture Diagram</h2>
+  <p>Every component as a colour-coded node. Hover for role, file path, and tech. Drag to pan, scroll to zoom.</p>
+  <div class="callout info"><p><strong>Colours:</strong> Blue = data sources · Purple = processing · Pink = AI models · Green = outputs · Amber = external APIs. Dashed = offline/training paths.</p></div>
+  <div class="diagram-container">
+    <div class="diagram-header"><h4>ECO-3D System Architecture</h4><span class="tag">Hover · Pan · Zoom</span></div>
+    <div class="diagram-inner">
+<div id="canvas-wrap">
+  <div id="title-bar">
+    <h2>ECO-3D System Architecture</h2>
+    <p>Hover nodes · Drag to pan · Scroll to zoom</p>
+  </div>
+  <div id="zoom-controls">
+    <button class="zoom-btn" onclick="zoomIn()">+</button>
+    <button class="zoom-btn" onclick="zoomOut()">-</button>
+    <button class="zoom-btn" onclick="resetZoom()" style="font-size:11px;font-weight:600">R</button>
+  </div>
+  <div class="tooltip" id="tooltip"></div>
+  <div id="legend">
+    <h4>Legend</h4>
+    <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div>Data sources</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>Processing / transforms</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>AI models / inference</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div>Outputs / results</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>External APIs</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#64748b"></div>Infrastructure</div>
+  </div>
+  <svg id="main-svg" viewBox="0 0 1400 700">
+    <defs>
+      <marker id="arr-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round"/>
+      </marker>
+      <marker id="arr-purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round"/>
+      </marker>
+      <marker id="arr-pink" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#ec4899" stroke-width="2" stroke-linecap="round"/>
+      </marker>
+      <marker id="arr-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round"/>
+      </marker>
+      <marker id="arr-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+      </marker>
+      <marker id="arr-gray" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round"/>
+      </marker>
+    </defs>
+    <g id="pan-group" transform="translate(0,0) scale(1)">
+
+    <!-- LAYER BACKGROUNDS -->
+    <rect x="30" y="30" width="200" height="640" rx="14" fill="#3b82f610" stroke="#3b82f630" stroke-width="1"/>
+    <text x="130" y="22" fill="#3b82f660" font-size="11" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">DATA SOURCES</text>
+
+    <rect x="250" y="30" width="240" height="640" rx="14" fill="#f59e0b08" stroke="#f59e0b30" stroke-width="1"/>
+    <text x="370" y="22" fill="#f59e0b60" font-size="11" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">EXTERNAL APIs</text>
+
+    <rect x="510" y="30" width="260" height="640" rx="14" fill="#8b5cf608" stroke="#8b5cf630" stroke-width="1"/>
+    <text x="640" y="22" fill="#8b5cf660" font-size="11" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">PROCESSING PIPELINE</text>
+
+    <rect x="790" y="30" width="220" height="640" rx="14" fill="#ec489908" stroke="#ec489930" stroke-width="1"/>
+    <text x="900" y="22" fill="#ec489960" font-size="11" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">AI MODELS</text>
+
+    <rect x="1030" y="30" width="180" height="640" rx="14" fill="#10b98108" stroke="#10b98130" stroke-width="1"/>
+    <text x="1120" y="22" fill="#10b98160" font-size="11" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">OUTPUTS</text>
+
+    <rect x="1230" y="30" width="140" height="640" rx="14" fill="#64748b08" stroke="#64748b30" stroke-width="1"/>
+    <text x="1300" y="22" fill="#64748b60" font-size="11" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">INFRA</text>
+
+    <!-- DATA SOURCE NODES -->
+    <!-- User Browser -->
+    <g class="node-group" data-tip="User Browser" data-role="Frontend entry point. Users interact via Next.js 14 app." data-file="frontend/app/map/page.tsx" data-tech="React 18, Leaflet, Zustand">
+      <rect class="node-rect" x="45" y="50" width="170" height="60" rx="10" fill="#3b82f620" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="130" y="76" fill="#93c5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">User Browser</text>
+      <text x="130" y="94" fill="#60a5fa80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Next.js 14 · React 18</text>
+    </g>
+    <!-- Mapbox Satellite -->
+    <g class="node-group" data-tip="Mapbox Satellite API" data-role="Provides 224×224 satellite tile images for DeepLabV3 segmentation." data-file="backend/ai/segmentation/model.py" data-tech="Mapbox Static Tiles API (optional)">
+      <rect class="node-rect" x="45" y="145" width="170" height="60" rx="10" fill="#3b82f620" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="130" y="170" fill="#93c5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Satellite Tiles</text>
+      <text x="130" y="188" fill="#60a5fa80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Mapbox Static API</text>
+    </g>
+    <!-- OSM/Leaflet -->
+    <g class="node-group" data-tip="OpenStreetMap / Leaflet" data-role="Interactive base map for plot selection. OSM Overpass used for water feature distance." data-file="frontend/components/MapComponent.tsx" data-tech="Leaflet 1.9, react-leaflet, OSM Overpass">
+      <rect class="node-rect" x="45" y="240" width="170" height="60" rx="10" fill="#3b82f620" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="130" y="265" fill="#93c5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">OSM / Overpass</text>
+      <text x="130" y="283" fill="#60a5fa80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Leaflet + react-leaflet</text>
+    </g>
+    <!-- Training CSVs -->
+    <g class="node-group" data-tip="Training Datasets" data-role="Synthetic physics-informed CSVs for flood risk and buildability models." data-file="data/flood_training.csv, data/buildability_training.csv" data-tech="NumPy synthetic generation, pandas, 5000 rows each">
+      <rect class="node-rect" x="45" y="335" width="170" height="60" rx="10" fill="#3b82f620" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="130" y="360" fill="#93c5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Training CSVs</text>
+      <text x="130" y="378" fill="#60a5fa80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">flood · buildability · seg</text>
+    </g>
+    <!-- SQLite/Postgres -->
+    <g class="node-group" data-tip="Database (SQLite / PostgreSQL)" data-role="Stores PlotRecord, AnalysisRecord, FloorPlanRecord, User, Notification." data-file="backend/database/models.py" data-tech="SQLAlchemy 2.0, aiosqlite (dev), asyncpg (prod)">
+      <rect class="node-rect" x="45" y="430" width="170" height="60" rx="10" fill="#3b82f620" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="130" y="455" fill="#93c5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Database</text>
+      <text x="130" y="473" fill="#60a5fa80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">SQLite dev · PostgreSQL prod</text>
+    </g>
+
+    <!-- EXTERNAL API NODES -->
+    <!-- Open-Elevation -->
+    <g class="node-group" data-tip="Open-Elevation API" data-role="SRTM 30m DEM. Fetches elevation + computes slope from 5-point grid." data-file="backend/services/real_env_data.py:fetch_elevation_slope" data-tech="REST, SRTM 30m global, no key">
+      <rect class="node-rect" x="265" y="50" width="210" height="60" rx="10" fill="#f59e0b20" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="370" y="76" fill="#fcd34d" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Open-Elevation</text>
+      <text x="370" y="94" fill="#f59e0b80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">SRTM 30m DEM</text>
+    </g>
+    <!-- Open-Meteo -->
+    <g class="node-group" data-tip="Open-Meteo (Wind + Rainfall)" data-role="Real-time wind speed/direction. ERA5 30-year rainfall normals (1991-2020)." data-file="backend/services/real_env_data.py:fetch_wind,fetch_rainfall" data-tech="Forecast API + Climate ERA5, no key">
+      <rect class="node-rect" x="265" y="145" width="210" height="60" rx="10" fill="#f59e0b20" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="370" y="170" fill="#fcd34d" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Open-Meteo</text>
+      <text x="370" y="188" fill="#f59e0b80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Wind · ERA5 Rainfall</text>
+    </g>
+    <!-- SoilGrids / OpenLandMap -->
+    <g class="node-group" data-tip="SoilGrids v2 / OpenLandMap" data-role="Global soil properties at 250m: clay%, sand%, silt%, pH, organic carbon, bulk density." data-file="backend/services/real_env_data.py:fetch_soil_data" data-tech="ISRIC REST v2 (primary) + OpenLandMap (fallback), no key">
+      <rect class="node-rect" x="265" y="240" width="210" height="60" rx="10" fill="#f59e0b20" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="370" y="265" fill="#fcd34d" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">SoilGrids v2</text>
+      <text x="370" y="283" fill="#f59e0b80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">ISRIC · OpenLandMap fallback</text>
+    </g>
+    <!-- NASA POWER -->
+    <g class="node-group" data-tip="NASA POWER API" data-role="Satellite-derived daily solar radiation and PAR for NDVI proxy computation." data-file="backend/services/real_env_data.py:fetch_ndvi_and_solar" data-tech="NASA POWER temporal/daily, no key">
+      <rect class="node-rect" x="265" y="335" width="210" height="60" rx="10" fill="#f59e0b20" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="370" y="360" fill="#fcd34d" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">NASA POWER</text>
+      <text x="370" y="378" fill="#f59e0b80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">NDVI proxy · Solar kWh</text>
+    </g>
+    <!-- GloFAS -->
+    <g class="node-group" data-tip="Open-Meteo GloFAS (EU Copernicus)" data-role="90-day river discharge forecast for flood index computation." data-file="backend/services/real_env_data.py:fetch_flood_discharge" data-tech="GloFAS Flood API, no key">
+      <rect class="node-rect" x="265" y="430" width="210" height="60" rx="10" fill="#f59e0b20" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="370" y="455" fill="#fcd34d" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">GloFAS Flood API</text>
+      <text x="370" y="473" fill="#f59e0b80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">90-day river discharge</text>
+    </g>
+    <!-- OSM Overpass -->
+    <g class="node-group" data-tip="OSM Overpass API" data-role="Finds nearest water bodies within 5km for distance_to_water feature." data-file="backend/services/real_env_data.py:fetch_distance_to_water" data-tech="Overpass REST, 5km radius query">
+      <rect class="node-rect" x="265" y="525" width="210" height="60" rx="10" fill="#f59e0b20" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="370" y="550" fill="#fcd34d" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">OSM Overpass</text>
+      <text x="370" y="568" fill="#f59e0b80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Water body distance</text>
+    </g>
+
+    <!-- PROCESSING NODES -->
+    <!-- FastAPI Backend -->
+    <g class="node-group" data-tip="FastAPI Backend" data-role="Main API server. Routes: /analyze-plot, /generate-floorplan, /plots, /report, /auth." data-file="backend/main.py" data-tech="FastAPI 0.111, Uvicorn, Python 3.11">
+      <rect class="node-rect" x="525" y="50" width="230" height="60" rx="10" fill="#8b5cf620" stroke="#8b5cf6" stroke-width="1.5"/>
+      <text x="640" y="76" fill="#c4b5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">FastAPI Backend</text>
+      <text x="640" y="94" fill="#8b5cf680" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">main.py · 8 routers · CORS</text>
+    </g>
+    <!-- Analysis Pipeline -->
+    <g class="node-group" data-tip="5-Layer Analysis Pipeline" data-role="Orchestrates all AI layers concurrently via asyncio.gather(). 5 layers with synthetic fallbacks." data-file="backend/services/analysis_pipeline.py:run_full_analysis" data-tech="asyncio, concurrent executor, crash-proof">
+      <rect class="node-rect" x="525" y="155" width="230" height="60" rx="10" fill="#8b5cf620" stroke="#8b5cf6" stroke-width="1.5"/>
+      <text x="640" y="181" fill="#c4b5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Analysis Pipeline</text>
+      <text x="640" y="199" fill="#8b5cf680" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">5 layers · asyncio.gather</text>
+    </g>
+    <!-- Real Env Data Service -->
+    <g class="node-group" data-tip="Real Environmental Data Service" data-role="Fetches all 7 real APIs concurrently. Computes flood risk and buildability via physics formulas." data-file="backend/services/real_env_data.py:fetch_all_real_data" data-tech="httpx async, 7 concurrent API calls">
+      <rect class="node-rect" x="525" y="260" width="230" height="60" rx="10" fill="#8b5cf620" stroke="#8b5cf6" stroke-width="1.5"/>
+      <text x="640" y="286" fill="#c4b5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Env Data Service</text>
+      <text x="640" y="304" fill="#8b5cf680" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">7 parallel API fetches</text>
+    </g>
+    <!-- Floorplan Service -->
+    <g class="node-group" data-tip="Floor Plan Service (v6)" data-role="Deterministic layout engine OR genetic algorithm optimizer. Produces rooms, walls, doors, windows." data-file="backend/services/floorplan_service.py" data-tech="Pure Python deterministic + GA optimizer">
+      <rect class="node-rect" x="525" y="365" width="230" height="60" rx="10" fill="#8b5cf620" stroke="#8b5cf6" stroke-width="1.5"/>
+      <text x="640" y="391" fill="#c4b5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Floor Plan Service</text>
+      <text x="640" y="409" fill="#8b5cf680" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Deterministic · GA · v6</text>
+    </g>
+    <!-- Zustand Store -->
+    <g class="node-group" data-tip="Zustand Global State Store" data-role="Single source of truth for frontend. Holds lat/lon, analysis, floorPlan, variants, UI state." data-file="frontend/store/useEco3DStore.ts" data-tech="Zustand 4.5, TypeScript">
+      <rect class="node-rect" x="525" y="470" width="230" height="60" rx="10" fill="#8b5cf620" stroke="#8b5cf6" stroke-width="1.5"/>
+      <text x="640" y="496" fill="#c4b5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Zustand Store</text>
+      <text x="640" y="514" fill="#8b5cf680" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Global state · TypeScript</text>
+    </g>
+
+    <!-- AI MODEL NODES -->
+    <!-- DeepLabV3 -->
+    <g class="node-group" data-tip="DeepLabV3 ResNet-50 (Segmentation)" data-role="Semantic segmentation of 224×224 satellite tile. Outputs land-class percentages: vegetation, water, urban, road, bare_soil." data-file="backend/ai/segmentation/model.py" data-tech="PyTorch, torchvision, 21 Pascal VOC classes">
+      <rect class="node-rect pulse-node" x="805" y="50" width="190" height="68" rx="10" fill="#ec489920" stroke="#ec4899" stroke-width="1.5"/>
+      <text x="900" y="76" fill="#f9a8d4" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">DeepLabV3</text>
+      <text x="900" y="94" fill="#ec489980" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">ResNet-50 · Segmentation</text>
+      <text x="900" y="110" fill="#ec489960" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">224×224 → land class %</text>
+    </g>
+    <!-- YOLOv8 -->
+    <g class="node-group" data-tip="YOLOv8n (Tree Detection)" data-role="Object detection on satellite tile. Outputs tree bounding boxes with geo-coordinates (pixel→lat/lon conversion)." data-file="backend/ai/detection/model.py" data-tech="Ultralytics YOLOv8n, confidence > 0.3">
+      <rect class="node-rect pulse-node" x="805" y="155" width="190" height="68" rx="10" fill="#ec489920" stroke="#ec4899" stroke-width="1.5"/>
+      <text x="900" y="181" fill="#f9a8d4" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">YOLOv8n</text>
+      <text x="900" y="199" fill="#ec489980" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Tree Detection</text>
+      <text x="900" y="215" fill="#ec489960" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">tile → TreeCoordinate[]</text>
+    </g>
+    <!-- XGBoost Flood -->
+    <g class="node-group" data-tip="XGBoost Flood Risk Model" data-role="Regressor: 6 features → flood_probability [0,1]. n_estimators=200, max_depth=6, lr=0.05." data-file="backend/ai/flood/model.py" data-tech="XGBoost regressor, StandardScaler, pickle">
+      <rect class="node-rect pulse-node" x="805" y="260" width="190" height="68" rx="10" fill="#ec489920" stroke="#ec4899" stroke-width="1.5"/>
+      <text x="900" y="286" fill="#f9a8d4" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">XGBoost</text>
+      <text x="900" y="304" fill="#ec489980" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Flood Risk Regression</text>
+      <text x="900" y="320" fill="#ec489960" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">6 features → P(flood)</text>
+    </g>
+    <!-- MLP Buildability -->
+    <g class="node-group" data-tip="sklearn MLP Buildability Model" data-role="Regressor: 6 features → buildability_score [0,100]. Architecture: 64→32→16→1 ReLU." data-file="backend/ai/buildability/model.py" data-tech="sklearn MLPRegressor, layers 64-32-16, early stopping">
+      <rect class="node-rect pulse-node" x="805" y="360" width="190" height="68" rx="10" fill="#ec489920" stroke="#ec4899" stroke-width="1.5"/>
+      <text x="900" y="386" fill="#f9a8d4" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">MLP Neural Net</text>
+      <text x="900" y="404" fill="#ec489980" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Buildability Score</text>
+      <text x="900" y="420" fill="#ec489960" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">64→32→16 ReLU</text>
+    </g>
+    <!-- Genetic Algorithm -->
+    <g class="node-group" data-tip="Genetic Algorithm Floor Plan Optimizer" data-role="Multi-objective GA: pop=60, gen=80, mutation=0.15. Fitness: solar + ventilation + tree preservation + slope safety." data-file="backend/ai/floorplan/genetic_optimizer.py" data-tech="NumPy GA, Chromosome class, multi-objective fitness">
+      <rect class="node-rect pulse-node" x="805" y="460" width="190" height="68" rx="10" fill="#ec489920" stroke="#ec4899" stroke-width="1.5"/>
+      <text x="900" y="486" fill="#f9a8d4" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Genetic Algorithm</text>
+      <text x="900" y="504" fill="#ec489980" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Floor Plan Optimizer</text>
+      <text x="900" y="520" fill="#ec489960" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">pop=60, gen=80</text>
+    </g>
+
+    <!-- OUTPUT NODES -->
+    <g class="node-group" data-tip="Analysis Response (JSON)" data-role="Returns: segmentation %, tree coords, environmental features, flood probability, buildability score, status." data-file="backend/models/schemas.py:AnalysisResponse" data-tech="Pydantic v2, JSON, status: EXCELLENT/GOOD/FAIR/POOR/NOT BUILDABLE">
+      <rect class="node-rect" x="1045" y="70" width="150" height="68" rx="10" fill="#10b98120" stroke="#10b981" stroke-width="1.5"/>
+      <text x="1120" y="96" fill="#6ee7b7" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Analysis JSON</text>
+      <text x="1120" y="114" fill="#10b98180" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">AnalysisResponse</text>
+      <text x="1120" y="130" fill="#10b98160" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">flood + build score</text>
+    </g>
+    <g class="node-group" data-tip="Floor Plan Response (JSON)" data-role="Returns: rooms[], walls[], doors[], windows[], eco_score, solar/ventilation scores, GA logs." data-file="backend/models/schemas.py:FloorPlanResponse" data-tech="Pydantic v2, 6 house types, deterministic or GA">
+      <rect class="node-rect" x="1045" y="185" width="150" height="68" rx="10" fill="#10b98120" stroke="#10b981" stroke-width="1.5"/>
+      <text x="1120" y="211" fill="#6ee7b7" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Floor Plan JSON</text>
+      <text x="1120" y="229" fill="#10b98180" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">FloorPlanResponse</text>
+      <text x="1120" y="245" fill="#10b98160" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">rooms · walls · doors</text>
+    </g>
+    <g class="node-group" data-tip="3D Viewer (React Three Fiber)" data-role="Interactive 3D building model from floor plan data. Procedural textures, sun simulation, wind particles." data-file="frontend/app/model3d/[id]/page.tsx" data-tech="React Three Fiber, Three.js 0.167, Canvas textures, 2602 LOC">
+      <rect class="node-rect" x="1045" y="295" width="150" height="68" rx="10" fill="#10b98120" stroke="#10b981" stroke-width="1.5"/>
+      <text x="1120" y="321" fill="#6ee7b7" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">3D Viewer</text>
+      <text x="1120" y="339" fill="#10b98180" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">React Three Fiber</text>
+      <text x="1120" y="355" fill="#10b98160" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">Three.js · textures</text>
+    </g>
+    <g class="node-group" data-tip="Floor Plan Canvas (2D)" data-role="SVG-based 2D floor plan renderer. Shows rooms, walls, doors, windows, wind particles, sun direction." data-file="frontend/app/floorplan/[id]/page.tsx" data-tech="SVG Canvas, Framer Motion, wind particle animation">
+      <rect class="node-rect" x="1045" y="400" width="150" height="68" rx="10" fill="#10b98120" stroke="#10b981" stroke-width="1.5"/>
+      <text x="1120" y="426" fill="#6ee7b7" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">2D Floor Plan</text>
+      <text x="1120" y="444" fill="#10b98180" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">SVG Canvas</text>
+      <text x="1120" y="460" fill="#10b98160" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">Framer Motion anim</text>
+    </g>
+    <g class="node-group" data-tip="PDF Report" data-role="Detailed site analysis report with all environmental data, AI model scores, and compliance references." data-file="backend/routes/report.py" data-tech="FastAPI, JSON response, FEMA/LEED/ASHRAE references">
+      <rect class="node-rect" x="1045" y="505" width="150" height="60" rx="10" fill="#10b98120" stroke="#10b981" stroke-width="1.5"/>
+      <text x="1120" y="531" fill="#6ee7b7" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Report</text>
+      <text x="1120" y="549" fill="#10b98180" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">FEMA · LEED · ASHRAE</text>
+    </g>
+
+    <!-- INFRA NODES -->
+    <g class="node-group" data-tip="Authentication (JWT)" data-role="User signup/login. bcrypt password hashing. No JWT yet — basic auth pattern in routes/auth.py." data-file="backend/routes/auth.py" data-tech="FastAPI, SQLAlchemy User model, bcrypt">
+      <rect class="node-rect" x="1245" y="70" width="120" height="60" rx="10" fill="#64748b20" stroke="#64748b" stroke-width="1.5"/>
+      <text x="1305" y="96" fill="#94a3b8" font-size="12" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Auth</text>
+      <text x="1305" y="114" fill="#64748b80" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">JWT · bcrypt</text>
+    </g>
+    <g class="node-group" data-tip="Notifications" data-role="System notifications stored in DB. Returned via /notifications endpoint." data-file="backend/routes/notifications.py" data-tech="SQLAlchemy Notification model">
+      <rect class="node-rect" x="1245" y="175" width="120" height="60" rx="10" fill="#64748b20" stroke="#64748b" stroke-width="1.5"/>
+      <text x="1305" y="201" fill="#94a3b8" font-size="12" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Notifications</text>
+      <text x="1305" y="219" fill="#64748b80" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">DB-backed</text>
+    </g>
+    <g class="node-group" data-tip="Nixpacks Deploy (Railway)" data-role="Backend deployment configuration. nixpacks.toml + start.sh for Railway/Heroku deployments." data-file="backend/nixpacks.toml, backend/start.sh" data-tech="Nixpacks, Uvicorn prod, Railway">
+      <rect class="node-rect" x="1245" y="280" width="120" height="60" rx="10" fill="#64748b20" stroke="#64748b" stroke-width="1.5"/>
+      <text x="1305" y="306" fill="#94a3b8" font-size="12" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Nixpacks Deploy</text>
+      <text x="1305" y="324" fill="#64748b80" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">Railway / Heroku</text>
+    </g>
+
+    <!-- ANIMATED EDGES -->
+    <!-- User → FastAPI -->
+    <path class="flow-arrow" d="M 215 80 L 525 80" fill="none" stroke="#3b82f6" stroke-width="2" marker-end="url(#arr-blue)"/>
+    <!-- MapComponent → Zustand -->
+    <path class="flow-arrow-slow" d="M 215 270 L 525 500" fill="none" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+    <!-- FastAPI → Analysis Pipeline -->
+    <path class="flow-arrow-fast" d="M 640 110 L 640 155" fill="none" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arr-purple)"/>
+    <!-- FastAPI → Floorplan -->
+    <path class="flow-arrow" d="M 640 110 Q 640 200 640 365" fill="none" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+    <!-- Analysis Pipeline → Env Data Service -->
+    <path class="flow-arrow-fast" d="M 640 215 L 640 260" fill="none" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arr-purple)"/>
+    <!-- External APIs → Env Data Service -->
+    <path class="flow-arrow-slow" d="M 475 80 L 525 290" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+    <path class="flow-arrow-slow" d="M 475 175 L 525 300" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+    <path class="flow-arrow-slow" d="M 475 270 L 525 310" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+    <path class="flow-arrow-slow" d="M 475 365 L 525 300" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+    <path class="flow-arrow-slow" d="M 475 460 L 525 305" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+    <path class="flow-arrow-slow" d="M 475 555 L 525 310" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+    <!-- Satellite → DeepLabV3 -->
+    <path class="flow-arrow" d="M 215 175 Q 640 175 805 84" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="9 5" marker-end="url(#arr-pink)"/>
+    <!-- Analysis Pipeline → Models -->
+    <path class="flow-arrow" d="M 755 185 L 805 84" fill="none" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-pink)"/>
+    <path class="flow-arrow" d="M 755 185 L 805 189" fill="none" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-pink)"/>
+    <path class="flow-arrow" d="M 755 260 L 805 294" fill="none" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-pink)"/>
+    <path class="flow-arrow" d="M 755 285 L 805 394" fill="none" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-pink)"/>
+    <!-- Floorplan Service → GA -->
+    <path class="flow-arrow" d="M 755 395 L 805 494" fill="none" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-pink)"/>
+    <!-- Models → Outputs -->
+    <path class="flow-arrow-fast" d="M 995 84 L 1045 104" fill="none" stroke="#ec4899" stroke-width="2" marker-end="url(#arr-green)"/>
+    <path class="flow-arrow-fast" d="M 995 189 L 1045 104" fill="none" stroke="#ec4899" stroke-width="1.5" marker-end="url(#arr-green)"/>
+    <path class="flow-arrow-fast" d="M 995 294 L 1045 104" fill="none" stroke="#ec4899" stroke-width="1.5" marker-end="url(#arr-green)"/>
+    <path class="flow-arrow-fast" d="M 995 394 L 1045 219" fill="none" stroke="#ec4899" stroke-width="1.5" marker-end="url(#arr-green)"/>
+    <path class="flow-arrow-fast" d="M 995 494 L 1045 219" fill="none" stroke="#ec4899" stroke-width="1.5" marker-end="url(#arr-green)"/>
+    <!-- Analysis JSON → 3D + 2D -->
+    <path class="flow-arrow" d="M 1120 138 L 1120 295" fill="none" stroke="#10b981" stroke-width="1.5" marker-end="url(#arr-green)"/>
+    <path class="flow-arrow-slow" d="M 1120 253 L 1120 400" fill="none" stroke="#10b981" stroke-width="1.5" marker-end="url(#arr-green)"/>
+    <!-- Training CSVs → AI Models (dashed offline path) -->
+    <path d="M 215 365 Q 700 165 805 285" fill="none" stroke="#3b82f650" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="460" y="195" fill="#64748b" font-size="10" font-family="Inter,sans-serif">offline training</text>
+    <!-- DB → Analysis -->
+    <path class="flow-arrow-slow" d="M 215 460 Q 900 600 1120 565" fill="none" stroke="#3b82f6" stroke-width="1.2" stroke-dasharray="6 4" marker-end="url(#arr-green)"/>
+    <!-- Auth → Infra -->
+    <path class="flow-arrow-slow" d="M 1195 80 L 1245 100" fill="none" stroke="#64748b" stroke-width="1.2" marker-end="url(#arr-gray)"/>
+
+    </g>
+  </svg>
+</div>
+    </div>
+  </div>
+</section>
+
+<section class="doc-section" id="s4">
+  <div class="sec-num">Section 04</div>
+  <h2>Animated Data Flow Diagram</h2>
+  <p>Data transformation journey from raw lat/lon to final AnalysisResponse. Click any step node to expand full I/O shapes, math, and code reference.</p>
+  <div class="diagram-container">
+    <div class="diagram-header"><h4>End-to-End Data Transformation</h4><span class="tag">Click any step to expand</span></div>
+    <div class="diagram-inner">
+<div id="df-wrap">
+  <h2>ECO-3D Data Flow — End-to-End Transformation Pipeline</h2>
+  <p class="sub">Click any step node to expand full transformation details · Animated packets show live data flow</p>
+
+  <div class="flow-wrap">
+  <svg id="flow" viewBox="0 0 1180 820">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+    </defs>
+
+    <!-- Step 0: User Input -->
+    <g class="step-node" data-step="0">
+      <rect class="nr" x="460" y="18" width="260" height="72" rx="12" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.8"/>
+      <text x="590" y="46" fill="#93c5fd" font-size="14" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">User Input</text>
+      <text x="590" y="64" fill="#60a5fa80" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">lat/lon click on Leaflet map</text>
+      <text x="590" y="80" fill="#3b82f650" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">{ plot_id, lat, lon, polygon? }</text>
+    </g>
+
+    <!-- Arrow down -->
+    <line x1="590" y1="90" x2="590" y2="130" stroke="#3b82f6" stroke-width="2" marker-end="url(#arr)"/>
+    <path class="packet-path" fill="none" stroke="#93c5fd" stroke-width="3" stroke-dasharray="8 392" stroke-linecap="round" d="M 590 90 L 590 130"/>
+
+    <!-- Step 1: Satellite Fetch + Segmentation -->
+    <g class="step-node" data-step="1">
+      <rect class="nr" x="20" y="130" width="280" height="80" rx="12" fill="#1f1535" stroke="#8b5cf6" stroke-width="1.8"/>
+      <text x="160" y="157" fill="#c4b5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Layer 1A: DeepLabV3</text>
+      <text x="160" y="173" fill="#8b5cf680" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Satellite Tile → Segmentation</text>
+      <text x="160" y="189" fill="#8b5cf650" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">224×224 RGB → {veg, water, urban, road, bare}</text>
+    </g>
+
+    <!-- Step 2: YOLOv8 Detection -->
+    <g class="step-node" data-step="2">
+      <rect class="nr" x="340" y="130" width="260" height="80" rx="12" fill="#1f1535" stroke="#8b5cf6" stroke-width="1.8"/>
+      <text x="470" y="157" fill="#c4b5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Layer 1B: YOLOv8n</text>
+      <text x="470" y="173" fill="#8b5cf680" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Tree Detection</text>
+      <text x="470" y="189" fill="#8b5cf650" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">tile → TreeCoordinate[] (lat/lon/conf)</text>
+    </g>
+
+    <!-- Step 3: Real Env Data -->
+    <g class="step-node" data-step="3">
+      <rect class="nr" x="635" y="130" width="270" height="80" rx="12" fill="#1f1535" stroke="#8b5cf6" stroke-width="1.8"/>
+      <text x="770" y="157" fill="#c4b5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Layer 2: Env Fetcher</text>
+      <text x="770" y="173" fill="#8b5cf680" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">7 Real API Calls (parallel)</text>
+      <text x="770" y="189" fill="#8b5cf650" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">elev, wind, rain, soil, NDVI, GloFAS, water</text>
+    </g>
+
+    <!-- Branch arrows from user input -->
+    <path fill="none" stroke="#8b5cf6" stroke-width="1.5" d="M 590 130 L 590 160 L 300 160 L 300 130" marker-end="url(#arr)"/>
+    <path fill="none" stroke="#8b5cf6" stroke-width="1.5" d="M 590 130 L 590 160 L 470 160 L 470 130" marker-end="url(#arr)"/>
+    <path fill="none" stroke="#8b5cf6" stroke-width="1.5" d="M 590 130 L 590 160 L 770 160 L 770 130" marker-end="url(#arr)"/>
+    <!-- packet animations on branches -->
+    <path class="packet-path" fill="none" stroke="#c4b5fd" stroke-width="3" stroke-dasharray="8 392" stroke-linecap="round" d="M 590 130 L 300 130"/>
+    <path class="packet-path-slow" fill="none" stroke="#c4b5fd" stroke-width="3" stroke-dasharray="8 392" stroke-linecap="round" d="M 590 130 L 470 130"/>
+    <path class="packet-path" fill="none" stroke="#c4b5fd" stroke-width="3" stroke-dasharray="8 392" stroke-linecap="round" d="M 590 130 L 770 130"/>
+
+    <!-- Merge arrows down to Step 4 -->
+    <line x1="160" y1="210" x2="160" y2="280" stroke="#8b5cf6" stroke-width="1.5"/>
+    <path fill="none" stroke="#8b5cf6" stroke-width="1.5" d="M 160 280 L 590 280" marker-end="url(#arr)"/>
+    <line x1="470" y1="210" x2="470" y2="280" stroke="#8b5cf6" stroke-width="1.5"/>
+    <path fill="none" stroke="#8b5cf6" stroke-width="1.5" d="M 470 280 L 590 280" marker-end="url(#arr)"/>
+    <line x1="770" y1="210" x2="770" y2="280" stroke="#8b5cf6" stroke-width="1.5"/>
+    <path fill="none" stroke="#8b5cf6" stroke-width="1.5" d="M 770 280 L 590 280" marker-end="url(#arr)"/>
+    <text x="590" y="270" fill="#64748b" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">asyncio.gather() — all complete</text>
+
+    <!-- Step 4: Feature Assembly -->
+    <g class="step-node" data-step="4">
+      <rect class="nr" x="430" y="285" width="320" height="76" rx="12" fill="#1a2035" stroke="#6366f1" stroke-width="1.8"/>
+      <text x="590" y="312" fill="#a5b4fc" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Feature Assembly</text>
+      <text x="590" y="328" fill="#6366f180" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Normalize + encode 6 features for each model</text>
+      <text x="590" y="344" fill="#6366f160" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">StandardScaler · SOIL_ENCODING dict · NOAA sun formula</text>
+    </g>
+
+    <!-- Arrow to Step 5a and 5b -->
+    <line x1="590" y1="361" x2="590" y2="400" stroke="#6366f1" stroke-width="2" marker-end="url(#arr)"/>
+    <path class="packet-path" fill="none" stroke="#a5b4fc" stroke-width="3" stroke-dasharray="8 392" stroke-linecap="round" d="M 590 361 L 590 400"/>
+
+    <!-- Step 5a: XGBoost Flood -->
+    <g class="step-node" data-step="5">
+      <rect class="nr" x="300" y="405" width="270" height="80" rx="12" fill="#2d1030" stroke="#ec4899" stroke-width="1.8"/>
+      <text x="435" y="432" fill="#f9a8d4" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Layer 3: XGBoost</text>
+      <text x="435" y="448" fill="#ec489980" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Flood Risk Regression</text>
+      <text x="435" y="464" fill="#ec489960" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">[elev,slope,ndvi,rain,soil,dist] → P(flood)</text>
+    </g>
+
+    <!-- Step 5b: Physics Flood -->
+    <g class="step-node" data-step="6">
+      <rect class="nr" x="610" y="405" width="270" height="80" rx="12" fill="#2d1030" stroke="#ec4899" stroke-width="1.8"/>
+      <text x="745" y="432" fill="#f9a8d4" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Physics Flood Model</text>
+      <text x="745" y="448" fill="#ec489980" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">compute_flood_risk() formula</text>
+      <text x="745" y="464" fill="#ec489960" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">0.40×elev_r + 0.18×slope_r + ... + GloFAS</text>
+    </g>
+
+    <!-- Branch to 5a/5b -->
+    <path fill="none" stroke="#ec4899" stroke-width="1.5" d="M 590 400 L 590 430 L 570 430 L 435 430" marker-end="url(#arr)"/>
+    <path fill="none" stroke="#ec489960" stroke-width="1.5" stroke-dasharray="6 3" d="M 590 400 L 590 430 L 610 430 L 745 430" marker-end="url(#arr)"/>
+    <text x="590" y="422" fill="#ec489960" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">AI model / physics fallback</text>
+
+    <!-- Merge to Step 6: MLP -->
+    <line x1="435" y1="485" x2="435" y2="530" stroke="#ec4899" stroke-width="1.5"/>
+    <path fill="none" stroke="#ec4899" stroke-width="1.5" d="M 435 530 L 590 530" marker-end="url(#arr)"/>
+    <path fill="none" stroke="#ec4899" stroke-width="1.2" stroke-dasharray="5 3" d="M 745 485 L 745 530 L 590 530" marker-end="url(#arr)"/>
+
+    <!-- Step 6: MLP Buildability -->
+    <g class="step-node" data-step="7">
+      <rect class="nr" x="430" y="535" width="320" height="80" rx="12" fill="#2d1030" stroke="#ec4899" stroke-width="1.8"/>
+      <text x="590" y="562" fill="#f9a8d4" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Layer 4: MLP Buildability</text>
+      <text x="590" y="578" fill="#ec489980" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">[flood_p, slope, soil_stab, veg, wind, sun] → score</text>
+      <text x="590" y="594" fill="#ec489960" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">StandardScaler → 64→32→16 ReLU → score [0,100]</text>
+    </g>
+
+    <line x1="590" y1="615" x2="590" y2="650" stroke="#ec4899" stroke-width="2" marker-end="url(#arr)"/>
+    <path class="packet-path-slow" fill="none" stroke="#f9a8d4" stroke-width="3" stroke-dasharray="8 392" stroke-linecap="round" d="M 590 615 L 590 650"/>
+
+    <!-- Step 7: Status Classification -->
+    <g class="step-node" data-step="8">
+      <rect class="nr" x="430" y="655" width="320" height="80" rx="12" fill="#0e2018" stroke="#10b981" stroke-width="1.8"/>
+      <text x="590" y="682" fill="#6ee7b7" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Status Classification</text>
+      <text x="590" y="698" fill="#10b98180" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">score → EXCELLENT / GOOD / FAIR / POOR</text>
+      <text x="590" y="714" fill="#10b98160" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">≥80 EXCELLENT · ≥60 GOOD · ≥40 FAIR · &lt;40 POOR</text>
+    </g>
+
+    <line x1="590" y1="735" x2="590" y2="770" stroke="#10b981" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- Final Output -->
+    <g class="step-node" data-step="9">
+      <rect class="nr" x="400" y="775" width="380" height="32" rx="10" fill="#10b98120" stroke="#10b981" stroke-width="1.8"/>
+      <text x="590" y="796" fill="#6ee7b7" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">AnalysisResponse JSON → Frontend</text>
+    </g>
+
+    <!-- Side: Floor Plan Branch (right side) -->
+    <!-- Branch from Step 6 output → Floor Plan -->
+    <path fill="none" stroke="#8b5cf630" stroke-width="1.5" stroke-dasharray="5 3" d="M 750 615 L 920 615 L 920 400"/>
+    <g class="step-node" data-step="10">
+      <rect class="nr" x="880" y="310" width="270" height="80" rx="12" fill="#1f1535" stroke="#8b5cf6" stroke-width="1.5"/>
+      <text x="1015" y="340" fill="#c4b5fd" font-size="13" font-family="Inter,sans-serif" text-anchor="middle" font-weight="600">Layer 5: GA Optimizer</text>
+      <text x="1015" y="356" fill="#8b5cf680" font-size="11" font-family="Inter,sans-serif" text-anchor="middle">Genetic floor plan generation</text>
+      <text x="1015" y="372" fill="#8b5cf650" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">pop=60, gen=80 → rooms[], walls[]</text>
+    </g>
+    <text x="960" y="408" fill="#64748b" font-size="10" font-family="Inter,sans-serif" text-anchor="middle">triggered by /generate-floorplan</text>
+
+    <!-- Step numbers circles -->
+    <circle cx="590" cy="40" r="11" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.2"/>
+    <text x="590" y="44" fill="#93c5fd" font-size="10" font-family="Inter,sans-serif" text-anchor="middle" dominant-baseline="central">0</text>
+    <circle cx="36" cy="147" r="11" fill="#1f1535" stroke="#8b5cf6" stroke-width="1.2"/>
+    <text x="36" y="151" fill="#c4b5fd" font-size="10" font-family="Inter,sans-serif" text-anchor="middle" dominant-baseline="central">1</text>
+    <circle cx="356" cy="147" r="11" fill="#1f1535" stroke="#8b5cf6" stroke-width="1.2"/>
+    <text x="356" y="151" fill="#c4b5fd" font-size="10" font-family="Inter,sans-serif" text-anchor="middle" dominant-baseline="central">2</text>
+    <circle cx="651" cy="147" r="11" fill="#1f1535" stroke="#8b5cf6" stroke-width="1.2"/>
+    <text x="651" y="151" fill="#c4b5fd" font-size="10" font-family="Inter,sans-serif" text-anchor="middle" dominant-baseline="central">3</text>
+    <circle cx="446" cy="302" r="11" fill="#1a2035" stroke="#6366f1" stroke-width="1.2"/>
+    <text x="446" y="306" fill="#a5b4fc" font-size="10" font-family="Inter,sans-serif" text-anchor="middle" dominant-baseline="central">4</text>
+    <circle cx="316" cy="422" r="11" fill="#2d1030" stroke="#ec4899" stroke-width="1.2"/>
+    <text x="316" y="426" fill="#f9a8d4" font-size="10" font-family="Inter,sans-serif" text-anchor="middle" dominant-baseline="central">5</text>
+    <circle cx="626" cy="422" r="11" fill="#2d1030" stroke="#ec4899" stroke-width="1.2"/>
+    <text x="626" y="426" fill="#f9a8d4" font-size="10" font-family="Inter,sans-serif" text-anchor="middle" dominant-baseline="central">5b</text>
+    <circle cx="446" cy="552" r="11" fill="#2d1030" stroke="#ec4899" stroke-width="1.2"/>
+    <text x="446" y="556" fill="#f9a8d4" font-size="10" font-family="Inter,sans-serif" text-anchor="middle" dominant-baseline="central">6</text>
+    <circle cx="446" cy="672" r="11" fill="#0e2018" stroke="#10b981" stroke-width="1.2"/>
+    <text x="446" y="676" fill="#6ee7b7" font-size="10" font-family="Inter,sans-serif" text-anchor="middle" dominant-baseline="central">7</text>
+  </svg>
+  </div>
+</div>
+
+<div id="overlay" onclick="closeCard()"></div>
+<div id="detail-card">
+  <button class="close-btn" onclick="closeCard()">✕</button>
+  <h3 id="card-title">Step Details</h3>
+  <div id="card-body"></div>
+</div>
+    </div>
+  </div>
+</section>
+
+<section class="doc-section" id="s5">
+  <div class="sec-num">Section 05</div>
+  <h2>Class &amp; Module Diagram (UML)</h2>
+  <p>All major classes with attributes, methods, and relationships. Drag nodes to rearrange. Click any card to open the full member table.</p>
+  <div class="diagram-container">
+    <div class="diagram-header"><h4>UML Class Structure</h4><span class="tag">Drag · Click for members</span></div>
+    <div class="diagram-inner" style="min-height:840px;">
+<div id="stage">
+  <svg id="arrows"></svg>
+  <div id="instructions">Drag to rearrange · Click any class to open member sidebar</div>
+  <div id="sidebar">
+    <button class="close-btn" onclick="closeSidebar()">✕</button>
+    <h3 id="sb-title">Class Details</h3>
+    <div id="sb-body"></div>
+  </div>
+</div>
+    </div>
+  </div>
+  <h3>Class Documentation</h3>
+  <h4>GeneticFloorPlanOptimizer</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th>Returns</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>optimize(plot_id, house_type, …)</td><td>Dict</td><td>Full GA execution — rooms/walls/windows/logs</td></tr>
+      <tr><td>_fitness(chrom, constraints, …)</td><td>float</td><td>solar + ventilation − tree_penalty − slope_penalty</td></tr>
+      <tr><td>_crossover(p1, p2)</td><td>Chromosome</td><td>Single-point crossover on room list</td></tr>
+      <tr><td>_mutate(chrom)</td><td>Chromosome</td><td>Shift/rotate/resize at mutation_rate probability</td></tr>
+    </tbody>
+  </table></div>
+  <h4>AnalysisRecord (ORM)</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Type</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>plot_id</td><td>str(64) INDEX</td><td>Soft FK, e.g. PLOT8524X76936</td></tr>
+      <tr><td>segmentation_mask</td><td>JSON</td><td>{veg, water, urban, road, bare} fractions</td></tr>
+      <tr><td>flood_probability</td><td>Float</td><td>XGBoost prediction [0, 1]</td></tr>
+      <tr><td>buildability_score</td><td>Float</td><td>MLP prediction [0, 100]</td></tr>
+      <tr><td>raw_features</td><td>JSON</td><td>Full env feature dict from all 7 APIs</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="doc-section" id="s6">
+  <div class="sec-num">Section 06</div>
+  <h2>Animated Sequence Diagram</h2>
+  <p>Runtime interaction for the primary use case — full site analysis. Use Play / Step to walk through each message. Active message details appear below the diagram.</p>
+  <div class="diagram-container">
+    <div class="diagram-header"><h4>Primary Use Case — Full Analysis Runtime Sequence</h4><span class="tag">Play · Pause · Step · Speed</span></div>
+    <div class="diagram-inner">
+<div id="seq-wrap">
+  <h2>ECO-3D Runtime Sequence — Primary Use Case (Full Analysis)</h2>
+  <p class="sub">Play/Pause/Step through the request lifecycle · Active messages highlighted · Speed control</p>
+
+  <div id="controls">
+    <button class="ctrl-btn" id="btn-play" onclick="togglePlay()">▶ Play</button>
+    <button class="ctrl-btn" onclick="stepForward()">→ Step</button>
+    <button class="ctrl-btn" onclick="stepBack()">← Back</button>
+    <button class="ctrl-btn" onclick="resetSeq()">↺ Reset</button>
+    <span id="speed-label">Speed</span>
+    <input type="range" id="speed" min="300" max="2000" value="900" step="100" oninput="updateSpeed(this.value)">
+    <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+    <span id="step-indicator">Step 0 / 0</span>
+  </div>
+
+  <div id="seq-canvas">
+    <svg id="seq" viewBox="0 0 1160 900" style="width:100%;min-width:800px">
+    </svg>
+  </div>
+
+  <!-- Message details panel -->
+  <div id="msg-panel" style="margin-top:14px;background:#1e293b;border:1px solid #334155;border-radius:10px;padding:14px;min-height:60px">
+    <div style="font-size:11px;color:#475569;margin-bottom:6px">ACTIVE MESSAGE</div>
+    <div id="msg-detail" style="font-size:13px;color:#cbd5e1">Press Play or Step to begin.</div>
+  </div>
+</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ TECHNOLOGY SECTIONS ════════════════════════════════════════════════ -->
+
+<section class="doc-section" id="s7-dlv3">
+  <div class="sec-num">Section 07.1</div>
+  <h2>DeepLabV3 ResNet-50 — Semantic Segmentation</h2>
+  <h3>Conceptual Intuition</h3>
+  <p>DeepLabV3 labels every pixel with a semantic class. Where a classification network asks "what is in this image?", DeepLabV3 asks "what category does each pixel belong to?" — effectively colouring a painting where every colour has meaning: green = vegetation, blue = water, gray = urban. Chosen because it's pretrained on Pascal VOC (21 classes that map directly to ECO-3D's land-cover categories) and runs CPU-feasibly at 224×224.</p>
+  <h3>Mathematical Foundation</h3>
+  <div class="eq-block">ResNet residual connection:  H(x) = F(x) + x
+
+ASPP dilated convolution (rate r):
+  (F ★ w)[i,j] = Σₘ Σₙ F[i + r·m, j + r·n] · w[m,n]
+
+Classification + fractions:
+  ŷᵢⱼ = argmax_c L[i,j,c]      (L = logit tensor ℝ^{H×W×21})
+  fraction_c = count(mask == c) / (H × W)
+
+ImageNet normalisation:
+  x_norm = (x − μ) / σ
+  μ = [0.485, 0.456, 0.406],  σ = [0.229, 0.224, 0.225]</div>
+  <h3>Input → Output</h3>
+  <pre>Input:   lat, lon → Mapbox 224×224 RGB [H=224,W=224,C=3, uint8]
+  ↓ T.ToTensor() + T.Normalize(μ,σ) → [3,224,224] float32
+  ↓ DeepLabV3 ResNet-50 + ASPP (rates 1,6,12,18) → logits [1,21,224,224]
+  ↓ argmax → class map [1,224,224]
+  ↓ remap: vegetation={9,4,17}, water={21,60}, urban={0,1,2,25}, road={6,11}
+Output:  {vegetation:0.43, water:0.06, urban:0.18, road:0.05, bare_soil:0.28}</pre>
+  <h3>Worked Numerical Example</h3>
+  <div class="eq-block">Pixel [0,0]: R=120, G=180, B=90
+After normalise: [0.480, 1.121, -0.235]
+logit[vegetation]=2.3, logit[road]=-0.8
+P(veg) = exp(2.3)/(exp(2.3)+exp(-0.8)) = 9.97/10.42 = 0.957 → vegetation ✓</div>
+  <h3>Hyperparameters</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Hyperparameter</th><th>Value Used</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>Backbone</td><td>ResNet-50, DEFAULT weights</td><td>Pretrained Pascal VOC features</td></tr>
+      <tr><td>Input size</td><td>224 × 224</td><td>Balance of detail vs. CPU speed</td></tr>
+      <tr><td>ASPP rates</td><td>1, 6, 12, 18</td><td>Multi-scale contextual receptive fields</td></tr>
+      <tr><td>Output stride</td><td>8</td><td>High-resolution prediction map</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="doc-section" id="s7-yolo">
+  <div class="sec-num">Section 07.2</div>
+  <h2>YOLOv8n — Tree Detection</h2>
+  <h3>Mathematical Foundation</h3>
+  <div class="eq-block">YOLO detection head per grid cell (i,j):
+  bx = σ(tx) + cx,  by = σ(ty) + cy      (centre, sigmoid-normalised)
+  bw = pw × e^{tw}, bh = ph × e^{th}      (width/height, anchor-relative)
+
+Pixel → geographic coordinate (Web Mercator):
+  meters_per_pixel = 156543.03392 × cos(lat_rad) / 2^{zoom}
+  Δlat = dy_metres / 111320.0
+  Δlon = dx_metres / (111320.0 × cos(lat_rad))</div>
+  <h3>Worked Numerical Example</h3>
+  <div class="eq-block">Tile: 224×224, lat=8.5241, lon=76.9366, zoom=15
+Box centre: (115, 75). Tile centre: (112, 112).
+meters_per_pixel = 156543.03 × cos(8.52°) / 32768 = 4.726 m/px
+dx_m = (115-112) × 4.726 = 14.18 m
+dy_m = (112-75)  × 4.726 = 174.86 m
+Δlon = 14.18  / (111320 × 0.989) = 0.0001287°
+Δlat = 174.86 / 111320           = 0.0015709°
+→ tree at (8.5257, 76.9367) ✓</div>
+</section>
+
+<section class="doc-section" id="s7-xgb">
+  <div class="sec-num">Section 07.3</div>
+  <h2>XGBoost — Flood Risk Regression</h2>
+  <h3>Mathematical Foundation</h3>
+  <div class="eq-block">Model:  F(x) = Σ_{k=1}^{200} f_k(x)           (sum of 200 regression trees)
+
+Objective:
+  L = Σᵢ (ŷᵢ − yᵢ)² + Σ_k Ω(f_k)
+  Ω(f) = γ·T + ½·λ·‖w‖²                   (T=leaf count, w=leaf weights)
+
+Gradient boosting update at step t:
+  L̃^{(t)} ≈ Σᵢ [gᵢ·fₜ(xᵢ) + ½·hᵢ·fₜ(xᵢ)²] + Ω(fₜ)
+  Optimal leaf weight: w*_j = −G_j / (H_j + λ)
+
+Preprocessing: x' = (x − μ_train) / σ_train   (StandardScaler)</div>
+  <h3>Hyperparameters</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Hyperparameter</th><th>Value</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>n_estimators</td><td>200</td><td>More trees → lower bias</td></tr>
+      <tr><td>max_depth</td><td>6</td><td>Captures feature interactions</td></tr>
+      <tr><td>learning_rate</td><td>0.05</td><td>Stable convergence</td></tr>
+      <tr><td>subsample / colsample</td><td>0.8 / 0.8</td><td>Prevents overfitting</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="doc-section" id="s7-mlp">
+  <div class="sec-num">Section 07.4</div>
+  <h2>MLP Neural Network — Buildability Score</h2>
+  <h3>Mathematical Foundation</h3>
+  <div class="eq-block">Forward pass:
+  z¹ = ReLU(W¹·x + b¹)    x ∈ ℝ^6  → z¹ ∈ ℝ^{64}
+  z² = ReLU(W²·z¹ + b²)             → z² ∈ ℝ^{32}
+  z³ = ReLU(W³·z² + b³)             → z³ ∈ ℝ^{16}
+  ŷ  = W⁴·z³ + b⁴,  clip(ŷ, 0, 100)
+
+Adam optimiser:
+  m_t = β₁·m_{t-1} + (1−β₁)·∇L
+  v_t = β₂·v_{t-1} + (1−β₂)·(∇L)²
+  θ_{t+1} = θ_t − α · m̂_t / (√v̂_t + ε)
+
+Backprop through ReLU:  ∂L/∂z = ∂L/∂a ⊙ 𝟙[z > 0]</div>
+</section>
+
+<section class="doc-section" id="s7-ga">
+  <div class="sec-num">Section 07.5</div>
+  <h2>Genetic Algorithm — Floor Plan Optimizer</h2>
+  <h3>Mathematical Foundation</h3>
+  <div class="eq-block">Fitness function (higher = better layout):
+  fitness(C) = f_solar + f_ventilation − f_tree_penalty − f_slope_penalty + 10
+
+  f_solar      = 30 × (cos(θ)×0.5 + 0.5) × (sun_h / 12)
+  f_ventilation = 20 × min(2, width/height) / 2
+  f_tree_penalty = Σ_tree Σ_room max(0, 40×(r_root−dist)/r_root)
+  f_slope_penalty = (slope/30)×(area/300)×15
+
+Crossover (single-point):
+  child.rooms = p1.rooms[:split] + p2.rooms[split:]
+  child.θ = (p1.θ + p2.θ) / 2
+
+Mutation (P = 0.15):
+  room.x += U(−3,3),  room.y += U(−3,3)
+  θ += U(−30,30) mod 360</div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Hyperparameter</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>population_size</td><td>60</td></tr>
+      <tr><td>generations</td><td>80</td></tr>
+      <tr><td>mutation_rate</td><td>0.15</td></tr>
+      <tr><td>elitism</td><td>5</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="doc-section" id="s7-env">
+  <div class="sec-num">Section 07.6</div>
+  <h2>Environmental Data APIs</h2>
+  <h3>NOAA Sun Hours Formula</h3>
+  <div class="eq-block">δ = 23.45° × sin(360/365 × (DOY − 81))       (solar declination)
+cos(ω) = −tan(φ) × tan(δ)                     (hour angle at sunset)
+sun_hours = 2ω / 15                             (φ = latitude in degrees)</div>
+  <h3>Physics Flood Risk (Fallback)</h3>
+  <div class="eq-block">elev_r  = max(0, 1 − elevation/80)
+slope_r = max(0, 1 − slope/12)
+rain_r  = clip((rainfall−300)/2700, 0, 1)
+risk    = 0.40·elev_r + 0.18·slope_r + 0.14·rain_r + 0.12·clay + 0.10·water_r
+if GloFAS available:  risk = 0.70·topo + 0.30·glofas_index</div>
+  <h3>SoilGrids v2 Unit Conversions</h3>
+  <div class="eq-block">clay_pct     = clay_raw  / 10.0    (SoilGrids stores g/kg × 10)
+soil_pH      = phh2o_raw / 10.0    (stored as pH × 10)
+bulk_density = bdod_raw  / 100.0   (cg/cm³ → g/cm³)</div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>API</th><th>Data</th><th>Key Required</th><th>Fallback</th></tr></thead>
+    <tbody>
+      <tr><td>Open-Elevation</td><td>Elevation (m), slope (°)</td><td>None</td><td>Seeded random</td></tr>
+      <tr><td>Open-Meteo Forecast</td><td>Wind speed/direction</td><td>None</td><td>Prevailing by lat band</td></tr>
+      <tr><td>Open-Meteo ERA5</td><td>30-year rainfall normals</td><td>None</td><td>Lat-band estimate</td></tr>
+      <tr><td>SoilGrids v2 (ISRIC)</td><td>clay/sand/silt/pH/OC/BD at 0-5cm</td><td>None</td><td>OpenLandMap → synthetic</td></tr>
+      <tr><td>NASA POWER</td><td>Solar radiation, NDVI proxy</td><td>None</td><td>Lat-band estimate</td></tr>
+      <tr><td>GloFAS (Open-Meteo)</td><td>90-day river discharge</td><td>None</td><td>Topo-only formula</td></tr>
+      <tr><td>OSM Overpass</td><td>Distance to water body</td><td>None</td><td>Seeded random</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="doc-section" id="s8">
+  <div class="sec-num">Section 08</div>
+  <h2>Complete Pipeline Walkthrough</h2>
+  <p>User clicks a plot on the Leaflet map at <code>/map</code>. <code>setSelectedLocation(8.5241, 76.9366)</code> fires, Zustand derives <code>currentPlotId = "PLOT8524X76936"</code>. <code>POST /analyze-plot</code> dispatches to FastAPI. CORS middleware passes the cross-origin request. <code>run_full_analysis()</code> issues <code>asyncio.gather()</code> for three concurrent branches.</p>
+  <p><strong>Branch 1 — DeepLabV3 (~800ms CPU):</strong> 224×224 Mapbox tile fetched → ToTensor + Normalize → ResNet-50 backbone → ASPP → argmax → land fractions: <code>{veg:0.43, water:0.06, urban:0.18, road:0.05, bare:0.28}</code>.</p>
+  <p><strong>Branch 2 — YOLOv8n (~120ms CPU):</strong> Same tile → 4 tree detections above 0.30 confidence → Mercator pixel→geo conversion → <code>List[TreeCoordinate]</code>.</p>
+  <p><strong>Branch 3 — Real Env Data (~6–10s, network bottleneck):</strong> 7 HTTP requests simultaneously: elevation=42m slope=3.1° · wind=4.2m/s NE · rainfall=2800mm/yr · SoilGrids: clay=38% → "Clay Loam" buildable=True · NDVI_proxy=0.61 · GloFAS: glofas_index=0.12 · water distance=340m · sun_hours=13.3h.</p>
+  <p><strong>XGBoost:</strong> <code>[42, 3.1, 0.61, 2800, 2, 340]</code> standardised → 200 trees → <code>flood_probability = 0.2341</code>.</p>
+  <p><strong>MLP:</strong> <code>[0.2341, 3.1, 0.62, 0.61, 0.28, 13.3]</code> → 64→32→16→1 ReLU → <code>buildability_score = 74.2</code> → <code>status = "GOOD"</code>.</p>
+  <p>DB persisted, HTTP 200 JSON returned. Axios receives (~8–12s total). Zustand updates. UI renders at <code>/analysis/[id]</code>. User triggers floor plan → GA runs 80 generations → eco_score=82.3, orientation=15°.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Step</th><th>Latency</th><th>Bottleneck?</th></tr></thead>
+    <tbody>
+      <tr><td>Mapbox tile fetch</td><td>~200ms</td><td>No</td></tr>
+      <tr><td>DeepLabV3 inference (CPU)</td><td>~800ms</td><td>No</td></tr>
+      <tr><td>YOLOv8n inference (CPU)</td><td>~120ms</td><td>No</td></tr>
+      <tr><td>7 external API calls (parallel)</td><td>6–10s</td><td><strong>YES</strong></td></tr>
+      <tr><td>XGBoost + MLP prediction</td><td>~3ms</td><td>No</td></tr>
+      <tr><td>GA optimisation (80 gen)</td><td>~120ms</td><td>No</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="doc-section" id="s9">
+  <div class="sec-num">Section 09</div>
+  <h2>Commands to Run the Project</h2>
+<pre># 1. Clone
+git clone https://github.com/hxrrrrri/ECO-3D.git && cd ECO-3D
+
+# 2. Backend setup
+cd backend && python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.dev.txt
+
+# 3. Config
+cp ../.env.example .env
+# Edit: MAPBOX_TOKEN=pk.xxxxx  (optional)
+echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > ../frontend/.env.local
+
+# 4. Run backend
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# 5. Train models (optional — auto-trains on first request otherwise)
+python ../scripts/train_flood_model.py
+python ../scripts/train_buildability_model.py
+python ../scripts/evaluate_models.py
+
+# 6. Frontend
+cd ../frontend && npm install && npm run dev  # → localhost:3000
+
+# 7. Health check
+curl http://localhost:8000/health
+
+# 8. Test analysis endpoint
+curl -X POST http://localhost:8000/analyze-plot   -H "Content-Type: application/json"   -d '{"plot_id":"TEST001","lat":8.5241,"lon":76.9366}'
+
+# 9. Test floor plan endpoint (GA mode)
+curl -X POST http://localhost:8000/generate-floorplan   -H "Content-Type: application/json"   -d '{"plot_id":"TEST001","plot_area_sqm":280,"house_type":"Eco-Villa (Single Story)","generation_method":"ga"}'</pre>
+</section>
+
+<section class="doc-section" id="s10">
+  <div class="sec-num">Section 10</div>
+  <h2>Key Design Decisions &amp; Trade-offs</h2>
+  <div class="decision-block">
+    <div class="dt">Crash-proof pipeline with synthetic fallbacks at every layer</div>
+    <p><strong>Chosen:</strong> Every AI layer wraps inference in try/except with deterministic fallbacks. Endpoint never returns 500.</p>
+    <p><strong>Trade-offs:</strong> Users may receive synthetic data silently. The <code>soil_source</code> field indicates data provenance.</p>
+    <p><strong>Revisit when:</strong> SLAs require guaranteed data freshness.</p>
+  </div>
+  <div class="decision-block">
+    <div class="dt">XGBoost for flood risk (not deep learning)</div>
+    <p><strong>Chosen:</strong> 6 tabular features don't benefit from deep learning. XGBoost achieves R²≈0.94, ~2ms inference, no GPU dependency.</p>
+    <p><strong>Alternatives rejected:</strong> Random Forest (lower accuracy), linear regression (can't capture threshold effects), deep MLP (XGBoost won by 3 R² points in testing).</p>
+    <p><strong>Known failure mode:</strong> Synthetic training data doesn't capture regional geological complexity — may underestimate risk in deltaic zones.</p>
+  </div>
+  <div class="decision-block">
+    <div class="dt">Genetic Algorithm optional, deterministic default</div>
+    <p><strong>Chosen:</strong> GA only activated by <code>generation_method="ga"</code>. Default deterministic layout is faster and reproducible.</p>
+    <p><strong>Why GA for optional mode:</strong> 4-objective optimisation (solar/ventilation/trees/slope) in continuous geometry space — GA handles trade-offs without gradient computation.</p>
+    <p><strong>Trade-offs:</strong> Non-deterministic; <code>ga_seed</code> parameter added. ~120ms vs ~5ms for deterministic.</p>
+  </div>
+  <div class="decision-block">
+    <div class="dt">asyncio.gather() for concurrent API calls</div>
+    <p><strong>Chosen:</strong> All 7 API calls issued simultaneously → latency = slowest single call (~10s) vs ~35s sequential.</p>
+    <p><strong>Trade-offs:</strong> Rate limits on SoilGrids/Overpass may cause 429 errors, caught by synthetic fallback.</p>
+  </div>
+  <div class="decision-block">
+    <div class="dt">SQLite default / PostgreSQL production</div>
+    <p><strong>Chosen:</strong> Zero-config developer experience. <code>DATABASE_URL</code> env var switches to PostgreSQL without code changes. ORM handles UUID type differences via <code>_IS_SQLITE</code> flag.</p>
+    <p><strong>Revisit when:</strong> First 100-user production deployment — SQLite has no concurrent write support.</p>
+  </div>
+  <div class="decision-block">
+    <div class="dt">React Three Fiber + procedural textures (no image files)</div>
+    <p><strong>Chosen:</strong> 2,602 LOC in model3d page. Brick/concrete/wood textures baked via FBM noise onto CanvasTexture. NOOP_RAYCAST pattern fixes performance regression.</p>
+    <p><strong>Trade-offs:</strong> ~600KB Three.js bundle. ThreeErrorBoundary catches WebGL context loss for graceful recovery on mobile.</p>
+  </div>
+</section>
+
+</main>
+
+<!-- ═══ ALL DIAGRAM SCRIPTS — deferred, run after full DOM is ready ═══════ -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+
+// ── Architecture Diagram ─────────────────────────────────────────────────────
+
+const tooltip = document.getElementById('tooltip');
+const panGroup = document.getElementById('pan-group');
+let scale = 1, tx = 0, ty = 0;
+let isDragging = false, startX, startY, startTx, startTy;
+
+function applyTransform() {
+  panGroup.setAttribute('transform', `translate(${tx},${ty}) scale(${scale})`);
+}
+function zoomIn() { scale = Math.min(scale * 1.25, 3); applyTransform(); }
+function zoomOut() { scale = Math.max(scale / 1.25, 0.35); applyTransform(); }
+function resetZoom() { scale = 1; tx = 0; ty = 0; applyTransform(); }
+
+document.getElementById('canvas-wrap').addEventListener('wheel', e => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 0.88 : 1.12;
+  scale = Math.max(0.35, Math.min(3, scale * delta));
+  applyTransform();
+}, { passive: false });
+
+document.getElementById('canvas-wrap').addEventListener('mousedown', e => {
+  isDragging = true; startX = e.clientX; startY = e.clientY; startTx = tx; startTy = ty;
+  document.getElementById('canvas-wrap').classList.add('dragging');
+});
+document.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  tx = startTx + e.clientX - startX;
+  ty = startTy + e.clientY - startY;
+  applyTransform();
+});
+document.addEventListener('mouseup', () => {
+  isDragging = false;
+  document.getElementById('canvas-wrap').classList.remove('dragging');
+});
+
+document.querySelectorAll('.node-group').forEach(g => {
+  g.addEventListener('mouseenter', e => {
+    const tip = g.dataset.tip || '';
+    const role = g.dataset.role || '';
+    const file = g.dataset.file || '';
+    const tech = g.dataset.tech || '';
+    tooltip.innerHTML = `<strong>${tip}</strong>${role}<br><span class="file">${file}</span><br><span class="tech">${tech}</span>`;
+    tooltip.style.opacity = '1';
+  });
+  g.addEventListener('mousemove', e => {
+    let x = e.clientX + 16, y = e.clientY - 10;
+    if (x + 240 > window.innerWidth) x = e.clientX - 250;
+    if (y + 120 > window.innerHeight) y = e.clientY - 120;
+    tooltip.style.left = x + 'px'; tooltip.style.top = y + 'px';
+  });
+  g.addEventListener('mouseleave', () => { tooltip.style.opacity = '0'; });
+});
+
+
+// ── Data Flow Diagram ────────────────────────────────────────────────────────
+
+const steps = [
+  {
+    title: "Step 0 — User Input",
+    input: "Mouse click on Leaflet map | any type | lat/lon float",
+    op: "Generate plot_id from coordinates: `PLOT{abs(lat*1000)}X{abs(lon*1000)}`",
+    output: "AnalyzePlotRequest | { plot_id: str, lat: float, lon: float, polygon?: [[lon,lat],…] }",
+    code: "frontend/store/useEco3DStore.ts → setSelectedLocation()",
+    eq: null
+  },
+  {
+    title: "Step 1 — DeepLabV3 Segmentation (Layer 1A)",
+    input: "lat, lon | scalar | e.g. 8.5241, 76.9366",
+    op: "Fetch 224×224 Mapbox satellite tile → ToTensor → Normalize(μ=[0.485,0.456,0.406], σ=[0.229,0.224,0.225]) → DeepLabV3 ResNet-50 → argmax over 21 Pascal VOC classes → map to {veg,water,urban,road,bare}",
+    output: "SegmentationResult | {vegetation:0.43, water:0.06, urban:0.18, road:0.05, bare_soil:0.28}",
+    code: "backend/ai/segmentation/model.py → run_segmentation(lat, lon)",
+    eq: "output[i,j] = argmax_c(logit[c,i,j])\nfraction_c = count(mask==c) / (H*W)"
+  },
+  {
+    title: "Step 2 — YOLOv8n Tree Detection (Layer 1B)",
+    input: "224×224 satellite tile (NumPy) | uint8 [0,255] HWC",
+    op: "Run YOLOv8n inference → filter boxes conf>0.3 → pixel_to_geo(): meters_per_pixel = 156543×cos(lat°)/(2^zoom) → lat_offset = dy_m/111320",
+    output: "List[TreeCoordinate] | [{lat:8.525, lon:76.937, conf:0.87, bbox:[x1,y1,x2,y2]}, …]",
+    code: "backend/ai/detection/model.py → run_tree_detection() → pixel_to_geo()",
+    eq: "meters_per_pixel = 156543.03 × cos(lat_rad) / 2^zoom\nΔlat = dy_m / 111320.0\nΔlon = dx_m / (111320.0 × cos(lat_rad))"
+  },
+  {
+    title: "Step 3 — Real Environmental Data (Layer 2)",
+    input: "lat, lon | scalar | e.g. 8.5241, 76.9366",
+    op: "7 async HTTP calls via asyncio.gather(): Open-Elevation (SRTM 30m), Open-Meteo (wind/rain), SoilGrids v2 (clay/sand/silt/pH/OC/BD), NASA POWER (NDVI proxy, solar), GloFAS (river discharge), OSM Overpass (water distance), NOAA formula (sun hours)",
+    output: "dict with 15+ features: elevation, slope, wind_ms, rainfall_mm, clay_pct, ndvi, sun_hours, glofas_flood_index, …",
+    code: "backend/services/real_env_data.py → fetch_all_real_data(lat, lon)",
+    eq: "sun_hours = 2 × arccos(-tan(lat) × tan(decl)) / 15\ndecl = 23.45 × sin(360/365 × (DOY - 81))°\nNDVI_proxy = FPAR × 0.72 + 0.05"
+  },
+  {
+    title: "Step 4 — Feature Assembly & Scaling",
+    input: "Raw env dict + segmentation + trees | float values",
+    op: "For flood model: encode soil_type as int via SOIL_ENCODING dict. For buildability: compute soil_stability = 1 - clay_fraction. Scale all inputs via pre-fitted StandardScaler: x' = (x - μ) / σ",
+    output: "X_flood: shape [1,6] float32 | X_build: shape [1,6] float32",
+    code: "backend/ai/flood/model.py → predict_flood_probability() | backend/ai/buildability/model.py",
+    eq: "x_scaled = (x - mean) / std\nsoil_stability = 1.0 - clay_fraction\nwind_exposure = min(1.0, wind_ms / 15.0)"
+  },
+  {
+    title: "Step 5 — XGBoost Flood Risk (Layer 3)",
+    input: "X: shape [1,6] | float32 | [elevation, slope, ndvi, rainfall_mm, soil_enc, dist_water]",
+    op: "XGBoost regression prediction with n_estimators=200, max_depth=6, lr=0.05. Each tree outputs leaf value; final = sum over all trees. Output clipped to [0,1].",
+    output: "flood_probability | float [0.0, 1.0] | e.g. 0.2341",
+    code: "backend/ai/flood/model.py → predict_flood_probability(features)",
+    eq: "F(x) = Σ_k f_k(x),  f_k ∈ regression trees\nL = Σ_i l(ŷ_i, y_i) + Σ_k Ω(f_k)\nΩ(f) = γT + ½λ||w||²"
+  },
+  {
+    title: "Step 5b — Physics Flood Model (Fallback)",
+    input: "elevation, slope, rainfall, clay_fraction, dist_water, glofas_index",
+    op: "Weighted linear physics formula combining normalized risk components. If GloFAS available: topo 70% + GloFAS 30%.",
+    output: "flood_probability | float [0.01, 0.97]",
+    code: "backend/services/real_env_data.py → compute_flood_risk()",
+    eq: "risk = 0.42×(1-elev/80) + 0.20×(1-slope/12)\n    + 0.16×(rain-300)/2700 + 0.13×clay\n    + 0.09×(1-dist/400)\nif GloFAS: final = 0.70×topo + 0.30×glofas_idx"
+  },
+  {
+    title: "Step 6 — MLP Buildability Score (Layer 4)",
+    input: "X: shape [1,6] | float32 | [flood_p, slope, soil_stab, veg, wind_exp, sun_h]",
+    op: "sklearn MLPRegressor: 64→32→16→1 with ReLU activations. StandardScaler applied before inference. Output clipped to [0,100].",
+    output: "buildability_score | float [0.0, 100.0] | e.g. 72.5",
+    code: "backend/ai/buildability/model.py → predict_buildability_score(features)",
+    eq: "z¹ = ReLU(W¹x + b¹)  [6→64]\nz² = ReLU(W²z¹ + b²) [64→32]\nz³ = ReLU(W³z² + b³) [32→16]\nŷ  = W⁴z³ + b⁴       [16→1]\nclip(ŷ, 0, 100)"
+  },
+  {
+    title: "Step 7 — Status Classification & Response",
+    input: "buildability_score: float, soil_buildable: bool",
+    op: "Threshold-based classification. Assemble AnalysisResponse with all 5 layers of data. Persist to DB (non-fatal). Return JSON.",
+    output: "AnalysisResponse | {plot_id, segmentation, tree_coordinates, environmental, flood_probability, buildability_score, status, score_references}",
+    code: "backend/services/analysis_pipeline.py → run_full_analysis()",
+    eq: "status = 'EXCELLENT' if score ≥ 80\n      = 'GOOD'      if score ≥ 60\n      = 'FAIR'      if score ≥ 40\n      = 'POOR'      if score ≥ 30\n      = 'NOT BUILDABLE' otherwise"
+  },
+  {
+    title: "Final — JSON Response → UI",
+    input: "HTTP 200 JSON | AnalysisResponse Pydantic model",
+    op: "Frontend axios receives response. Zustand store updated via setAnalysis(). Next.js router navigates to /analysis/[id] page. Data flows to 3D viewer and 2D floor plan.",
+    output: "Rendered UI: 3D model, 2D plan, environmental cards, score badges",
+    code: "frontend/lib/api.ts → analyzePlot() | frontend/store/useEco3DStore.ts",
+    eq: null
+  },
+  {
+    title: "Step 5 (Parallel Branch) — Genetic Algorithm Floor Plan",
+    input: "GenerateFloorPlanRequest | { plot_id, plot_area_sqm, house_type, constraints, generation_method }",
+    op: "Initialize population of 60 Chromosome objects. Each chromosome: rooms[], orientation_deg, offset_x/y. Run 80 generations of: evaluate fitness → sort → elitism(5) + crossover + mutation. Fitness = solar(30) + ventilation(20) + tree preservation(20) + slope safety(15) + sustainability(10).",
+    output: "FloorPlanResponse | { rooms[], walls[], doors[], windows[], eco_score, solar_score, orientation_deg }",
+    code: "backend/ai/floorplan/genetic_optimizer.py → GeneticFloorPlanOptimizer.optimize()",
+    eq: "fitness(c) = 30×solar + 20×ventilation\n           - tree_penalty - slope_penalty + 10\nsolar = cos(orientation_rad)×0.5+0.5 × (sun_h/12)\ntree_penalty = 40×max(0, r_root-dist)/r_root"
+  }
+];
+
+document.querySelectorAll('.step-node').forEach(node => {
+  node.addEventListener('click', () => {
+    const idx = parseInt(node.dataset.step);
+    const step = steps[idx];
+    if (!step) return;
+    document.getElementById('card-title').textContent = step.title;
+    document.getElementById('card-body').innerHTML = `
+      <div class="field"><div class="field-label">Input</div><div class="field-val">${step.input}</div></div>
+      <div class="field"><div class="field-label">Operation</div><div class="field-val">${step.op}</div></div>
+      <div class="field"><div class="field-label">Output</div><div class="field-val">${step.output}</div></div>
+      <div class="field"><div class="field-label">Code Reference</div><div class="field-val"><code>${step.code}</code></div></div>
+      ${step.eq ? `<div class="field"><div class="field-label">Key Equations</div><div class="field-val eq">${step.eq}</div></div>` : ''}
+    `;
+    document.getElementById('detail-card').style.display = 'block';
+    document.getElementById('overlay').style.display = 'block';
+  });
+});
+
+function closeCard() {
+  document.getElementById('detail-card').style.display = 'none';
+  document.getElementById('overlay').style.display = 'none';
+}
+
+
+// ── Class Diagram ────────────────────────────────────────────────────────────
+
+const classes = [
+  {
+    id: 'Chromosome', file: 'ai/floorplan/genetic_optimizer.py', color: '#ec4899', textColor: '#f9a8d4',
+    x: 30, y: 30, w: 230,
+    attrs: ['rooms: List[Dict]', 'orientation_deg: float', 'offset_x: float', 'offset_y: float', 'fitness: float'],
+    methods: ['clone() → Chromosome'],
+    fullAttrs: [
+      ['rooms', 'List[Dict]', '—', 'Room layouts [{id,type,x,y,w,h}]'],
+      ['orientation_deg', 'float', '0-360', 'Building rotation in degrees'],
+      ['offset_x, offset_y', 'float', '0-10', 'Plot footprint offset'],
+      ['fitness', 'float', '0.0', 'Calculated fitness score'],
+    ],
+    fullMethods: [
+      ['clone()', '→ Chromosome', 'Deep copy with room list copied'],
+    ]
+  },
+  {
+    id: 'GeneticFloorPlanOptimizer', file: 'ai/floorplan/genetic_optimizer.py', color: '#ec4899', textColor: '#f9a8d4',
+    x: 30, y: 280, w: 240,
+    attrs: ['population_size: int = 60', 'generations: int = 80', 'mutation_rate: float = 0.15', 'elitism: int = 5'],
+    methods: ['optimize(plot_id,house_type,…) → Dict', '_fitness(chrom,constraints,…) → float', '_crossover(p1,p2) → Chromosome', '_mutate(chrom) → Chromosome', '_generate_windows(…) → List', '_init_chromosome(…) → Chromosome'],
+    fullAttrs: [
+      ['population_size', 'int', '60', 'Number of chromosomes per generation'],
+      ['generations', 'int', '80', 'Iteration count'],
+      ['mutation_rate', 'float', '0.15', 'Probability of mutation per gene'],
+      ['elitism', 'int', '5', 'Top N preserved unchanged each gen'],
+    ],
+    fullMethods: [
+      ['optimize(…)', '→ Dict', 'Main GA loop, returns floor plan dict'],
+      ['_fitness(chrom,…)', '→ float', 'Multi-objective: solar+vent+trees+slope'],
+      ['_crossover(p1,p2)', '→ Chromosome', 'Single-point crossover on room list'],
+      ['_mutate(c)', '→ Chromosome', 'Shift/rotate/resize with mutation_rate'],
+    ]
+  },
+  {
+    id: 'EnvironmentalFeatureExtractor', file: 'ai/environmental/feature_extractor.py', color: '#f59e0b', textColor: '#fcd34d',
+    x: 310, y: 30, w: 255,
+    attrs: ['openweather_key: str'],
+    methods: ['_compute_ndvi_from_bands(red,nir) → float', '_estimate_ndvi_from_rgb(lat,lng) → float'],
+    fullAttrs: [
+      ['openweather_key', 'str', '""', 'Optional OpenWeather API key from env'],
+    ],
+    fullMethods: [
+      ['_compute_ndvi_from_bands()', '→ float', 'NDVI=(NIR-RED)/(NIR+RED) from multispectral'],
+      ['_estimate_ndvi_from_rgb()', '→ float', 'Proxy NDVI from RGB greenness ratio'],
+    ]
+  },
+  {
+    id: 'Settings (Config)', file: 'backend/config.py', color: '#64748b', textColor: '#94a3b8',
+    x: 310, y: 200, w: 255,
+    attrs: ['DATABASE_URL: str', 'WEIGHTS_DIR: str', 'SATELLITE_TILE_SIZE: int = 512', 'MAX_TILES_PER_REQUEST: int = 4', 'OPENWEATHER_API_KEY: str', 'MAPBOX_TOKEN: str', 'ENVIRONMENT: str = development'],
+    methods: [],
+    fullAttrs: [
+      ['DATABASE_URL', 'str', 'sqlite+aiosqlite://…', 'DB connection string'],
+      ['WEIGHTS_DIR', 'str', '../training/weights', 'ML model weights path'],
+      ['SATELLITE_TILE_SIZE', 'int', '512', 'Satellite tile pixel size'],
+      ['MAPBOX_TOKEN', 'str', '""', 'Optional Mapbox API token'],
+    ],
+    fullMethods: []
+  },
+  {
+    id: 'PlotRecord', file: 'backend/database/models.py', color: '#3b82f6', textColor: '#93c5fd',
+    x: 600, y: 30, w: 230,
+    attrs: ['id: UUID PK', 'plot_id: str(64) UNIQUE', 'lat: Float', 'lon: Float', 'polygon: JSON (GeoJSON)', 'created_at: DateTime'],
+    methods: [],
+    fullAttrs: [
+      ['id', 'UUID', 'auto', 'Primary key, auto-generated UUID'],
+      ['plot_id', 'str(64)', '—', 'Unique string like PLOT8524X7693'],
+      ['lat, lon', 'Float', '—', 'Plot centroid coordinates'],
+      ['polygon', 'JSON', 'null', 'GeoJSON polygon [[lon,lat],…]'],
+    ],
+    fullMethods: []
+  },
+  {
+    id: 'AnalysisRecord', file: 'backend/database/models.py', color: '#3b82f6', textColor: '#93c5fd',
+    x: 600, y: 230, w: 240,
+    attrs: ['id: UUID PK', 'plot_id: str(64)', 'segmentation_mask: JSON', 'tree_coordinates: JSON', 'ndvi: Float', 'slope: Float', 'elevation: Float', 'flood_probability: Float', 'buildability_score: Float', 'raw_features: JSON'],
+    methods: [],
+    fullAttrs: [
+      ['plot_id', 'str(64)', '—', 'FK to plots.plot_id (soft)'],
+      ['segmentation_mask', 'JSON', 'null', '{veg,water,urban,road,bare} fractions'],
+      ['tree_coordinates', 'JSON', 'null', '[{lat,lon,confidence}]'],
+      ['flood_probability', 'Float', 'null', 'XGBoost prediction [0,1]'],
+      ['buildability_score', 'Float', 'null', 'MLP prediction [0,100]'],
+      ['raw_features', 'JSON', 'null', 'Full env feature dict'],
+    ],
+    fullMethods: []
+  },
+  {
+    id: 'FloorPlanRecord', file: 'backend/database/models.py', color: '#3b82f6', textColor: '#93c5fd',
+    x: 600, y: 500, w: 230,
+    attrs: ['id: UUID PK', 'plot_id: str(64)', 'layout_json: JSON', 'fitness_score: Float', 'generation_count: Float'],
+    methods: [],
+    fullAttrs: [
+      ['layout_json', 'JSON', '—', 'Full rooms/walls/doors/windows dict'],
+      ['fitness_score', 'Float', 'null', 'GA best fitness achieved'],
+      ['generation_count', 'Float', 'null', 'Generations run (may be 0 for det.)'],
+    ],
+    fullMethods: []
+  },
+  {
+    id: 'User', file: 'backend/database/models.py', color: '#3b82f6', textColor: '#93c5fd',
+    x: 600, y: 640, w: 215,
+    attrs: ['id: UUID PK', 'email: str(255) UNIQUE', 'password_hash: str(255)', 'full_name: str(255)', 'created_at: DateTime'],
+    methods: [],
+    fullAttrs: [
+      ['email', 'str(255)', '—', 'Unique login identifier'],
+      ['password_hash', 'str(255)', '—', 'bcrypt hashed password'],
+    ],
+    fullMethods: []
+  },
+  {
+    id: 'Eco3DState (Zustand)', file: 'frontend/store/useEco3DStore.ts', color: '#10b981', textColor: '#6ee7b7',
+    x: 870, y: 30, w: 265,
+    attrs: ['selectedLat/Lon: number|null', 'selectedPolygon: number[][]|null', 'currentPlotId: string|null', 'analysis: AnalysisResponse|null', 'floorPlan: FloorPlanResponse|null', 'floorPlanVariants: FloorPlanVariant[]', 'isAnalyzing: boolean', 'isGeneratingFloorPlan: boolean'],
+    methods: ['setSelectedLocation(lat,lon,polygon?)', 'setAnalysis(analysis)', 'setFloorPlan(fp)', 'setFloorPlanVariants(v,bestIdx)', 'reset()'],
+    fullAttrs: [
+      ['selectedLat/Lon', 'number|null', 'null', 'Currently selected map coordinates'],
+      ['currentPlotId', 'string|null', 'null', 'Derived: PLOT{lat*1000}X{lon*1000}'],
+      ['analysis', 'AnalysisResponse|null', 'null', 'Full 5-layer analysis result'],
+      ['floorPlan', 'FloorPlanResponse|null', 'null', 'Generated floor plan'],
+      ['floorPlanVariants', 'FloorPlanVariant[]', '[]', 'All generated variants'],
+      ['isAnalyzing', 'boolean', 'false', 'Loading state for analysis request'],
+    ],
+    fullMethods: [
+      ['setSelectedLocation()', '→ void', 'Sets lat/lon/polygon, derives plot_id'],
+      ['setAnalysis()', '→ void', 'Sets analysis + environmentalData'],
+      ['reset()', '→ void', 'Clears all analysis/floorplan state'],
+    ]
+  },
+  {
+    id: 'AnalyzePlotRequest', file: 'backend/models/schemas.py', color: '#8b5cf6', textColor: '#c4b5fd',
+    x: 870, y: 360, w: 260,
+    attrs: ['plot_id: str', 'lat: float', 'lon: float', 'polygon: Optional[List[List[float]]]'],
+    methods: [],
+    fullAttrs: [
+      ['plot_id', 'str', '—', 'e.g. PLOT8524X7693'],
+      ['lat, lon', 'float', '—', 'Plot centroid WGS84 coords'],
+      ['polygon', 'Optional[…]', 'null', 'GeoJSON polygon points'],
+    ],
+    fullMethods: []
+  },
+  {
+    id: 'GenerateFloorPlanRequest', file: 'backend/models/schemas.py', color: '#8b5cf6', textColor: '#c4b5fd',
+    x: 870, y: 530, w: 260,
+    attrs: ['plot_id: str', 'plot_area_sqm: float = 500', 'house_type: str', 'generation_method: str', 'maximize_sunlight: bool', 'natural_ventilation: bool', 'preserve_trees: bool', 'ga_time_budget_ms: int = 2500'],
+    methods: ['validate_generation_method() cls', 'validate_ga_time_budget() cls', 'validate_layout_mode() cls'],
+    fullAttrs: [
+      ['house_type', 'str', 'Eco-Villa…', '6 types: Eco-Villa, Duplex, Apartment…'],
+      ['generation_method', 'str', 'deterministic', 'deterministic | ga'],
+      ['ga_time_budget_ms', 'int', '2500', 'GA time limit, clamped [1200,8000]ms'],
+    ],
+    fullMethods: [
+      ['validate_generation_method()', '→ str', '@field_validator, normalizes to det/ga'],
+      ['validate_ga_time_budget()', '→ int', 'Clamps to [1200, 8000]'],
+    ]
+  },
+];
+
+const relationships = [
+  { from: 'GeneticFloorPlanOptimizer', to: 'Chromosome', type: 'creates', label: 'creates' },
+  { from: 'Eco3DState (Zustand)', to: 'AnalyzePlotRequest', type: 'uses', label: 'sends' },
+  { from: 'Eco3DState (Zustand)', to: 'GenerateFloorPlanRequest', type: 'uses', label: 'sends' },
+  { from: 'AnalysisRecord', to: 'PlotRecord', type: 'assoc', label: 'plot_id →' },
+  { from: 'FloorPlanRecord', to: 'PlotRecord', type: 'assoc', label: 'plot_id →' },
+  { from: 'GeneticFloorPlanOptimizer', to: 'Settings (Config)', type: 'uses', label: 'reads' },
+];
+
+const stage = document.getElementById('stage');
+const svgEl = document.getElementById('arrows');
+const cardEls = {};
+
+// Render cards
+classes.forEach(cls => {
+  const card = document.createElement('div');
+  card.className = 'uml-card';
+  card.id = 'cls_' + cls.id.replace(/[^a-z0-9]/gi, '_');
+  card.style.left = cls.x + 'px';
+  card.style.top = cls.y + 'px';
+  card.style.width = cls.w + 'px';
+  card.innerHTML = `
+    <div class="uml-header" style="background:${cls.color}22;border-bottom:1px solid ${cls.color}44">
+      <h4 style="color:${cls.textColor}">«class» ${cls.id}</h4>
+      <p>${cls.file}</p>
+    </div>
+    <div class="uml-section-title">attributes</div>
+    <div class="uml-section">
+      ${cls.attrs.slice(0, 5).map(a => {
+        const [name, ...rest] = a.split(': ');
+        return `<div class="row"><span class="attr-name">${name}</span>${rest.length ? ': <span class="type">' + rest.join(': ') + '</span>' : ''}</div>`;
+      }).join('')}
+      ${cls.attrs.length > 5 ? `<div class="row" style="color:#475569;font-style:italic">…+${cls.attrs.length-5} more</div>` : ''}
+    </div>
+    ${cls.methods.length > 0 ? `
+    <div class="uml-section-title">methods</div>
+    <div class="uml-section">
+      ${cls.methods.slice(0,4).map(m => {
+        const [sig, ...ret] = m.split(' → ');
+        return `<div class="row"><span class="method-name">${sig}</span>${ret.length ? ' → <span class="type">'+ret.join('')+'</span>' : ''}</div>`;
+      }).join('')}
+      ${cls.methods.length > 4 ? `<div class="row" style="color:#475569;font-style:italic">…+${cls.methods.length-4} more</div>` : ''}
+    </div>` : ''}
+  `;
+  stage.appendChild(card);
+  cardEls[cls.id] = card;
+
+  // Click to open sidebar
+  card.addEventListener('click', e => {
+    if (e.target.closest('.uml-header') && isDragging) return;
+    openSidebar(cls);
+  });
+
+  // Drag logic
+  let dragging = false, startX, startY, origLeft, origTop;
+  let isDragging = false;
+  card.addEventListener('mousedown', e => {
+    dragging = true; isDragging = false;
+    startX = e.clientX; startY = e.clientY;
+    origLeft = parseInt(card.style.left); origTop = parseInt(card.style.top);
+    card.classList.add('dragging');
+    e.stopPropagation();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if (Math.abs(dx) + Math.abs(dy) > 4) isDragging = true;
+    card.style.left = (origLeft + dx) + 'px';
+    card.style.top = (origTop + dy) + 'px';
+    drawArrows();
+  });
+  document.addEventListener('mouseup', () => {
+    if (dragging) { dragging = false; card.classList.remove('dragging'); }
+  });
+});
+
+function getCenter(cls) {
+  const card = cardEls[cls.id];
+  const l = parseInt(card.style.left), t = parseInt(card.style.top);
+  return { x: l + parseInt(card.style.width || 220) / 2, y: t + card.offsetHeight / 2 };
+}
+
+function getEdgePoint(cls, toX, toY) {
+  const card = cardEls[cls.id];
+  const l = parseInt(card.style.left), t = parseInt(card.style.top);
+  const w = card.offsetWidth || parseInt(card.style.width) || 220, h = card.offsetHeight || 120;
+  const cx = l + w/2, cy = t + h/2;
+  const dx = toX - cx, dy = toY - cy;
+  const angle = Math.atan2(dy, dx);
+  const tanAngle = Math.abs(dy/Math.max(dx,0.001));
+  const halfW = w/2, halfH = h/2;
+  let ex, ey;
+  if (Math.abs(dx) * halfH > Math.abs(dy) * halfW) {
+    ex = cx + (dx > 0 ? halfW : -halfW);
+    ey = cy + (dx > 0 ? halfW : -halfW) * Math.tan(angle);
+  } else {
+    ey = cy + (dy > 0 ? halfH : -halfH);
+    ex = cx + (dy > 0 ? halfH : -halfH) / Math.tan(angle);
+  }
+  return { x: Math.round(ex), y: Math.round(ey) };
+}
+
+function drawArrows() {
+  svgEl.innerHTML = `<defs>
+    <marker id="a-dep" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#8b5cf6" stroke-width="1.5" stroke-linecap="round"/>
+    </marker>
+    <marker id="a-ass" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round"/>
+    </marker>
+    <marker id="a-cre" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#ec4899" stroke-width="1.5" stroke-linecap="round"/>
+    </marker>
+  </defs>`;
+  relationships.forEach(rel => {
+    const fromCls = classes.find(c => c.id === rel.from);
+    const toCls = classes.find(c => c.id === rel.to);
+    if (!fromCls || !toCls) return;
+    const to = getCenter(toCls);
+    const from = getEdgePoint(fromCls, to.x, to.y);
+    const to2 = getEdgePoint(toCls, from.x, from.y);
+    const color = rel.type === 'creates' ? '#ec4899' : rel.type === 'assoc' ? '#3b82f6' : '#8b5cf6';
+    const markerId = rel.type === 'creates' ? 'a-cre' : rel.type === 'assoc' ? 'a-ass' : 'a-dep';
+    const isDep = rel.type === 'uses';
+    const mx = (from.x + to2.x) / 2, my = (from.y + to2.y) / 2 - 14;
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', `M${from.x},${from.y} Q${mx},${my} ${to2.x},${to2.y}`);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('opacity', '0.6');
+    if (isDep) { path.setAttribute('stroke-dasharray', '6 3'); path.classList.add('dep-line'); }
+    path.setAttribute('marker-end', `url(#${markerId})`);
+    svgEl.appendChild(path);
+    // Label
+    const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    txt.setAttribute('x', mx);
+    txt.setAttribute('y', my - 4);
+    txt.setAttribute('text-anchor', 'middle');
+    txt.setAttribute('fill', color);
+    txt.setAttribute('font-size', '10');
+    txt.setAttribute('opacity', '0.7');
+    txt.setAttribute('font-family', 'Inter,sans-serif');
+    txt.textContent = rel.label;
+    svgEl.appendChild(txt);
+  });
+}
+
+function openSidebar(cls) {
+  document.getElementById('sb-title').textContent = cls.id;
+  let html = '';
+  if (cls.fullAttrs.length > 0) {
+    html += '<div class="section-head">Attributes</div>';
+    html += '<table><tr><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr>';
+    cls.fullAttrs.forEach(([name, type, def, desc]) => {
+      html += `<tr><td>${name}</td><td><code>${type}</code></td><td>${def}</td><td>${desc}</td></tr>`;
+    });
+    html += '</table>';
+  }
+  if (cls.fullMethods.length > 0) {
+    html += '<div class="section-head">Methods</div>';
+    html += '<table><tr><th>Signature</th><th>Returns</th><th>Description</th></tr>';
+    cls.fullMethods.forEach(([sig, ret, desc]) => {
+      html += `<tr><td>${sig}</td><td><code>${ret}</code></td><td>${desc}</td></tr>`;
+    });
+    html += '</table>';
+  }
+  if (!html) html = '<p style="color:#475569;font-size:12px">No detailed schema — ORM auto-generated model.</p>';
+  document.getElementById('sb-body').innerHTML = html;
+  document.getElementById('sidebar').classList.add('open');
+}
+
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+}
+
+drawArrows();
+setInterval(drawArrows, 500);
+
+
+// ── Sequence Diagram ─────────────────────────────────────────────────────────
+
+const LANES = [
+  { id: 'user',    label: 'User Browser',     sublabel: 'Next.js · Leaflet',  x: 80,  color: '#3b82f6' },
+  { id: 'store',   label: 'Zustand Store',    sublabel: 'useEco3DStore',       x: 240, color: '#8b5cf6' },
+  { id: 'api',     label: 'Axios API Layer',  sublabel: 'lib/api.ts',          x: 400, color: '#8b5cf6' },
+  { id: 'fast',    label: 'FastAPI Backend',  sublabel: 'main.py · routes',    x: 560, color: '#f59e0b' },
+  { id: 'pipe',    label: 'Analysis Pipeline', sublabel: 'analysis_pipeline',  x: 720, color: '#ec4899' },
+  { id: 'ai',      label: 'AI Models',        sublabel: 'DLV3 · YOLO · XGB',  x: 880, color: '#ec4899' },
+  { id: 'ext',     label: 'External APIs',    sublabel: '7 real APIs',         x: 1050, color: '#f59e0b' },
+];
+
+const MESSAGES = [
+  { from: 'user', to: 'store', y: 220, type: 'sync', label: 'setSelectedLocation(lat, lon)', payload: '{ lat: 8.5241, lon: 76.9366 }', ret: null },
+  { from: 'user', to: 'api', y: 270, type: 'sync', label: 'analyzePlot(request)', payload: 'POST /analyze-plot { plot_id, lat, lon }', ret: null },
+  { from: 'api', to: 'fast', y: 320, type: 'sync', label: 'HTTP POST /analyze-plot', payload: 'AnalyzePlotRequest JSON body', ret: null },
+  { from: 'fast', to: 'pipe', y: 370, type: 'sync', label: 'run_full_analysis(request, db)', payload: 'request: AnalyzePlotRequest', ret: null },
+  { from: 'pipe', to: 'ext', y: 420, type: 'async', label: 'asyncio.gather() — 3 parallel', payload: 'seg + tree_detection + fetch_all_real_data', ret: null },
+  { from: 'ext', to: 'pipe', y: 470, type: 'ret', label: '← SegResult + Trees + EnvDict', payload: '{vegetation:0.43, trees:[…], elevation:120, ndvi:0.55, …}', ret: null },
+  { from: 'pipe', to: 'ai', y: 520, type: 'sync', label: 'predict_flood_probability(features)', payload: 'X[1,6] = [120, 5.2, 0.55, 1600, 3, 850]', ret: null },
+  { from: 'ai', to: 'pipe', y: 560, type: 'ret', label: '← flood_probability = 0.2341', payload: 'XGBoost: Σ tree predictions → clip [0,1]', ret: null },
+  { from: 'pipe', to: 'ai', y: 605, type: 'sync', label: 'predict_buildability_score(features)', payload: 'X[1,6] = [0.2341, 5.2, 0.75, 0.55, 0.3, 12.1]', ret: null },
+  { from: 'ai', to: 'pipe', y: 645, type: 'ret', label: '← buildability_score = 72.5', payload: 'MLP 64→32→16→1 ReLU → clip [0,100]', ret: null },
+  { from: 'pipe', to: 'fast', y: 690, type: 'ret', label: '← AnalysisResponse assembled', payload: 'status="GOOD", flood=0.23, build=72.5, seg={…}, trees=[…]', ret: null },
+  { from: 'fast', to: 'api', y: 730, type: 'ret', label: '← HTTP 200 JSON', payload: 'Access-Control-Allow-Origin: * header set', ret: null },
+  { from: 'api', to: 'store', y: 770, type: 'ret', label: '← setAnalysis(data)', payload: 'Zustand updates: analysis, environmentalData', ret: null },
+  { from: 'store', to: 'user', y: 810, type: 'ret', label: '← UI re-render: analysis page', payload: 'React re-renders /analysis/[id] with scores, map, 3D button', ret: null },
+];
+
+const HEADER_H = 80;
+const BOX_W = 120; const BOX_H = 50;
+const svg = document.getElementById('seq');
+let currentStep = -1;
+let playing = false;
+let playTimer = null;
+let speed = 900;
+
+function laneX(id) { return LANES.find(l => l.id === id).x; }
+
+function render() {
+  svg.innerHTML = '';
+  const totalH = 900;
+
+  // Lane headers
+  LANES.forEach(lane => {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    // Box
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', lane.x - BOX_W/2);
+    rect.setAttribute('y', 20);
+    rect.setAttribute('width', BOX_W);
+    rect.setAttribute('height', BOX_H);
+    rect.setAttribute('rx', '8');
+    rect.setAttribute('fill', lane.color + '20');
+    rect.setAttribute('stroke', lane.color);
+    rect.setAttribute('stroke-width', '1.5');
+    // Title
+    const t1 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t1.setAttribute('x', lane.x);
+    t1.setAttribute('y', 43);
+    t1.setAttribute('text-anchor', 'middle');
+    t1.setAttribute('font-size', '11');
+    t1.setAttribute('font-weight', '600');
+    t1.setAttribute('fill', lane.color);
+    t1.setAttribute('font-family', 'Inter,sans-serif');
+    t1.textContent = lane.label;
+    const t2 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t2.setAttribute('x', lane.x);
+    t2.setAttribute('y', 59);
+    t2.setAttribute('text-anchor', 'middle');
+    t2.setAttribute('font-size', '9.5');
+    t2.setAttribute('fill', lane.color + '80');
+    t2.setAttribute('font-family', 'Inter,sans-serif');
+    t2.textContent = lane.sublabel;
+    g.appendChild(rect); g.appendChild(t1); g.appendChild(t2);
+    svg.appendChild(g);
+
+    // Lifeline
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', lane.x); line.setAttribute('y1', 70);
+    line.setAttribute('x2', lane.x); line.setAttribute('y2', totalH - 20);
+    line.setAttribute('stroke', lane.color + '35');
+    line.setAttribute('stroke-width', '1');
+    line.setAttribute('stroke-dasharray', '4 4');
+    line.setAttribute('id', 'lifeline_' + lane.id);
+    svg.appendChild(line);
+  });
+
+  // Messages
+  MESSAGES.forEach((msg, i) => {
+    const x1 = laneX(msg.from);
+    const x2 = laneX(msg.to);
+    const y = msg.y;
+    const isRet = msg.type === 'ret';
+    const isAsync = msg.type === 'async';
+    const color = isRet ? '#64748b' : isAsync ? '#f59e0b' : '#c4b5fd';
+
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('id', 'msg_' + i);
+    g.classList.add('msg-group');
+
+    if (i > currentStep) g.classList.add('passed');
+    if (i === currentStep) g.classList.add('active');
+
+    // Arrow line
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y);
+    line.setAttribute('x2', x2); line.setAttribute('y2', y);
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', i === currentStep ? '2.2' : '1.5');
+    if (isRet) line.setAttribute('stroke-dasharray', '6 3');
+    if (isAsync) line.setAttribute('stroke-dasharray', '4 2');
+    line.classList.add('msg-arrow');
+
+    // Arrowhead
+    const dir = x2 > x1 ? 1 : -1;
+    const arrowX = x2 - dir * 12;
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    poly.setAttribute('points', `${x2},${y} ${arrowX},${y-5} ${arrowX},${y+5}`);
+    poly.setAttribute('fill', color);
+
+    // Label background
+    const midX = (x1 + x2) / 2;
+    const labelStr = msg.label;
+    const bgW = Math.min(Math.max(labelStr.length * 6.5, 100), Math.abs(x2-x1) - 20);
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.setAttribute('x', midX - bgW/2);
+    bg.setAttribute('y', y - 18);
+    bg.setAttribute('width', bgW);
+    bg.setAttribute('height', 16);
+    bg.setAttribute('rx', '4');
+    bg.setAttribute('fill', '#0f1117');
+    bg.setAttribute('opacity', '0.85');
+
+    // Label text
+    const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    txt.setAttribute('x', midX);
+    txt.setAttribute('y', y - 6);
+    txt.setAttribute('text-anchor', 'middle');
+    txt.setAttribute('font-size', '10.5');
+    txt.setAttribute('font-family', 'Inter,sans-serif');
+    txt.setAttribute('fill', i === currentStep ? '#f1f5f9' : color);
+    txt.setAttribute('font-weight', i === currentStep ? '600' : '400');
+    // Truncate label if needed
+    const maxChars = Math.floor(Math.abs(x2-x1) / 6.5);
+    txt.textContent = labelStr.length > maxChars ? labelStr.slice(0, maxChars-2) + '…' : labelStr;
+
+    // Activation box on receiver lifeline
+    const actH = 14;
+    const act = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    act.setAttribute('x', x2 - 5);
+    act.setAttribute('y', y - actH/2);
+    act.setAttribute('width', 10);
+    act.setAttribute('height', actH);
+    act.setAttribute('rx', '3');
+    act.setAttribute('fill', i === currentStep ? color : color + '50');
+    act.setAttribute('stroke', color);
+    act.setAttribute('stroke-width', '1');
+
+    g.appendChild(bg);
+    g.appendChild(line);
+    g.appendChild(poly);
+    g.appendChild(txt);
+    g.appendChild(act);
+
+    // Dim if not yet reached
+    if (i > currentStep) {
+      g.setAttribute('opacity', '0.22');
+    } else if (i < currentStep) {
+      g.setAttribute('opacity', '0.55');
+    }
+    svg.appendChild(g);
+  });
+
+  // Active lifeline highlights
+  if (currentStep >= 0) {
+    const msg = MESSAGES[currentStep];
+    [msg.from, msg.to].forEach(laneId => {
+      const ll = document.getElementById('lifeline_' + laneId);
+      if (ll) {
+        ll.setAttribute('stroke', LANES.find(l=>l.id===laneId).color + '90');
+        ll.setAttribute('stroke-width', '2');
+      }
+    });
+  }
+
+  // Update UI
+  document.getElementById('step-indicator').textContent = `Step ${currentStep + 1} / ${MESSAGES.length}`;
+  document.getElementById('progress-bar').style.width = ((currentStep + 1) / MESSAGES.length * 100) + '%';
+
+  if (currentStep >= 0 && currentStep < MESSAGES.length) {
+    const m = MESSAGES[currentStep];
+    const fromLane = LANES.find(l=>l.id===m.from);
+    const toLane = LANES.find(l=>l.id===m.to);
+    const typeStr = m.type === 'sync' ? 'synchronous call' : m.type === 'async' ? 'async/parallel' : 'return value';
+    document.getElementById('msg-detail').innerHTML =
+      `<strong style="color:#f1f5f9">${m.label}</strong>
+       <span style="color:#64748b;font-size:12px"> — ${typeStr}</span><br>
+       <span style="color:#7dd3fc;font-size:12px;font-family:monospace">${m.payload}</span><br>
+       <span style="color:#64748b;font-size:11px">From: <strong style="color:#94a3b8">${fromLane?.label}</strong> → To: <strong style="color:#94a3b8">${toLane?.label}</strong></span>`;
+  } else {
+    document.getElementById('msg-detail').textContent = 'Press Play or Step to begin.';
+  }
+}
+
+function stepForward() {
+  if (currentStep < MESSAGES.length - 1) { currentStep++; render(); }
+}
+function stepBack() {
+  if (currentStep > -1) { currentStep--; render(); }
+}
+function resetSeq() {
+  currentStep = -1; playing = false;
+  clearInterval(playTimer);
+  document.getElementById('btn-play').textContent = '▶ Play';
+  document.getElementById('btn-play').classList.remove('active');
+  render();
+}
+function togglePlay() {
+  playing = !playing;
+  const btn = document.getElementById('btn-play');
+  if (playing) {
+    btn.textContent = '⏸ Pause'; btn.classList.add('active');
+    playTimer = setInterval(() => {
+      if (currentStep < MESSAGES.length - 1) { currentStep++; render(); }
+      else { playing = false; btn.textContent = '▶ Play'; btn.classList.remove('active'); clearInterval(playTimer); }
+    }, speed);
+  } else {
+    btn.textContent = '▶ Play'; btn.classList.remove('active');
+    clearInterval(playTimer);
+  }
+}
+function updateSpeed(val) {
+  speed = parseInt(val);
+  if (playing) { clearInterval(playTimer); togglePlay(); togglePlay(); }
+}
+
+render();
+
+
+
+// Expose diagram functions to global scope (needed for inline onclick handlers)
+window.zoomIn = typeof zoomIn !== "undefined" ? zoomIn : function(){};
+window.zoomOut = typeof zoomOut !== "undefined" ? zoomOut : function(){};
+window.resetZoom = typeof resetZoom !== "undefined" ? resetZoom : function(){};
+window.closeCard = typeof closeCard !== "undefined" ? closeCard : function(){};
+window.closeSidebar = typeof closeSidebar !== "undefined" ? closeSidebar : function(){};
+window.togglePlay = typeof togglePlay !== "undefined" ? togglePlay : function(){};
+window.stepForward = typeof stepForward !== "undefined" ? stepForward : function(){};
+window.stepBack = typeof stepBack !== "undefined" ? stepBack : function(){};
+window.resetSeq = typeof resetSeq !== "undefined" ? resetSeq : function(){};
+window.updateSpeed = typeof updateSpeed !== "undefined" ? updateSpeed : function(){};
+// ── Nav active link tracking ─────────────────────────────────────────────────
+const navLinks = document.querySelectorAll('.nav-link');
+function updateNav() {
+  let current = '';
+  document.querySelectorAll('[id]').forEach(s => {
+    if (s.getBoundingClientRect().top <= 120) current = s.id;
+  });
+  navLinks.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + current));
+}
+window.addEventListener('scroll', updateNav);
+
+}); // end DOMContentLoaded
+</script>
+
+</body>
+</html>
