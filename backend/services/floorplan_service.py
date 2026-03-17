@@ -281,13 +281,36 @@ def _pack_service(items, rect):
         return []
     garage_idx = next((idx for idx, item in enumerate(items) if item["type"] == "garage"), None)
     if garage_idx is None:
+        bathrooms = [item for item in items if item["type"] == "bathroom"]
+        others = [item for item in items if item["type"] != "bathroom"]
+        rx, ry, rw, rh = rect
+        # Keep sanitary rooms in a rear/top band so front edge can stay public.
+        if bathrooms and others and rh >= 3.6:
+            total_area = max(sum(item["area"] for item in items), 1e-6)
+            bath_ratio = max(0.26, min(0.52, sum(item["area"] for item in bathrooms) / total_area))
+            bath_h = rh * bath_ratio
+            top_band = (rx, ry, rw, bath_h)
+            lower_band = (rx, ry + bath_h, rw, rh - bath_h)
+            return _pack_linear(bathrooms, top_band, "x" if top_band[2] >= top_band[3] else "y") + _pack_linear(others, lower_band, "x" if lower_band[2] >= lower_band[3] else "y")
         return _pack_linear(items, rect, "y" if rect[3] >= rect[2] else "x")
     garage = items[garage_idx]
     rest = [item for idx, item in enumerate(items) if idx != garage_idx]
     rx, ry, rw, rh = rect
     if rw >= rh:
         garage_h = rh * max(0.46, min(0.62, garage["area"] / sum(item["area"] for item in items) * 1.25))
-        return [(garage["type"], rx, ry + rh - garage_h, rw, garage_h)] + _pack_linear(rest, (rx, ry, rw, rh - garage_h), "y")
+        rest_rect = (rx, ry, rw, rh - garage_h)
+        bathrooms = [item for item in rest if item["type"] == "bathroom"]
+        others = [item for item in rest if item["type"] != "bathroom"]
+        if bathrooms and others and rest_rect[3] >= 3.4:
+            rest_total = max(sum(item["area"] for item in rest), 1e-6)
+            b_ratio = max(0.24, min(0.50, sum(item["area"] for item in bathrooms) / rest_total))
+            b_h = rest_rect[3] * b_ratio
+            top_band = (rest_rect[0], rest_rect[1], rest_rect[2], b_h)
+            lower_band = (rest_rect[0], rest_rect[1] + b_h, rest_rect[2], rest_rect[3] - b_h)
+            packed_rest = _pack_linear(bathrooms, top_band, "x" if top_band[2] >= top_band[3] else "y") + _pack_linear(others, lower_band, "x" if lower_band[2] >= lower_band[3] else "y")
+        else:
+            packed_rest = _pack_linear(rest, rest_rect, "y")
+        return [(garage["type"], rx, ry + rh - garage_h, rw, garage_h)] + packed_rest
     garage_w = rw * max(0.46, min(0.62, garage["area"] / sum(item["area"] for item in items) * 1.25))
     return [(garage["type"], rx, ry, garage_w, rh)] + _pack_linear(rest, (rx + garage_w, ry, rw - garage_w, rh), "y")
 
@@ -443,7 +466,14 @@ def _explicit_geometry(rooms:List[Room],site:Optional[Site]=None):
                     x=round(dx,2),y=round(b.y,2),width=min(0.9,ox2*0.55),
                     orientation="horizontal",symbol="arc_swing",floor=a.floor)); dri+=1
     if rooms:
-        front=min((r for r in rooms if r.floor==1),key=lambda r:-(r.y+r.height))
+        floor1 = [r for r in rooms if r.floor == 1]
+        preferred = [r for r in floor1 if r.type in ("living", "dining", "office", "kitchen")]
+        if preferred:
+            candidates = preferred
+        else:
+            non_service = [r for r in floor1 if r.type not in ("bathroom", "utility", "puja_room")]
+            candidates = non_service if non_service else floor1
+        front=min(candidates,key=lambda r:-(r.y+r.height))
         doors.append(Door(id=f"door_{dri}",room_to=front.id or front.type,type="entry",
             x=round(front.x+front.width/2,2),y=round(front.y+front.height,2),
             width=1.2,orientation="horizontal",symbol="double_door",floor=1)); dri+=1
@@ -573,15 +603,24 @@ def _repair_layout(rooms: List[Room], site: Site, total: float, floors: int) -> 
 
     fixed: List[Room] = []
     for r in rooms:
-        min_w = 1.8 if r.type in ("bathroom", "utility", "puja_room") else 2.2
-        min_h = 1.8 if r.type in ("bathroom", "utility", "puja_room") else 2.2
+        if r.type == "bathroom":
+            min_w, min_h = 2.2, 2.1
+        elif r.type in ("utility", "puja_room"):
+            min_w, min_h = 2.0, 2.0
+        else:
+            min_w, min_h = 2.2, 2.2
         w = max(min_w, min(r.width, fw))
         h = max(min_h, min(r.height, fh))
+        max_ar = 2.4 if r.type == "bathroom" else 3.1
+        if w / max(h, 1e-6) > max_ar:
+            h = min(fh, max(min_h, w / max_ar))
+        if h / max(w, 1e-6) > max_ar:
+            w = min(fw, max(min_w, h / max_ar))
         x = min(max(r.x, ox), ox + fw - w)
         y = min(max(r.y, oy), oy + fh - h)
         fixed.append(Room(id=r.id, type=r.type, width=round(w, 2), height=round(h, 2), x=round(x, 2), y=round(y, 2), floor=r.floor, orientation=r.orientation))
 
-    for _ in range(3):
+    for _ in range(10):
         moved = False
         for i in range(len(fixed)):
             a = fixed[i]
@@ -591,7 +630,7 @@ def _repair_layout(rooms: List[Room], site: Site, total: float, floors: int) -> 
                     continue
                 oxv = _ov(a.x, a.x + a.width, b.x, b.x + b.width)
                 oyv = _ov(a.y, a.y + a.height, b.y, b.y + b.height)
-                if oxv * oyv <= 0.01:
+                if oxv * oyv <= 0.005:
                     continue
                 nx = min(max(b.x + oxv + 0.15, ox), ox + fw - b.width)
                 ny = min(max(b.y + oyv + 0.15, oy), oy + fh - b.height)
