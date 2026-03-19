@@ -183,6 +183,7 @@ export default function HomePage() {
               { name: "Solutions", href: "/solutions" },
               { name: "Registry", href: "/registry" },
               { name: "Insights", href: "/insights" },
+              { name: "Datasets", href: "/datasets" },
             ].map((item) => (
               <Link
                 href={item.href}
@@ -224,6 +225,7 @@ export default function HomePage() {
               { name: "Solutions", href: "/solutions" },
               { name: "Registry", href: "/registry" },
               { name: "Insights", href: "/insights" },
+              { name: "Datasets", href: "/datasets" },
             ].map((item) => (
               <Link
                 href={item.href}
@@ -307,6 +309,12 @@ export default function HomePage() {
                 >
                   View Documentation (In-Depth)
                 </a>
+                <Link
+                  href="/datasets"
+                  className="glass-panel text-white px-10 py-5 rounded-sm font-bold text-sm uppercase tracking-[0.15em] hover:bg-white/5 transition-all duration-200 hover:border-primary/30"
+                >
+                  Datasets
+                </Link>
               </div>
             </div>
 
