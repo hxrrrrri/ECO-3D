@@ -22,6 +22,7 @@ type ObjKind = "object" | "wall" | "room";
 type RenderQuality = "low" | "med" | "high" | "ultra";
 type TimeOfDayMode = "auto" | "day" | "night";
 type ShaderLookPreset = "custom" | "golden-hour" | "cinematic-day" | "deep-night";
+type GraphicsStylePreset = "minecraft" | "valorant" | "wuthering-waves";
 type SceneObj = {
   id: string; kind: ObjKind; type: string;
   x: number; y: number; z: number; rotY: number;
@@ -2713,7 +2714,15 @@ export default function Model3DPage() {
   const [timeOfDayMode, setTimeOfDayMode] = useState<TimeOfDayMode>("auto");
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("high");
   const [showShaders, setShowShaders] = useState(true);
-  const [minecraftPresetOn, setMinecraftPresetOn] = useState(true);
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
+  const [leftSectionsOpen, setLeftSectionsOpen] = useState<Record<string, boolean>>({
+    meteo: true,
+    camera: true,
+    time: true,
+    overlays: true,
+    graphics: true,
+  });
+  const [graphicsStylePreset, setGraphicsStylePreset] = useState<GraphicsStylePreset>("minecraft");
   const [sunriseRaysIntensity, setSunriseRaysIntensity] = useState(0.78);
   const [cloudDensity, setCloudDensity] = useState(0.62);
   const [waterStyle, setWaterStyle] = useState(0.74);
@@ -2733,10 +2742,36 @@ export default function Model3DPage() {
   const isNightScene = timeOfDayMode === "night" || (timeOfDayMode === "auto" && (isNightBySun || shouldForceNightEffects));
   const effectiveShowSun = showSun && !isNightScene;
   const effectiveShowMoon = showMoon && isNightScene;
-  const effectiveSunriseRays = minecraftPresetOn ? sunriseRaysIntensity : 0.16;
-  const effectiveCloudDensity = minecraftPresetOn ? cloudDensity : 0.36;
-  const effectiveWaterStyle = minecraftPresetOn ? waterStyle : 0.32;
-  const effectiveSurroundingsBlend = minecraftPresetOn ? surroundingsBlend : 0.4;
+  const effectiveSunriseRays = sunriseRaysIntensity;
+  const effectiveCloudDensity = cloudDensity;
+  const effectiveWaterStyle = waterStyle;
+  const effectiveSurroundingsBlend = surroundingsBlend;
+
+  const applyGraphicsStylePreset = useCallback((preset: GraphicsStylePreset) => {
+    if (preset === "minecraft") {
+      setSunriseRaysIntensity(0.96);
+      setCloudDensity(0.68);
+      setWaterStyle(0.8);
+      setSurroundingsBlend(0.82);
+      setRenderQuality("ultra");
+      return;
+    }
+    if (preset === "valorant") {
+      setTimeOfDayMode("day");
+      setSunriseRaysIntensity(0.48);
+      setCloudDensity(0.34);
+      setWaterStyle(0.26);
+      setSurroundingsBlend(0.35);
+      setRenderQuality("high");
+      return;
+    }
+    setTimeOfDayMode("day");
+    setSunriseRaysIntensity(1.2);
+    setCloudDensity(0.76);
+    setWaterStyle(0.72);
+    setSurroundingsBlend(0.93);
+    setRenderQuality("ultra");
+  }, [setTimeOfDayMode, setRenderQuality]);
 
   const applyShaderPreset = useCallback((preset: ShaderLookPreset) => {
     setShaderLookPreset(preset);
@@ -2768,6 +2803,10 @@ export default function Model3DPage() {
       setRenderQuality("high");
     }
   }, [setTimeOfDayMode, setShowMoon, setRenderQuality]);
+
+  useEffect(() => {
+    applyGraphicsStylePreset(graphicsStylePreset);
+  }, [graphicsStylePreset, applyGraphicsStylePreset]);
 
   // Rebuild scene when floor plan data loads
   useEffect(() => {
@@ -2841,6 +2880,15 @@ export default function Model3DPage() {
   const PanelSection = ({ title }: { title: string }) => (
     <div style={{ fontSize: 8, color: "rgba(13,242,242,0.5)", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6 }}>{title}</div>
   );
+  const toggleLeftSection = useCallback((key: string) => {
+    setLeftSectionsOpen(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+  const sectionCardStyle: React.CSSProperties = {
+    background: "rgba(13,242,242,0.04)",
+    border: "1px solid rgba(13,242,242,0.08)",
+    borderRadius: 6,
+    padding: "7px 9px",
+  };
 
   return <>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;600;700&display=swap" rel="stylesheet" />
@@ -2877,105 +2925,171 @@ export default function Model3DPage() {
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
         {/* Left sidebar */}
-        <div style={{ width: 136, flexShrink: 0, background: "rgba(5,9,9,0.98)", padding: "10px 9px", display: "flex", flexDirection: "column", gap: 7, borderRight: "1px solid rgba(255,255,255,0.05)", overflowY: "auto" }}>
-          {[{ l: "Live", v: meteoBadgeLabel }, { l: "Sun", v: `${sunVectorLabel} · ${sunHours.toFixed(1)}h` }, { l: "Wind", v: `Prevailing ${windDir}` }, { l: "Objects", v: `${objects.length} in scene` }].map(({ l, v }) => (
-            <div key={l} style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)", borderRadius: 6, padding: "7px 9px" }}>
-              <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 3 }}>{l}</div>
-              <div style={{ fontSize: 10, color: "white", fontWeight: 600, lineHeight: 1.4 }}>{v}</div>
-            </div>
-          ))}
-          <div style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)", borderRadius: 6, padding: "7px 9px" }}>
-            <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5 }}>Camera</div>
-            {([["iso", "Isometric"], ["top", "Top-Down"], ["interior", "Interior"]] as const).map(([v, l]) => (
-              <button key={v} onClick={() => setCamMode(v)} style={{ display: "block", width: "100%", padding: "4px 6px", marginBottom: 3, background: camMode === v ? "rgba(13,242,242,0.15)" : "transparent", border: `1px solid ${camMode === v ? "rgba(13,242,242,0.3)" : "rgba(255,255,255,0.05)"}`, borderRadius: 4, color: camMode === v ? "#0df2f2" : "#64748b", fontSize: 9, cursor: "pointer", textAlign: "left", fontFamily: "'DM Mono',monospace" }}>{l}</button>
-            ))}
-          </div>
-          <div style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)", borderRadius: 6, padding: "7px 9px" }}>
-            <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5 }}>Time</div>
-            {([ ["auto", "Auto"], ["day", "Day"], ["night", "Night"] ] as const).map(([mode, label]) => (
-              <button key={mode} onClick={() => setTimeOfDayMode(mode)} style={{ display: "block", width: "100%", padding: "4px 6px", marginBottom: 3, background: timeOfDayMode === mode ? "rgba(13,242,242,0.15)" : "transparent", border: `1px solid ${timeOfDayMode === mode ? "rgba(13,242,242,0.3)" : "rgba(255,255,255,0.05)"}`, borderRadius: 4, color: timeOfDayMode === mode ? "#0df2f2" : "#64748b", fontSize: 9, cursor: "pointer", textAlign: "left", fontFamily: "'DM Mono',monospace" }}>{label}</button>
-            ))}
-          </div>
-          <div style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)", borderRadius: 6, padding: "7px 9px" }}>
-            <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Overlays</div>
-            {[{ l: "Sun", active: showSun, fn: () => setShowSun(v => !v) }, { l: "Grid", active: showGrid, fn: () => setShowGrid(v => !v) }].map(({ l, active, fn }) => (
-              <button key={l} onClick={fn} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "4px 0", background: "none", border: "none", cursor: "pointer", marginBottom: 2 }}>
-                <span style={{ fontSize: 9, color: "#64748b", fontFamily: "'DM Mono',monospace" }}>{l}</span>
-                <span style={{ width: 24, height: 12, borderRadius: 6, background: active ? "#0df2f2" : "#1e2a2a", display: "block", position: "relative", transition: "background 0.2s" }}>
-                  <span style={{ position: "absolute", top: 2, left: active ? 10 : 2, width: 8, height: 8, borderRadius: "50%", background: active ? "#060e0e" : "#475569", transition: "left 0.2s" }} />
-                </span>
+        <div style={{ width: leftSidebarCollapsed ? 48 : 196, flexShrink: 0, background: "rgba(5,9,9,0.98)", padding: "10px 9px", display: "flex", flexDirection: "column", gap: 7, borderRight: "1px solid rgba(255,255,255,0.05)", overflowY: "auto", transition: "width 0.24s" }}>
+          <button
+            onClick={() => setLeftSidebarCollapsed(v => !v)}
+            style={{
+              width: "100%",
+              minHeight: 28,
+              borderRadius: 6,
+              border: "1px solid rgba(13,242,242,0.25)",
+              background: "rgba(13,242,242,0.08)",
+              color: "#0df2f2",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: leftSidebarCollapsed ? "center" : "space-between",
+              cursor: "pointer",
+              padding: leftSidebarCollapsed ? "0" : "0 8px",
+              fontFamily: "'DM Mono',monospace",
+              fontSize: 8,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+            }}
+          >
+            {!leftSidebarCollapsed && <span>Controls</span>}
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>{leftSidebarCollapsed ? "chevron_right" : "chevron_left"}</span>
+          </button>
+
+          {!leftSidebarCollapsed && <>
+            <div style={sectionCardStyle}>
+              <button onClick={() => toggleLeftSection("meteo")} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0, marginBottom: leftSectionsOpen.meteo ? 5 : 0, cursor: "pointer" }}>
+                <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Meteo</div>
+                <span className="material-symbols-outlined" style={{ fontSize: 13, color: "#0df2f2" }}>{leftSectionsOpen.meteo ? "expand_less" : "expand_more"}</span>
               </button>
-            ))}
-          </div>
-          <div style={{ background: "rgba(232,121,249,0.06)", border: "1px solid rgba(232,121,249,0.2)", borderRadius: 6, padding: "7px 9px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-              <div style={{ fontSize: 7.5, color: "rgba(232,121,249,0.75)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Minecraft Shader Preset</div>
-              <button onClick={() => setMinecraftPresetOn(v => !v)} style={{ width: 24, height: 12, borderRadius: 6, background: minecraftPresetOn ? "#e879f9" : "#1e2a2a", border: "none", padding: 0, position: "relative", cursor: "pointer" }}>
-                <span style={{ position: "absolute", top: 2, left: minecraftPresetOn ? 10 : 2, width: 8, height: 8, borderRadius: "50%", background: minecraftPresetOn ? "#140814" : "#64748b", transition: "left 0.2s" }} />
-              </button>
+              {leftSectionsOpen.meteo && [{ l: "Live", v: meteoBadgeLabel }, { l: "Sun", v: `${sunVectorLabel} · ${sunHours.toFixed(1)}h` }, { l: "Wind", v: `Prevailing ${windDir}` }, { l: "Objects", v: `${objects.length} in scene` }].map(({ l, v }) => (
+                <div key={l} style={{ padding: "4px 0", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+                  <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 2 }}>{l}</div>
+                  <div style={{ fontSize: 9.5, color: "white", fontWeight: 600, lineHeight: 1.35 }}>{v}</div>
+                </div>
+              ))}
             </div>
-            {minecraftPresetOn && <>
-              <div style={{ marginBottom: 6 }}>
-                <div style={{ fontSize: 7.5, color: "#c4b5fd", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3, fontFamily: "'DM Mono',monospace" }}>Reference Look</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 3 }}>
-                  {[
-                    { id: "golden-hour" as ShaderLookPreset, label: "Golden Hour" },
-                    { id: "cinematic-day" as ShaderLookPreset, label: "Cinematic Day" },
-                    { id: "deep-night" as ShaderLookPreset, label: "Deep Night" },
-                  ].map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => applyShaderPreset(p.id)}
-                      style={{
-                        padding: "4px 6px",
-                        borderRadius: 4,
-                        border: `1px solid ${shaderLookPreset === p.id ? "rgba(196,181,253,0.6)" : "rgba(255,255,255,0.08)"}`,
-                        background: shaderLookPreset === p.id ? "rgba(139,92,246,0.2)" : "rgba(255,255,255,0.03)",
-                        color: shaderLookPreset === p.id ? "#ede9fe" : "#c4b5fd",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        fontSize: 8,
-                        fontFamily: "'DM Mono',monospace",
-                      }}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
+
+            <div style={sectionCardStyle}>
+              <button onClick={() => toggleLeftSection("camera")} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0, marginBottom: leftSectionsOpen.camera ? 5 : 0, cursor: "pointer" }}>
+                <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Camera</div>
+                <span className="material-symbols-outlined" style={{ fontSize: 13, color: "#0df2f2" }}>{leftSectionsOpen.camera ? "expand_less" : "expand_more"}</span>
+              </button>
+              {leftSectionsOpen.camera && ([["iso", "Isometric"], ["top", "Top-Down"], ["interior", "Interior"]] as const).map(([v, l]) => (
+                <button key={v} onClick={() => setCamMode(v)} style={{ display: "block", width: "100%", padding: "4px 6px", marginBottom: 3, background: camMode === v ? "rgba(13,242,242,0.15)" : "transparent", border: `1px solid ${camMode === v ? "rgba(13,242,242,0.3)" : "rgba(255,255,255,0.05)"}`, borderRadius: 4, color: camMode === v ? "#0df2f2" : "#64748b", fontSize: 9, cursor: "pointer", textAlign: "left", fontFamily: "'DM Mono',monospace" }}>{l}</button>
+              ))}
+            </div>
+
+            <div style={sectionCardStyle}>
+              <button onClick={() => toggleLeftSection("time")} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0, marginBottom: leftSectionsOpen.time ? 5 : 0, cursor: "pointer" }}>
+                <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Time</div>
+                <span className="material-symbols-outlined" style={{ fontSize: 13, color: "#0df2f2" }}>{leftSectionsOpen.time ? "expand_less" : "expand_more"}</span>
+              </button>
+              {leftSectionsOpen.time && ([ ["auto", "Auto"], ["day", "Day"], ["night", "Night"] ] as const).map(([mode, label]) => (
+                <button key={mode} onClick={() => setTimeOfDayMode(mode)} style={{ display: "block", width: "100%", padding: "4px 6px", marginBottom: 3, background: timeOfDayMode === mode ? "rgba(13,242,242,0.15)" : "transparent", border: `1px solid ${timeOfDayMode === mode ? "rgba(13,242,242,0.3)" : "rgba(255,255,255,0.05)"}`, borderRadius: 4, color: timeOfDayMode === mode ? "#0df2f2" : "#64748b", fontSize: 9, cursor: "pointer", textAlign: "left", fontFamily: "'DM Mono',monospace" }}>{label}</button>
+              ))}
+            </div>
+
+            <div style={sectionCardStyle}>
+              <button onClick={() => toggleLeftSection("overlays")} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0, marginBottom: leftSectionsOpen.overlays ? 5 : 0, cursor: "pointer" }}>
+                <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Overlays</div>
+                <span className="material-symbols-outlined" style={{ fontSize: 13, color: "#0df2f2" }}>{leftSectionsOpen.overlays ? "expand_less" : "expand_more"}</span>
+              </button>
+              {leftSectionsOpen.overlays && [{ l: "Sun", active: showSun, fn: () => setShowSun(v => !v) }, { l: "Grid", active: showGrid, fn: () => setShowGrid(v => !v) }].map(({ l, active, fn }) => (
+                <button key={l} onClick={fn} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "4px 0", background: "none", border: "none", cursor: "pointer", marginBottom: 2 }}>
+                  <span style={{ fontSize: 9, color: "#64748b", fontFamily: "'DM Mono',monospace" }}>{l}</span>
+                  <span style={{ width: 24, height: 12, borderRadius: 6, background: active ? "#0df2f2" : "#1e2a2a", display: "block", position: "relative", transition: "background 0.2s" }}>
+                    <span style={{ position: "absolute", top: 2, left: active ? 10 : 2, width: 8, height: 8, borderRadius: "50%", background: active ? "#060e0e" : "#475569", transition: "left 0.2s" }} />
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div style={sectionCardStyle}>
+              <button onClick={() => toggleLeftSection("graphics")} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: 0, marginBottom: leftSectionsOpen.graphics ? 6 : 0, cursor: "pointer" }}>
+                <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Graphics</div>
+                <span className="material-symbols-outlined" style={{ fontSize: 13, color: "#0df2f2" }}>{leftSectionsOpen.graphics ? "expand_less" : "expand_more"}</span>
+              </button>
+              {leftSectionsOpen.graphics && <>
+                <div style={{ marginBottom: 6 }}>
+                  <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.56)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3, fontFamily: "'DM Mono',monospace" }}>Style Preset</div>
+                  <select
+                    value={graphicsStylePreset}
+                    onChange={(e) => setGraphicsStylePreset(e.target.value as GraphicsStylePreset)}
+                    style={{
+                      width: "100%",
+                      background: "rgba(0,0,0,0.35)",
+                      border: "1px solid rgba(13,242,242,0.2)",
+                      borderRadius: 4,
+                      color: "#c9fbff",
+                      padding: "5px 6px",
+                      fontSize: 8.5,
+                      fontFamily: "'DM Mono',monospace",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <option value="minecraft">Minecraft Inspired</option>
+                    <option value="valorant">Valorant Inspired</option>
+                    <option value="wuthering-waves">Wuthering Waves Inspired</option>
+                  </select>
                 </div>
-              </div>
-              <div style={{ marginBottom: 6 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                  <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Sunrise Rays</span>
-                  <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{sunriseRaysIntensity.toFixed(2)}</span>
+                <div style={{ marginBottom: 6 }}>
+                  <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.56)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3, fontFamily: "'DM Mono',monospace" }}>Reference Look</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 3 }}>
+                    {[
+                      { id: "golden-hour" as ShaderLookPreset, label: "Golden Hour" },
+                      { id: "cinematic-day" as ShaderLookPreset, label: "Cinematic Day" },
+                      { id: "deep-night" as ShaderLookPreset, label: "Deep Night" },
+                    ].map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => applyShaderPreset(p.id)}
+                        style={{
+                          padding: "4px 6px",
+                          borderRadius: 4,
+                          border: `1px solid ${shaderLookPreset === p.id ? "rgba(13,242,242,0.46)" : "rgba(255,255,255,0.08)"}`,
+                          background: shaderLookPreset === p.id ? "rgba(13,242,242,0.14)" : "rgba(255,255,255,0.03)",
+                          color: shaderLookPreset === p.id ? "#b7feff" : "#7dd3fc",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          fontSize: 8,
+                          fontFamily: "'DM Mono',monospace",
+                        }}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <input type="range" min={0} max={1.5} step={0.01} value={sunriseRaysIntensity} onChange={(e) => { setShaderLookPreset("custom"); setSunriseRaysIntensity(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#f59e0b", cursor: "pointer" }} />
-              </div>
-              <div style={{ marginBottom: 6 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                  <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Cloud Density</span>
-                  <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{cloudDensity.toFixed(2)}</span>
+                <div style={{ marginBottom: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                    <span style={{ fontSize: 8, color: "#7dd3fc", fontFamily: "'DM Mono',monospace" }}>Sunrise Rays</span>
+                    <span style={{ fontSize: 8, color: "#bae6fd", fontFamily: "'DM Mono',monospace" }}>{sunriseRaysIntensity.toFixed(2)}</span>
+                  </div>
+                  <input type="range" min={0} max={1.5} step={0.01} value={sunriseRaysIntensity} onChange={(e) => { setShaderLookPreset("custom"); setSunriseRaysIntensity(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#f59e0b", cursor: "pointer" }} />
                 </div>
-                <input type="range" min={0.1} max={1} step={0.01} value={cloudDensity} onChange={(e) => { setShaderLookPreset("custom"); setCloudDensity(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#7dd3fc", cursor: "pointer" }} />
-              </div>
-              <div style={{ marginBottom: 6 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                  <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Water Reflect/Wave</span>
-                  <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{waterStyle.toFixed(2)}</span>
+                <div style={{ marginBottom: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                    <span style={{ fontSize: 8, color: "#7dd3fc", fontFamily: "'DM Mono',monospace" }}>Cloud Density</span>
+                    <span style={{ fontSize: 8, color: "#bae6fd", fontFamily: "'DM Mono',monospace" }}>{cloudDensity.toFixed(2)}</span>
+                  </div>
+                  <input type="range" min={0.1} max={1} step={0.01} value={cloudDensity} onChange={(e) => { setShaderLookPreset("custom"); setCloudDensity(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#7dd3fc", cursor: "pointer" }} />
                 </div>
-                <input type="range" min={0} max={1} step={0.01} value={waterStyle} onChange={(e) => { setShaderLookPreset("custom"); setWaterStyle(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#38bdf8", cursor: "pointer" }} />
-              </div>
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                  <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Stylized ↔ Realistic</span>
-                  <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{surroundingsBlend.toFixed(2)}</span>
+                <div style={{ marginBottom: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                    <span style={{ fontSize: 8, color: "#7dd3fc", fontFamily: "'DM Mono',monospace" }}>Water Reflect/Wave</span>
+                    <span style={{ fontSize: 8, color: "#bae6fd", fontFamily: "'DM Mono',monospace" }}>{waterStyle.toFixed(2)}</span>
+                  </div>
+                  <input type="range" min={0} max={1} step={0.01} value={waterStyle} onChange={(e) => { setShaderLookPreset("custom"); setWaterStyle(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#38bdf8", cursor: "pointer" }} />
                 </div>
-                <input type="range" min={0} max={1} step={0.01} value={surroundingsBlend} onChange={(e) => { setShaderLookPreset("custom"); setSurroundingsBlend(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#34d399", cursor: "pointer" }} />
-              </div>
-            </>}
-          </div>
-          <div style={{ marginTop: "auto", textAlign: "center" }}>
-            <div style={{ fontSize: 11, color: "#0df2f2", fontFamily: "'DM Mono',monospace", fontWeight: 500 }}>{fps} FPS</div>
-            <div style={{ fontSize: 8, color: "#334155", fontFamily: "'DM Mono',monospace" }}>{objects.length} objects</div>
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                    <span style={{ fontSize: 8, color: "#7dd3fc", fontFamily: "'DM Mono',monospace" }}>Stylized ↔ Realistic</span>
+                    <span style={{ fontSize: 8, color: "#bae6fd", fontFamily: "'DM Mono',monospace" }}>{surroundingsBlend.toFixed(2)}</span>
+                  </div>
+                  <input type="range" min={0} max={1} step={0.01} value={surroundingsBlend} onChange={(e) => { setShaderLookPreset("custom"); setSurroundingsBlend(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#34d399", cursor: "pointer" }} />
+                </div>
+              </>}
+            </div>
+          </>}
+
+          <div style={{ marginTop: "auto", textAlign: "center", borderTop: leftSidebarCollapsed ? "none" : "1px solid rgba(255,255,255,0.04)", paddingTop: leftSidebarCollapsed ? 0 : 8 }}>
+            <div style={{ fontSize: leftSidebarCollapsed ? 9 : 11, color: "#0df2f2", fontFamily: "'DM Mono',monospace", fontWeight: 500 }}>{fps} FPS</div>
+            {!leftSidebarCollapsed && <div style={{ fontSize: 8, color: "#334155", fontFamily: "'DM Mono',monospace" }}>{objects.length} objects</div>}
           </div>
         </div>
 
@@ -3142,10 +3256,10 @@ export default function Model3DPage() {
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#e879f9" }}>lens_blur</span>
               <span style={{ fontSize: 8.5, color: "#d946ef", fontFamily: "'DM Mono',monospace" }}>PBR Shaders · {renderQuality.toUpperCase()} · RTAO · Bloom · DOF · Grain</span>
             </div>}
-            {minecraftPresetOn && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.28)", borderRadius: 6 }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#c4b5fd" }}>auto_awesome</span>
-              <span style={{ fontSize: 8.5, color: "#ddd6fe", fontFamily: "'DM Mono',monospace" }}>Minecraft Shader Preset · REALISTIC BIAS {Math.round(effectiveSurroundingsBlend * 100)}%</span>
-            </div>}
+            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(13,242,242,0.08)", border: "1px solid rgba(13,242,242,0.24)", borderRadius: 6 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#0df2f2" }}>auto_awesome</span>
+              <span style={{ fontSize: 8.5, color: "#a5f3fc", fontFamily: "'DM Mono',monospace" }}>GRAPHICS STYLE: {graphicsStylePreset.replace("-", " ").toUpperCase()} · REALISTIC BIAS {Math.round(effectiveSurroundingsBlend * 100)}%</span>
+            </div>
             {editMode && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(13,242,242,0.1)", border: "1px solid rgba(13,242,242,0.3)", borderRadius: 6 }}>
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#0df2f2" }}>edit</span>
               <span style={{ fontSize: 8.5, color: "#0df2f2", fontFamily: "'DM Mono',monospace" }}>
