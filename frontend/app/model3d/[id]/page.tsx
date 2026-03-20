@@ -1545,18 +1545,19 @@ function RenderPipeline({
     const baseVignette = quality === "ultra" ? 0.66 : quality === "high" ? 0.62 : 0.58;
 
     const style = {
-      bloomMul: graphicsStylePreset === "valorant" ? 0.52 : graphicsStylePreset === "wuthering-waves" ? 0.86 : graphicsStylePreset === "minecraft" ? 1.02 : 0.84,
-      bloomMixAdd: graphicsStylePreset === "valorant" ? -0.1 : graphicsStylePreset === "wuthering-waves" ? -0.02 : graphicsStylePreset === "minecraft" ? 0.01 : -0.05,
-      bloomThresholdAdd: graphicsStylePreset === "valorant" ? 0.09 : graphicsStylePreset === "wuthering-waves" ? 0.07 : graphicsStylePreset === "minecraft" ? 0.02 : 0.12,
-      exposureAdd: graphicsStylePreset === "valorant" ? 0.06 : graphicsStylePreset === "wuthering-waves" ? 0.04 : graphicsStylePreset === "minecraft" ? 0.02 : -0.01,
-      vignetteAdd: graphicsStylePreset === "valorant" ? -0.08 : graphicsStylePreset === "wuthering-waves" ? 0.01 : graphicsStylePreset === "minecraft" ? 0.01 : 0.02,
-      caMul: graphicsStylePreset === "valorant" ? 0.5 : graphicsStylePreset === "wuthering-waves" ? 0.55 : 0.95,
-      grainMul: graphicsStylePreset === "valorant" ? 0.6 : graphicsStylePreset === "wuthering-waves" ? 0.9 : graphicsStylePreset === "minecraft" ? 0.8 : 0.85,
-      dofMul: graphicsStylePreset === "valorant" ? 1.45 : graphicsStylePreset === "wuthering-waves" ? 1.55 : graphicsStylePreset === "minecraft" ? 1.2 : 1.9,
-      saturation: graphicsStylePreset === "valorant" ? 1.06 : graphicsStylePreset === "wuthering-waves" ? 1.12 : graphicsStylePreset === "minecraft" ? 1.08 : 1.0,
-      contrast: graphicsStylePreset === "valorant" ? 1.1 : graphicsStylePreset === "wuthering-waves" ? 1.08 : graphicsStylePreset === "minecraft" ? 1.07 : 1.0,
-      gradeColor: graphicsStylePreset === "valorant" ? new THREE.Color("#ffe2cf") : graphicsStylePreset === "wuthering-waves" ? new THREE.Color("#dcecff") : graphicsStylePreset === "minecraft" ? new THREE.Color("#edf7ea") : new THREE.Color("#ffffff"),
-      gradeStrength: graphicsStylePreset === "valorant" ? 0.09 : graphicsStylePreset === "wuthering-waves" ? 0.1 : graphicsStylePreset === "minecraft" ? 0.06 : 0.0,
+      // More realistic grading: lower stylized bloom/aberration and balanced color response.
+      bloomMul: graphicsStylePreset === "valorant" ? 0.68 : graphicsStylePreset === "wuthering-waves" ? 0.74 : graphicsStylePreset === "minecraft" ? 0.96 : 0.84,
+      bloomMixAdd: graphicsStylePreset === "valorant" ? -0.05 : graphicsStylePreset === "wuthering-waves" ? -0.04 : graphicsStylePreset === "minecraft" ? 0.0 : -0.05,
+      bloomThresholdAdd: graphicsStylePreset === "valorant" ? 0.06 : graphicsStylePreset === "wuthering-waves" ? 0.05 : graphicsStylePreset === "minecraft" ? 0.03 : 0.12,
+      exposureAdd: graphicsStylePreset === "valorant" ? 0.03 : graphicsStylePreset === "wuthering-waves" ? 0.02 : graphicsStylePreset === "minecraft" ? 0.02 : -0.01,
+      vignetteAdd: graphicsStylePreset === "valorant" ? -0.05 : graphicsStylePreset === "wuthering-waves" ? -0.01 : graphicsStylePreset === "minecraft" ? 0.0 : 0.02,
+      caMul: graphicsStylePreset === "valorant" ? 0.3 : graphicsStylePreset === "wuthering-waves" ? 0.35 : 0.55,
+      grainMul: graphicsStylePreset === "valorant" ? 0.45 : graphicsStylePreset === "wuthering-waves" ? 0.6 : graphicsStylePreset === "minecraft" ? 0.55 : 0.85,
+      dofMul: graphicsStylePreset === "valorant" ? 1.08 : graphicsStylePreset === "wuthering-waves" ? 1.15 : graphicsStylePreset === "minecraft" ? 1.05 : 1.9,
+      saturation: graphicsStylePreset === "valorant" ? 1.01 : graphicsStylePreset === "wuthering-waves" ? 1.03 : graphicsStylePreset === "minecraft" ? 1.05 : 1.0,
+      contrast: graphicsStylePreset === "valorant" ? 1.02 : graphicsStylePreset === "wuthering-waves" ? 1.03 : graphicsStylePreset === "minecraft" ? 1.04 : 1.0,
+      gradeColor: graphicsStylePreset === "valorant" ? new THREE.Color("#f4eadf") : graphicsStylePreset === "wuthering-waves" ? new THREE.Color("#e4eef7") : graphicsStylePreset === "minecraft" ? new THREE.Color("#f2f8ef") : new THREE.Color("#ffffff"),
+      gradeStrength: graphicsStylePreset === "valorant" ? 0.04 : graphicsStylePreset === "wuthering-waves" ? 0.05 : graphicsStylePreset === "minecraft" ? 0.04 : 0.0,
     };
 
     bloomMat.uniforms.uIntensity.value = (baseBloomIntensity + cb * horizonBoost * 0.34 + (nightMode ? 0.04 : 0)) * style.bloomMul;
@@ -2064,24 +2065,23 @@ function DistantScenery({
     return new THREE.Color("#5c3f2d").lerp(new THREE.Color("#7a5840"), blend * 0.35).multiplyScalar(nightMode ? 0.5 : 1).getStyle();
   }, [nightMode, blend, graphicsStylePreset]);
 
-  const smoothTex = graphicsStylePreset === "wuthering-waves";
-  const stylizedTex = graphicsStylePreset === "valorant";
+  const smoothTex = graphicsStylePreset !== "minecraft";
   const blockyTex = graphicsStylePreset === "minecraft";
 
   const grassTex = useMemo(() => makePixelTexture(
     graphicsStylePreset === "wuthering-waves" ? "#60766f" : graphicsStylePreset === "valorant" ? "#9f8a6f" : "#4d9a45",
-    THREE.MathUtils.lerp(0.42, 0.2, blend),
-    graphicsStylePreset === "minecraft" ? 5 : stylizedTex ? 9 : THREE.MathUtils.lerp(16, 7, blend),
-    graphicsStylePreset === "minecraft" ? 9 : 7,
+    THREE.MathUtils.lerp(0.34, 0.16, blend),
+    graphicsStylePreset === "minecraft" ? 5 : graphicsStylePreset === "valorant" ? 18 : graphicsStylePreset === "wuthering-waves" ? 20 : THREE.MathUtils.lerp(16, 8, blend),
+    graphicsStylePreset === "minecraft" ? 9 : graphicsStylePreset === "valorant" ? 5 : graphicsStylePreset === "wuthering-waves" ? 6 : 7,
     blockyTex || !smoothTex
-  ), [blend, graphicsStylePreset, smoothTex, stylizedTex, blockyTex]);
+  ), [blend, graphicsStylePreset, smoothTex, blockyTex]);
   const dirtTex = useMemo(() => makePixelTexture(
     graphicsStylePreset === "wuthering-waves" ? "#434f5a" : graphicsStylePreset === "valorant" ? "#7c6a57" : graphicsStylePreset === "minecraft" ? "#8f6036" : "#5c3f2d",
-    THREE.MathUtils.lerp(0.35, 0.18, blend),
-    graphicsStylePreset === "minecraft" ? 5 : stylizedTex ? 8 : THREE.MathUtils.lerp(14, 7, blend),
-    graphicsStylePreset === "minecraft" ? 7 : 5,
+    THREE.MathUtils.lerp(0.3, 0.14, blend),
+    graphicsStylePreset === "minecraft" ? 5 : graphicsStylePreset === "valorant" ? 17 : graphicsStylePreset === "wuthering-waves" ? 18 : THREE.MathUtils.lerp(14, 8, blend),
+    graphicsStylePreset === "minecraft" ? 7 : graphicsStylePreset === "valorant" ? 5 : graphicsStylePreset === "wuthering-waves" ? 5 : 5,
     blockyTex || !smoothTex
-  ), [blend, graphicsStylePreset, smoothTex, stylizedTex, blockyTex]);
+  ), [blend, graphicsStylePreset, smoothTex, blockyTex]);
   const barkTex = useMemo(() => makePixelTexture("#6f4a2a", THREE.MathUtils.lerp(0.4, 0.16, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(14, 6, blend), 4, blockyTex || !smoothTex), [blend, graphicsStylePreset, smoothTex, blockyTex]);
   const leafTex = useMemo(() => makePixelTexture(graphicsStylePreset === "wuthering-waves" ? "#607468" : "#3f9148", THREE.MathUtils.lerp(0.45, 0.2, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(12, 6, blend), 5, blockyTex || !smoothTex), [blend, graphicsStylePreset, smoothTex, blockyTex]);
 
@@ -2114,6 +2114,30 @@ function DistantScenery({
     t.anisotropy = 8;
     return t;
   }, []);
+  const farGroundTex = useMemo(() => {
+    if (graphicsStylePreset === "minecraft") {
+      return makePixelTexture("#6b8f52", 0.34, 6, 26, true);
+    }
+    const t = makeTexture(graphicsStylePreset === "valorant" ? "concrete" : "marble", graphicsStylePreset === "valorant" ? "#a98f74" : "#6d8296");
+    t.repeat.set(graphicsStylePreset === "valorant" ? 9 : 8, graphicsStylePreset === "valorant" ? 9 : 8);
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.anisotropy = 8;
+    return t;
+  }, [graphicsStylePreset]);
+  const mountainTex = useMemo(() => {
+    const t = makeTexture(
+      graphicsStylePreset === "minecraft" ? "brick" : graphicsStylePreset === "valorant" ? "concrete" : "marble",
+      graphicsStylePreset === "minecraft" ? "#5f704a" : graphicsStylePreset === "valorant" ? "#7e6c5e" : "#58697a"
+    );
+    t.repeat.set(graphicsStylePreset === "minecraft" ? 6 : 5, graphicsStylePreset === "minecraft" ? 6 : 5);
+    t.anisotropy = 8;
+    if (graphicsStylePreset !== "minecraft") {
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.magFilter = THREE.LinearFilter;
+    }
+    return t;
+  }, [graphicsStylePreset]);
 
   useEffect(() => {
     // Keep nearest filtering for Minecraft, smooth filtering for realistic profiles.
@@ -2149,8 +2173,10 @@ function DistantScenery({
       valorantMetalTex.dispose();
       wutheringRockTex.dispose();
       wutheringRuinTex.dispose();
+      farGroundTex?.dispose();
+      mountainTex.dispose();
     };
-  }, [grassTex, dirtTex, barkTex, leafTex, valorantWallTex, valorantMetalTex, wutheringRockTex, wutheringRuinTex]);
+  }, [grassTex, dirtTex, barkTex, leafTex, valorantWallTex, valorantMetalTex, wutheringRockTex, wutheringRuinTex, farGroundTex, mountainTex]);
 
   const terrain = useMemo(() => {
     const out: { x: number; y: number; z: number; h: number }[] = [];
@@ -2238,10 +2264,52 @@ function DistantScenery({
     })
   ), []);
 
+  const farMountains = useMemo(() => (
+    Array.from({ length: graphicsStylePreset === "minecraft" ? 28 : 34 }, (_, i) => {
+      const count = graphicsStylePreset === "minecraft" ? 28 : 34;
+      const a = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.08;
+      const r = 170 + Math.random() * 120;
+      return {
+        x: Math.cos(a) * r,
+        z: Math.sin(a) * r,
+        h: graphicsStylePreset === "minecraft" ? 24 + Math.random() * 34 : 20 + Math.random() * 28,
+        s: graphicsStylePreset === "minecraft" ? 16 + Math.random() * 14 : 18 + Math.random() * 18,
+      };
+    })
+  ), [graphicsStylePreset]);
+
   const showBaseTerrain = graphicsStylePreset !== "default";
 
   return (
     <group>
+      {showBaseTerrain && (
+        <>
+          {/* Far-distance land plane for game-like horizon continuity. */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.34, 0]} raycast={NOOP_RAYCAST}>
+            <planeGeometry args={[620, 620, 1, 1]} />
+            <meshStandardMaterial
+              color={graphicsStylePreset === "valorant" ? "#aa9077" : graphicsStylePreset === "wuthering-waves" ? "#72879b" : "#6f9157"}
+              map={farGroundTex ?? undefined}
+              roughness={graphicsStylePreset === "minecraft" ? 0.94 : 0.88}
+              metalness={graphicsStylePreset === "wuthering-waves" ? 0.08 : 0.03}
+            />
+          </mesh>
+
+          {/* Mountain ring kept lightweight (no shadows/raycast) for FPS. */}
+          {farMountains.map((m, i) => (
+            <mesh key={`far-m-${i}`} position={[m.x, m.h * 0.5 - 0.34, m.z]} raycast={NOOP_RAYCAST}>
+              <coneGeometry args={[m.s, m.h, graphicsStylePreset === "minecraft" ? 4 : 6]} />
+              <meshStandardMaterial
+                color={graphicsStylePreset === "valorant" ? "#7e6c5e" : graphicsStylePreset === "wuthering-waves" ? "#58697a" : "#567044"}
+                map={mountainTex}
+                roughness={graphicsStylePreset === "minecraft" ? 0.9 : 0.82}
+                metalness={graphicsStylePreset === "wuthering-waves" ? 0.08 : 0.03}
+              />
+            </mesh>
+          ))}
+        </>
+      )}
+
       {showBaseTerrain && terrain.map((b, i) => (
         <mesh key={`tb-${i}`} position={[b.x, b.y - b.h * 0.7, b.z]} castShadow receiveShadow raycast={NOOP_RAYCAST}>
           <boxGeometry args={[5.8, b.h * 1.4, 5.8]} />
@@ -2341,6 +2409,150 @@ function DistantScenery({
             <cylinderGeometry args={[r.w * 0.42, r.w * 0.56, 0.16, 12]} />
             <meshPhysicalMaterial color="#617b93" map={wutheringRockTex} roughness={0.12} metalness={0.2} reflectivity={0.9} transmission={0.12} clearcoat={0.9} clearcoatRoughness={0.06} />
           </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+function RoamingMinecraftLife({ active }: { active: boolean }) {
+  const refs = useRef<Array<THREE.Group | null>>([]);
+  const cowHeadRefs = useRef<Array<THREE.Group | null>>([]);
+  const cowLegRefs = useRef<Array<Array<THREE.Group | null>>>([]);
+  const humanHeadRefs = useRef<Array<THREE.Group | null>>([]);
+  const humanArmRefs = useRef<Array<Array<THREE.Group | null>>>([]);
+  const humanLegRefs = useRef<Array<Array<THREE.Group | null>>>([]);
+
+  const actors = useMemo(() => ([
+    { kind: "cow" as const, cx: -18, cz: 12, rx: 10, rz: 7, speed: 0.08, phase: 0.3 },
+    { kind: "cow" as const, cx: 14, cz: -16, rx: 11, rz: 8, speed: 0.07, phase: 1.7 },
+    { kind: "character" as const, cx: -8, cz: -9, rx: 7, rz: 6, speed: 0.12, phase: 2.6 },
+    { kind: "character" as const, cx: 10, cz: 9, rx: 8, rz: 5, speed: 0.11, phase: 4.2 },
+  ]), []);
+
+  useFrame(({ clock }) => {
+    if (!active) return;
+    const t = clock.elapsedTime;
+    for (let i = 0; i < actors.length; i++) {
+      const a = actors[i];
+      const ref = refs.current[i];
+      if (!a || !ref) continue;
+      const ang = a.phase + t * a.speed;
+      const x = a.cx + Math.cos(ang) * a.rx;
+      const z = a.cz + Math.sin(ang * 0.92) * a.rz;
+      const locomotion = a.kind === "cow" ? 2.4 : 3.1;
+      const gait = t * locomotion + a.phase * 2.0;
+      ref.position.set(x, -0.02 + Math.sin(gait * 2.0) * (a.kind === "cow" ? 0.022 : 0.03), z);
+      ref.rotation.y = Math.atan2(
+        -Math.sin(ang) * a.rx,
+        Math.cos(ang * 0.92) * a.rz * 0.92
+      );
+
+      if (a.kind === "cow") {
+        const head = cowHeadRefs.current[i];
+        if (head) {
+          head.rotation.x = 0.05 + Math.sin(gait * 1.1) * 0.12;
+          head.rotation.y = Math.sin(gait * 0.6) * 0.18;
+        }
+        const legs = cowLegRefs.current[i];
+        if (legs?.length === 4) {
+          const swingA = Math.sin(gait * 3.2) * 0.48;
+          const swingB = Math.sin(gait * 3.2 + Math.PI) * 0.48;
+          if (legs[0]) legs[0].rotation.x = swingA;
+          if (legs[1]) legs[1].rotation.x = swingB;
+          if (legs[2]) legs[2].rotation.x = swingB;
+          if (legs[3]) legs[3].rotation.x = swingA;
+        }
+      } else {
+        const head = humanHeadRefs.current[i];
+        if (head) {
+          head.rotation.x = Math.sin(gait * 1.6) * 0.06;
+          head.rotation.y = Math.sin(gait * 0.8) * 0.12;
+        }
+        const arms = humanArmRefs.current[i];
+        if (arms?.length === 2) {
+          const armA = Math.sin(gait * 3.6) * 0.62;
+          const armB = Math.sin(gait * 3.6 + Math.PI) * 0.62;
+          if (arms[0]) arms[0].rotation.x = armA;
+          if (arms[1]) arms[1].rotation.x = armB;
+        }
+        const legs = humanLegRefs.current[i];
+        if (legs?.length === 2) {
+          const legA = Math.sin(gait * 3.6 + Math.PI) * 0.7;
+          const legB = Math.sin(gait * 3.6) * 0.7;
+          if (legs[0]) legs[0].rotation.x = legA;
+          if (legs[1]) legs[1].rotation.x = legB;
+        }
+      }
+    }
+  });
+
+  if (!active) return null;
+
+  return (
+    <group>
+      {actors.map((a, i) => (
+        <group key={`life-${i}`} ref={(node) => { refs.current[i] = node; }} raycast={NOOP_RAYCAST}>
+          {a.kind === "cow" ? (
+            <group scale={[0.95, 0.95, 0.95]}>
+              <mesh position={[0, 0.55, 0]}>
+                <boxGeometry args={[1.25, 0.75, 0.72]} />
+                <meshStandardMaterial color="#8b5f3b" roughness={0.9} />
+              </mesh>
+              <group ref={(node) => { cowHeadRefs.current[i] = node; }} position={[0.72, 0.63, 0]}>
+                <mesh>
+                  <boxGeometry args={[0.52, 0.52, 0.46]} />
+                  <meshStandardMaterial color="#a3744a" roughness={0.88} />
+                </mesh>
+              </group>
+              {[[-0.42, 0.36, -0.24], [-0.42, 0.36, 0.24], [0.25, 0.36, -0.24], [0.25, 0.36, 0.24]].map((p, k) => (
+                <group key={k} ref={(node) => {
+                  if (!cowLegRefs.current[i]) cowLegRefs.current[i] = [];
+                  cowLegRefs.current[i][k] = node;
+                }} position={[p[0], p[1], p[2]]}>
+                  <mesh position={[0, -0.18, 0]}>
+                    <boxGeometry args={[0.17, 0.36, 0.17]} />
+                    <meshStandardMaterial color="#5f4028" roughness={0.92} />
+                  </mesh>
+                </group>
+              ))}
+            </group>
+          ) : (
+            <group>
+              <mesh position={[0, 0.96, 0]}>
+                <boxGeometry args={[0.45, 0.64, 0.3]} />
+                <meshStandardMaterial color="#3b82f6" roughness={0.82} />
+              </mesh>
+              <group ref={(node) => { humanHeadRefs.current[i] = node; }} position={[0, 1.4, 0]}>
+                <mesh>
+                  <boxGeometry args={[0.38, 0.38, 0.38]} />
+                  <meshStandardMaterial color="#f3c8a2" roughness={0.92} />
+                </mesh>
+              </group>
+              {[-1, 1].map((s, k) => (
+                <group key={`ha-${k}`} ref={(node) => {
+                  if (!humanArmRefs.current[i]) humanArmRefs.current[i] = [];
+                  humanArmRefs.current[i][k] = node;
+                }} position={[s * 0.28, 1.16, 0]}>
+                  <mesh position={[0, -0.24, 0]}>
+                    <boxGeometry args={[0.12, 0.48, 0.12]} />
+                    <meshStandardMaterial color="#274362" roughness={0.86} />
+                  </mesh>
+                </group>
+              ))}
+              {[-1, 1].map((s, k) => (
+                <group key={`hl-${k}`} ref={(node) => {
+                  if (!humanLegRefs.current[i]) humanLegRefs.current[i] = [];
+                  humanLegRefs.current[i][k] = node;
+                }} position={[s * 0.14, 0.74, 0]}>
+                  <mesh position={[0, -0.29, 0]}>
+                    <boxGeometry args={[0.14, 0.58, 0.14]} />
+                    <meshStandardMaterial color="#2f3f56" roughness={0.86} />
+                  </mesh>
+                </group>
+              ))}
+            </group>
+          )}
         </group>
       ))}
     </group>
@@ -3593,6 +3805,7 @@ export default function Model3DPage() {
 
                 {/* Natural surroundings for depth and color context */}
                 {graphicsStylePreset !== "default" && <DistantScenery nightMode={isNightScene} sunElevationDeg={sunElevationDeg} surroundingsBlend={effectiveSurroundingsBlend} waterStyle={effectiveWaterStyle} graphicsStylePreset={graphicsStylePreset} />}
+                {graphicsStylePreset !== "default" && <RoamingMinecraftLife active={!showFlood && !showSnow} />}
 
                 {/* All scene objects */}
                 {objects.map(obj => (
