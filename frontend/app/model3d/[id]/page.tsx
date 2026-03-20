@@ -23,12 +23,20 @@ type RenderQuality = "low" | "med" | "high" | "ultra";
 type TimeOfDayMode = "auto" | "day" | "night";
 type ShaderLookPreset = "custom" | "golden-hour" | "cinematic-day" | "deep-night";
 type GraphicsStylePreset = "default" | "minecraft" | "valorant" | "wuthering-waves";
+type MusicTrackId = "night-slow" | "cinematic-chase-inspired" | "ambient-dusk";
+type MusicPlaybackState = "idle" | "playing" | "paused" | "error";
 type SceneObj = {
   id: string; kind: ObjKind; type: string;
   x: number; y: number; z: number; rotY: number;
   w: number; h: number; d: number;
   color: string; tex?: TexType;
 };
+
+const BACKGROUND_TRACKS: { id: MusicTrackId; label: string; src: string }[] = [
+  { id: "night-slow", label: "Night Slow", src: "/audio/night-slow-01.mp3" },
+  { id: "cinematic-chase-inspired", label: "Cinematic Chase (Inspired)", src: "/audio/cinematic-chase-inspired.mp3" },
+  { id: "ambient-dusk", label: "Ambient Dusk", src: "/audio/ambient-dusk.mp3" },
+];
 
 // ─── Error Boundary ───────────────────────────────────────────────────────────
 class ThreeErrorBoundary extends Component<{ children: React.ReactNode }, { error: string | null }> {
@@ -3374,6 +3382,11 @@ export default function Model3DPage() {
   const [showMoon, setShowMoon] = useState(false);
   const [showFlood, setShowFlood] = useState(false);
   const [showSolarSystem, setShowSolarSystem] = useState(false);
+  const [musicEnabled, setMusicEnabled] = useState(false);
+  const [musicPanelOpen, setMusicPanelOpen] = useState(false);
+  const [musicTrackId, setMusicTrackId] = useState<MusicTrackId>("night-slow");
+  const [musicVolume, setMusicVolume] = useState(0.42);
+  const [musicPlaybackState, setMusicPlaybackState] = useState<MusicPlaybackState>("idle");
   const [timeOfDayMode, setTimeOfDayMode] = useState<TimeOfDayMode>("auto");
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("high");
   const [showShaders, setShowShaders] = useState(true);
@@ -3398,7 +3411,9 @@ export default function Model3DPage() {
   const [winColor, setWinColor] = useState("#1a90e8");
   const [winOpacity, setWinOpacity] = useState(0.5);
   const nid = useRef(5000);
+  const musicAudioRef = useRef<HTMLAudioElement | null>(null);
   const selected = objects.find(o => o.id === selectedId) ?? null;
+  const activeMusicTrack = useMemo(() => BACKGROUND_TRACKS.find(t => t.id === musicTrackId) ?? BACKGROUND_TRACKS[0], [musicTrackId]);
 
   const shouldForceNightEffects = showSolarSystem;
   const isNightBySun = sunElevationDeg < -0.5;
@@ -3501,6 +3516,54 @@ export default function Model3DPage() {
     const id = setInterval(() => { const now = performance.now(); frames++; if (now - last > 1000) { setFps(Math.round(frames * 1000 / (now - last))); frames = 0; last = now; } }, 120);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    const audio = new Audio();
+    audio.preload = "auto";
+    audio.loop = true;
+    audio.volume = 0.42;
+    musicAudioRef.current = audio;
+
+    const onPlaying = () => setMusicPlaybackState("playing");
+    const onPause = () => setMusicPlaybackState("paused");
+    const onError = () => setMusicPlaybackState("error");
+    audio.addEventListener("playing", onPlaying);
+    audio.addEventListener("pause", onPause);
+    audio.addEventListener("error", onError);
+
+    return () => {
+      audio.pause();
+      audio.src = "";
+      audio.removeEventListener("playing", onPlaying);
+      audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("error", onError);
+      musicAudioRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!musicAudioRef.current) return;
+    musicAudioRef.current.volume = musicVolume;
+  }, [musicVolume]);
+
+  useEffect(() => {
+    const audio = musicAudioRef.current;
+    if (!audio) return;
+    if (audio.src !== window.location.origin + activeMusicTrack.src) {
+      audio.src = activeMusicTrack.src;
+    }
+    if (musicEnabled) {
+      audio.play().then(() => {
+        setMusicPlaybackState("playing");
+      }).catch(() => {
+        // Browser autoplay policy or missing file; keep UI stable.
+        setMusicPlaybackState("error");
+      });
+    } else {
+      audio.pause();
+      setMusicPlaybackState("paused");
+    }
+  }, [musicEnabled, activeMusicTrack]);
 
   const updateObject = useCallback((id: string, patch: Partial<SceneObj>) =>
     setObjects(p => p.map(o => o.id === id ? { ...o, ...patch } : o)), []);
@@ -3854,6 +3917,7 @@ export default function Model3DPage() {
               { l: "SNOW",  i: "ac_unit",        active: showSnow,   fn: () => setShowSnow(v => !v),   color: "#e0f2fe" },
               { l: "FLOOD", i: "flood",          active: showFlood,  fn: () => setShowFlood(v => !v),  color: "#1d4ed8" },
               { l: "SOLAR", i: "public",          active: showSolarSystem, fn: () => setShowSolarSystem(v => !v), color: "#ffd700" },
+              { l: "MUSIC", i: "music_note",      active: musicEnabled, fn: () => { setMusicEnabled(v => !v); setMusicPanelOpen(true); }, color: "#22d3ee" },
               { l: "SHADER",i: "lens_blur",      active: showShaders,fn: () => setShowShaders(v=>!v),  color: "#e879f9" },
               { l: "GRID",  i: "grid_on",        active: showGrid,   fn: () => setShowGrid(v => !v),   color: "#0df2f2" },
             ].map(({ l, i, active, fn, color }) => (
@@ -3863,6 +3927,87 @@ export default function Model3DPage() {
               </button>
             ))}
           </div>
+
+          {musicPanelOpen && (
+            <div style={{
+              position: "absolute",
+              right: 62,
+              top: 14,
+              width: 242,
+              background: "rgba(6,14,14,0.94)",
+              border: "1px solid rgba(34,211,238,0.25)",
+              borderRadius: 8,
+              padding: "9px 10px",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.28)",
+              zIndex: 8,
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div style={{ fontSize: 8, color: "#67e8f9", fontFamily: "'DM Mono',monospace", letterSpacing: "0.08em", textTransform: "uppercase" }}>Soundtrack</div>
+                <button
+                  onClick={() => setMusicPanelOpen(false)}
+                  style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 12, lineHeight: 1 }}
+                >✕</button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, marginBottom: 7 }}>
+                <select
+                  value={musicTrackId}
+                  onChange={(e) => setMusicTrackId(e.target.value as MusicTrackId)}
+                  style={{
+                    width: "100%",
+                    background: "rgba(0,0,0,0.35)",
+                    border: "1px solid rgba(34,211,238,0.25)",
+                    borderRadius: 5,
+                    color: "#cffafe",
+                    padding: "5px 6px",
+                    fontSize: 8.5,
+                    fontFamily: "'DM Mono',monospace",
+                  }}
+                >
+                  {BACKGROUND_TRACKS.map(t => (
+                    <option key={t.id} value={t.id}>{t.label}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setMusicEnabled(v => !v)}
+                  style={{
+                    minWidth: 70,
+                    background: musicEnabled ? "rgba(34,211,238,0.18)" : "rgba(255,255,255,0.05)",
+                    border: `1px solid ${musicEnabled ? "rgba(34,211,238,0.45)" : "rgba(255,255,255,0.12)"}`,
+                    borderRadius: 5,
+                    color: musicEnabled ? "#67e8f9" : "#94a3b8",
+                    fontSize: 8,
+                    cursor: "pointer",
+                    fontFamily: "'DM Mono',monospace",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                  }}
+                >
+                  {musicEnabled ? "Disable" : "Enable"}
+                </button>
+              </div>
+
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                  <span style={{ fontSize: 8, color: "#7dd3fc", fontFamily: "'DM Mono',monospace" }}>Volume</span>
+                  <span style={{ fontSize: 8, color: "#bae6fd", fontFamily: "'DM Mono',monospace" }}>{Math.round(musicVolume * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={musicVolume}
+                  onChange={(e) => setMusicVolume(parseFloat(e.target.value))}
+                  style={{ width: "100%", accentColor: "#22d3ee", cursor: "pointer" }}
+                />
+              </div>
+
+              <div style={{ fontSize: 7.5, color: musicPlaybackState === "error" ? "#fca5a5" : "#94a3b8", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                {musicPlaybackState === "error" ? "Audio unavailable: add local files under /public/audio" : `Status: ${musicPlaybackState}`}
+              </div>
+            </div>
+          )}
 
           {/* Quality selector */}
           {showShaders && (
