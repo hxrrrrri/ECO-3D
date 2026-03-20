@@ -530,6 +530,31 @@ function ArchitecturalNightFill({ nightMode, assistOn }: { nightMode: boolean; a
   );
 }
 
+function StylePresetFill({ graphicsStylePreset, nightMode }: { graphicsStylePreset: GraphicsStylePreset; nightMode: boolean }) {
+  if (nightMode) return null;
+  if (graphicsStylePreset !== "valorant" && graphicsStylePreset !== "wuthering-waves") return null;
+
+  if (graphicsStylePreset === "valorant") {
+    return (
+      <group>
+        {/* Daytime tactical fill to avoid black silhouette buildings. */}
+        <hemisphereLight args={["#f4ddc0", "#8c7765", 0.34]} />
+        <directionalLight position={[-10, 12, 9]} intensity={0.58} color="#f3d3ae" />
+        <directionalLight position={[9, 10, -8]} intensity={0.42} color="#e3eef8" />
+      </group>
+    );
+  }
+
+  return (
+    <group>
+      {/* Cooler cinematic fill for wuthering profile readability. */}
+      <hemisphereLight args={["#d9e9ff", "#4f657b", 0.32]} />
+      <directionalLight position={[-11, 13, 10]} intensity={0.54} color="#c8deff" />
+      <directionalLight position={[10, 11, -9]} intensity={0.38} color="#f1f6ff" />
+    </group>
+  );
+}
+
 function VoxelClouds({
   active,
   sunElevationDeg,
@@ -1813,8 +1838,8 @@ function PBRGround({ showGrid, wet, nightMode, graphicsStylePreset }: { showGrid
       matRef.current.uniforms.uColor.value.set("#2b333c");
       matRef.current.uniforms.uColor2.value.set("#394754");
     } else if (graphicsStylePreset === "minecraft") {
-      matRef.current.uniforms.uColor.value.set("#9f7d4f");
-      matRef.current.uniforms.uColor2.value.set("#bc9a66");
+      matRef.current.uniforms.uColor.value.set("#8f6436");
+      matRef.current.uniforms.uColor2.value.set("#b8844f");
     } else if (graphicsStylePreset === "default") {
       matRef.current.uniforms.uColor.value.set("#030507");
       matRef.current.uniforms.uColor2.value.set("#05080b");
@@ -1897,10 +1922,10 @@ function makeGroundProfileTexture(style: GraphicsStylePreset): THREE.CanvasTextu
     for (let y = 0; y < size; y += tile) {
       for (let x = 0; x < size; x += tile) {
         const r = Math.random();
-        let base = "#a78452";
-        if (r > 0.84) base = "#ba9763";
-        else if (r > 0.68) base = "#967248";
-        else if (r > 0.5) base = "#b38f5d";
+        let base = "#9a6b3d";
+        if (r > 0.84) base = "#b27c46";
+        else if (r > 0.68) base = "#865a32";
+        else if (r > 0.5) base = "#a97441";
         ctx.fillStyle = base;
         ctx.fillRect(x, y, tile, tile);
 
@@ -1908,7 +1933,7 @@ function makeGroundProfileTexture(style: GraphicsStylePreset): THREE.CanvasTextu
         for (let i = 0; i < 20; i++) {
           const px = x + ((Math.random() * tile) | 0);
           const py = y + ((Math.random() * tile) | 0);
-          ctx.fillStyle = Math.random() > 0.5 ? "#8e6a42" : "#c4a06d";
+          ctx.fillStyle = Math.random() > 0.5 ? "#774d2b" : "#bf8650";
           ctx.fillRect(px, py, 1, 1);
         }
 
@@ -1922,7 +1947,8 @@ function makeGroundProfileTexture(style: GraphicsStylePreset): THREE.CanvasTextu
           }
         }
 
-        ctx.fillStyle = "rgba(0,0,0,0.14)";
+        // Keep block seams brown, not near-black.
+        ctx.fillStyle = "rgba(94,58,30,0.42)";
         ctx.fillRect(x, y + tile - 1, tile, 1);
         ctx.fillRect(x + tile - 1, y, 1, tile);
       }
@@ -2034,6 +2060,7 @@ function DistantScenery({
   const dirtTint = useMemo(() => {
     if (graphicsStylePreset === "valorant") return new THREE.Color("#705f50").lerp(new THREE.Color("#9a8268"), blend * 0.25).multiplyScalar(nightMode ? 0.5 : 1).getStyle();
     if (graphicsStylePreset === "wuthering-waves") return new THREE.Color("#353b42").lerp(new THREE.Color("#56606a"), blend * 0.45).multiplyScalar(nightMode ? 0.52 : 0.92).getStyle();
+    if (graphicsStylePreset === "minecraft") return new THREE.Color("#8b5d34").lerp(new THREE.Color("#b47c44"), blend * 0.34).multiplyScalar(nightMode ? 0.62 : 1.05).getStyle();
     return new THREE.Color("#5c3f2d").lerp(new THREE.Color("#7a5840"), blend * 0.35).multiplyScalar(nightMode ? 0.5 : 1).getStyle();
   }, [nightMode, blend, graphicsStylePreset]);
 
@@ -2049,7 +2076,7 @@ function DistantScenery({
     blockyTex || !smoothTex
   ), [blend, graphicsStylePreset, smoothTex, stylizedTex, blockyTex]);
   const dirtTex = useMemo(() => makePixelTexture(
-    graphicsStylePreset === "wuthering-waves" ? "#434f5a" : graphicsStylePreset === "valorant" ? "#7c6a57" : "#5c3f2d",
+    graphicsStylePreset === "wuthering-waves" ? "#434f5a" : graphicsStylePreset === "valorant" ? "#7c6a57" : graphicsStylePreset === "minecraft" ? "#8f6036" : "#5c3f2d",
     THREE.MathUtils.lerp(0.35, 0.18, blend),
     graphicsStylePreset === "minecraft" ? 5 : stylizedTex ? 8 : THREE.MathUtils.lerp(14, 7, blend),
     graphicsStylePreset === "minecraft" ? 7 : 5,
@@ -2261,15 +2288,15 @@ function DistantScenery({
         <group key={`val-${i}`} position={[s.x, 0, s.z]} raycast={NOOP_RAYCAST}>
           <mesh position={[0, s.h * 0.5 - 0.3, 0]} castShadow receiveShadow>
             <boxGeometry args={[s.w, s.h, s.w * 0.85]} />
-            <meshStandardMaterial color="#9b836f" map={valorantWallTex} roughness={0.82} metalness={0.04} />
+            <meshStandardMaterial color="#b49a83" map={valorantWallTex} roughness={0.8} metalness={0.04} />
           </mesh>
           <mesh position={[0, s.h + 0.2, 0]} castShadow>
             <boxGeometry args={[s.w * 0.9, 0.42, s.w * 0.76]} />
-            <meshStandardMaterial color="#675a50" map={valorantMetalTex} roughness={0.68} metalness={0.1} />
+            <meshStandardMaterial color="#7d6e62" map={valorantMetalTex} roughness={0.66} metalness={0.1} />
           </mesh>
           <mesh position={[0, s.h * 0.5, s.w * 0.45]} castShadow>
             <boxGeometry args={[s.w * 0.7, s.h * 0.75, 0.12]} />
-            <meshStandardMaterial color="#5f534a" map={valorantMetalTex} roughness={0.8} metalness={0.06} />
+            <meshStandardMaterial color="#716358" map={valorantMetalTex} roughness={0.78} metalness={0.06} />
           </mesh>
         </group>
       ))}
@@ -2278,11 +2305,11 @@ function DistantScenery({
         <group key={`vcrate-${i}`} position={[c.x, 0, c.z]} raycast={NOOP_RAYCAST}>
           <mesh position={[0, c.h * 0.5 - 0.25, 0]} castShadow receiveShadow>
             <boxGeometry args={[c.w, c.h, c.w]} />
-            <meshStandardMaterial color="#b18f72" map={valorantWallTex} roughness={0.78} metalness={0.04} />
+            <meshStandardMaterial color="#c6a588" map={valorantWallTex} roughness={0.76} metalness={0.04} />
           </mesh>
           <mesh position={[0, c.h * 0.5 - 0.24, 0]} castShadow>
             <boxGeometry args={[c.w * 0.88, c.h * 0.84, c.w * 0.88]} />
-            <meshStandardMaterial color="#544840" map={valorantMetalTex} roughness={0.84} metalness={0.08} wireframe />
+            <meshStandardMaterial color="#6a5a50" map={valorantMetalTex} roughness={0.82} metalness={0.08} wireframe />
           </mesh>
         </group>
       ))}
@@ -2291,11 +2318,11 @@ function DistantScenery({
         <group key={`wu-${i}`} position={[p.x, 0, p.z]} raycast={NOOP_RAYCAST}>
           <mesh position={[0, p.h * 0.48, 0]} castShadow receiveShadow>
             <coneGeometry args={[p.s, p.h, 5]} />
-            <meshStandardMaterial color="#5b6572" map={wutheringRockTex} roughness={0.7} metalness={0.12} />
+            <meshStandardMaterial color="#6f7f91" map={wutheringRockTex} roughness={0.68} metalness={0.12} />
           </mesh>
           <mesh position={[0, p.h * 0.08, 0]} castShadow>
             <boxGeometry args={[p.s * 1.25, p.h * 0.18, p.s * 1.25]} />
-            <meshStandardMaterial color="#424c58" map={wutheringRuinTex} roughness={0.78} metalness={0.08} />
+            <meshStandardMaterial color="#566577" map={wutheringRuinTex} roughness={0.76} metalness={0.08} />
           </mesh>
         </group>
       ))}
@@ -2304,15 +2331,15 @@ function DistantScenery({
         <group key={`wruin-${i}`} position={[r.x, 0, r.z]} raycast={NOOP_RAYCAST}>
           <mesh position={[0, r.h * 0.5 - 0.2, 0]} castShadow receiveShadow>
             <boxGeometry args={[r.w, r.h, 1.1]} />
-            <meshStandardMaterial color="#6d7682" map={wutheringRuinTex} roughness={0.76} metalness={0.1} />
+            <meshStandardMaterial color="#8798ab" map={wutheringRuinTex} roughness={0.74} metalness={0.1} />
           </mesh>
           <mesh position={[0, r.h * 0.7, 0]} castShadow>
             <torusGeometry args={[r.w * 0.34, 0.2, 8, 22, Math.PI]} />
-            <meshStandardMaterial color="#818b98" map={wutheringRockTex} roughness={0.68} metalness={0.16} />
+            <meshStandardMaterial color="#97a8bb" map={wutheringRockTex} roughness={0.66} metalness={0.16} />
           </mesh>
           <mesh position={[0, -0.48, 0]} receiveShadow>
             <cylinderGeometry args={[r.w * 0.42, r.w * 0.56, 0.16, 12]} />
-            <meshPhysicalMaterial color="#4c6072" map={wutheringRockTex} roughness={0.12} metalness={0.2} reflectivity={0.9} transmission={0.12} clearcoat={0.9} clearcoatRoughness={0.06} />
+            <meshPhysicalMaterial color="#617b93" map={wutheringRockTex} roughness={0.12} metalness={0.2} reflectivity={0.9} transmission={0.12} clearcoat={0.9} clearcoatRoughness={0.06} />
           </mesh>
         </group>
       ))}
@@ -3161,11 +3188,11 @@ export default function Model3DPage() {
   const nid = useRef(5000);
   const selected = objects.find(o => o.id === selectedId) ?? null;
 
-  const shouldForceNightEffects = showMoon || showSolarSystem;
+  const shouldForceNightEffects = showSolarSystem;
   const isNightBySun = sunElevationDeg < -0.5;
   const isNightScene = timeOfDayMode === "night" || (timeOfDayMode === "auto" && (isNightBySun || shouldForceNightEffects));
   const effectiveShowSun = showSun && !isNightScene;
-  const effectiveShowMoon = showMoon && isNightScene;
+  const effectiveShowMoon = showMoon;
   const effectiveSunriseRays = sunriseRaysIntensity;
   const effectiveCloudDensity = cloudDensity;
   const effectiveWaterStyle = waterStyle;
@@ -3559,6 +3586,7 @@ export default function Model3DPage() {
                 {/* Scene lights + weather effects */}
                 <Lighting sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunOn={effectiveShowSun} nightLightOn={nightLight} nightMode={isNightScene} sunriseRaysIntensity={effectiveSunriseRays} />
                 <ArchitecturalNightFill nightMode={isNightScene} assistOn={nightLight} />
+                <StylePresetFill graphicsStylePreset={graphicsStylePreset} nightMode={isNightScene} />
 
                 {/* Shader ground replaces plain mesh ground */}
                 <PBRGround showGrid={showGrid} wet={showFlood} nightMode={isNightScene} graphicsStylePreset={graphicsStylePreset} />
