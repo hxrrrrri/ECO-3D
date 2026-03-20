@@ -3,7 +3,7 @@ import { useRef, useMemo, Suspense, useState, useEffect, useLayoutEffect, useCal
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, Text } from "@react-three/drei";
+import { OrbitControls, Text, Sky } from "@react-three/drei";
 
 import * as THREE from "three";
 import { useEco3DStore } from "@/store/useEco3DStore";
@@ -15,9 +15,12 @@ const NOOP_RAYCAST = () => {};
 const REAL_RAYCAST = THREE.Mesh.prototype.raycast;
 const SNAP = 0.25;
 const snap = (v: number) => Math.round(v / SNAP) * SNAP;
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 type TexType = "none" | "brick" | "concrete" | "wood" | "plaster" | "marble" | "tile";
 type ObjKind = "object" | "wall" | "room";
+type RenderQuality = "low" | "med" | "high" | "ultra";
+type TimeOfDayMode = "auto" | "day" | "night";
 type SceneObj = {
   id: string; kind: ObjKind; type: string;
   x: number; y: number; z: number; rotY: number;
@@ -384,7 +387,7 @@ function sunAnglesToScenePosition(azimuthDeg: number, elevationDeg: number, radi
   const horizontal = Math.cos(elevationRad) * radius;
   const x = Math.sin(azimuthRad) * horizontal;
   const z = -Math.cos(azimuthRad) * horizontal;
-  const y = Math.sin(elevationRad) * radius + 6;
+  const y = Math.sin(elevationRad) * radius;
   return [x, y, z];
 }
 
@@ -393,36 +396,48 @@ function Lighting({
   sunElevationDeg,
   sunOn,
   nightLightOn,
+  nightMode,
+  sunriseRaysIntensity,
 }: {
   sunAzimuthDeg: number;
   sunElevationDeg: number;
   sunOn: boolean;
   nightLightOn: boolean;
+  nightMode: boolean;
+  sunriseRaysIntensity: number;
 }) {
   const pos = sunAnglesToScenePosition(sunAzimuthDeg, sunElevationDeg, 24);
-  const studioMode = nightLightOn;
+  const studioMode = nightLightOn && !nightMode;
   const isSunAboveHorizon = sunElevationDeg > 0;
+  const useNightLighting = nightMode && !studioMode;
+  const horizonBoost = clamp01(1 - Math.abs(sunElevationDeg - 6) / 18);
+  const raysBoost = 1 + horizonBoost * sunriseRaysIntensity * 0.95;
   return <>
-    <ambientLight intensity={studioMode ? 1.6 : (sunOn ? 0.55 : 0.95)} color={studioMode ? "#ffffff" : "#e8f4ff"} />
-    <hemisphereLight args={studioMode ? ["#ffffff","#aabbaa",1.0] : ["#c8e4ff", "#182020", 0.4]} />
+    <ambientLight intensity={studioMode ? 0.7 : useNightLighting ? 0.12 : (sunOn ? 0.26 : 0.38)} color={studioMode ? "#fff9ef" : useNightLighting ? "#9db6d8" : "#d8e8ff"} />
+    <hemisphereLight args={studioMode ? ["#fff6e8","#8d9b8a",0.45] : useNightLighting ? ["#506a8a", "#0f1620", 0.2] : ["#bcdcff", "#1a2424", 0.28]} />
     {studioMode && <>
-      <directionalLight position={[14, 20, 10]} intensity={2.2} color="#ffffff" castShadow shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-left={-32} shadow-camera-right={32} shadow-camera-top={32} shadow-camera-bottom={-32} shadow-camera-near={0.5} shadow-camera-far={100} />
-      <directionalLight position={[-12, 15, -8]} intensity={1.2} color="#d8eeff" />
-      <directionalLight position={[0, 10, -16]} intensity={0.8} color="#ffeedd" />
-      <pointLight position={[0, 6, 0]} intensity={1.0} color="#ffe8cc" distance={40} decay={1.2} />
+      <directionalLight position={[14, 20, 10]} intensity={1.15} color="#fff8ef" castShadow shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-left={-32} shadow-camera-right={32} shadow-camera-top={32} shadow-camera-bottom={-32} shadow-camera-near={0.5} shadow-camera-far={100} />
+      <directionalLight position={[-12, 15, -8]} intensity={0.55} color="#d8eeff" />
+      <directionalLight position={[0, 10, -16]} intensity={0.35} color="#ffeedd" />
+      <pointLight position={[0, 6, 0]} intensity={0.35} color="#ffe8cc" distance={40} decay={1.2} />
     </>}
-    {!studioMode && sunOn && isSunAboveHorizon && <directionalLight position={pos} intensity={2.6} castShadow color="#fff5d0" shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-near={0.5} shadow-camera-far={120} shadow-camera-left={-35} shadow-camera-right={35} shadow-camera-top={35} shadow-camera-bottom={-35} />}
-    {!studioMode && !sunOn && <><pointLight position={[0, 14, 0]} intensity={2} color="#ffffff" /><pointLight position={[-10, 8, -10]} intensity={0.6} color="#c8d8ff" /><pointLight position={[10, 8, 10]} intensity={0.6} color="#ffd8c8" /></>}
+    {!studioMode && !useNightLighting && sunOn && isSunAboveHorizon && <directionalLight position={pos} intensity={1.45 * raysBoost} castShadow color="#fff2cf" shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-near={0.5} shadow-camera-far={120} shadow-camera-left={-35} shadow-camera-right={35} shadow-camera-top={35} shadow-camera-bottom={-35} />}
+    {!studioMode && !useNightLighting && sunOn && isSunAboveHorizon && <pointLight position={[pos[0] * 0.6, Math.max(1.8, pos[1] * 0.45), pos[2] * 0.6]} intensity={0.22 + sunriseRaysIntensity * 0.85 * horizonBoost} color="#ffd4a0" distance={95} decay={1.35} />}
+    {!studioMode && !useNightLighting && !sunOn && <><pointLight position={[0, 14, 0]} intensity={0.55} color="#ffffff" /><pointLight position={[-10, 8, -10]} intensity={0.2} color="#c8d8ff" /><pointLight position={[10, 8, 10]} intensity={0.2} color="#ffd8c8" /></>}
+    {useNightLighting && <>
+      <directionalLight position={[-16, 20, -14]} intensity={0.38} color="#8ea8d8" castShadow shadow-mapSize-width={1024} shadow-mapSize-height={1024} shadow-camera-left={-30} shadow-camera-right={30} shadow-camera-top={30} shadow-camera-bottom={-30} />
+      <pointLight position={[0, 8, 0]} intensity={0.18} color="#9fc2ff" distance={40} decay={1.35} />
+    </>}
   </>;
 }
 
 // ─── Sun Sphere ───────────────────────────────────────────────────────────────
-function SunSphere({ sunAzimuthDeg, sunElevationDeg }: { sunAzimuthDeg: number; sunElevationDeg: number }) {
+function SunSphere({ sunAzimuthDeg, sunElevationDeg, sunriseRaysIntensity }: { sunAzimuthDeg: number; sunElevationDeg: number; sunriseRaysIntensity: number }) {
   const sunRef = useRef<THREE.Group>(null);
   const ringRef = useRef<THREE.Mesh>(null);
-  const belowHorizon = sunElevationDeg <= 0;
-
-  if (belowHorizon) return null;
+  const belowHorizon = sunElevationDeg < -1.0;
+  const horizonBoost = clamp01(1 - Math.abs(sunElevationDeg - 5) / 18);
+  const glowBoost = 1 + sunriseRaysIntensity * horizonBoost * 1.2;
 
   const getSunPos = useCallback(
     (): [number, number, number] => sunAnglesToScenePosition(sunAzimuthDeg, sunElevationDeg, 20),
@@ -432,6 +447,7 @@ function SunSphere({ sunAzimuthDeg, sunElevationDeg }: { sunAzimuthDeg: number; 
   const pos = getSunPos();
 
   useFrame((s) => {
+    if (belowHorizon) return;
     if (ringRef.current) ringRef.current.rotation.z = s.clock.elapsedTime * 0.6;
     if (sunRef.current) {
       const np = getSunPos();
@@ -439,19 +455,164 @@ function SunSphere({ sunAzimuthDeg, sunElevationDeg }: { sunAzimuthDeg: number; 
     }
   });
 
+  if (belowHorizon) return null;
+
   return (
     <group ref={sunRef} position={pos}>
-      <mesh><sphereGeometry args={[0.65, 20, 20]} /><meshStandardMaterial color="#fcd34d" emissive="#f59e0b" emissiveIntensity={2.0} /></mesh>
-      <mesh ref={ringRef}><torusGeometry args={[1.0, 0.06, 8, 32]} /><meshStandardMaterial color="#f59e0b" emissive="#f59e0b" emissiveIntensity={1.5} /></mesh>
+      <mesh><sphereGeometry args={[0.65, 20, 20]} /><meshStandardMaterial color="#fcd34d" emissive="#f59e0b" emissiveIntensity={1.9 * glowBoost} /></mesh>
+      <mesh ref={ringRef}><torusGeometry args={[1.0, 0.06, 8, 32]} /><meshStandardMaterial color="#f59e0b" emissive="#f59e0b" emissiveIntensity={1.35 * glowBoost} /></mesh>
       {Array.from({ length: 8 }).map((_, i) => {
         const a = (i / 8) * Math.PI * 2;
         return <mesh key={i} position={[Math.cos(a) * 1.3, Math.sin(a) * 1.3, 0]} rotation={[0, 0, a]}>
           <boxGeometry args={[0.5, 0.04, 0.04]} />
-          <meshStandardMaterial color="#fcd34d" emissive="#fbbf24" emissiveIntensity={1.5} />
+          <meshStandardMaterial color="#fcd34d" emissive="#fbbf24" emissiveIntensity={1.2 * glowBoost} />
         </mesh>;
       })}
-      <pointLight intensity={4.0} color="#fcd34d" distance={60} decay={1.5} />
+      <pointLight intensity={3.0 + sunriseRaysIntensity * 2.2} color="#fcd34d" distance={68} decay={1.5} />
     </group>
+  );
+}
+
+function RealisticSky({
+  nightMode,
+  sunAzimuthDeg,
+  sunElevationDeg,
+  sunriseRaysIntensity,
+  surroundingsBlend,
+}: {
+  nightMode: boolean;
+  sunAzimuthDeg: number;
+  sunElevationDeg: number;
+  sunriseRaysIntensity: number;
+  surroundingsBlend: number;
+}) {
+  const sunPosition = useMemo<[number, number, number]>(() => {
+    const a = THREE.MathUtils.degToRad(sunAzimuthDeg);
+    const e = THREE.MathUtils.degToRad(Math.max(1.5, sunElevationDeg));
+    const r = 1200;
+    return [Math.sin(a) * Math.cos(e) * r, Math.sin(e) * r, -Math.cos(a) * Math.cos(e) * r];
+  }, [sunAzimuthDeg, sunElevationDeg]);
+
+  if (nightMode) return null;
+
+  const horizonWarmth = clamp01(1 - Math.abs(sunElevationDeg - 8) / 24);
+  const realisticFactor = clamp01(surroundingsBlend);
+
+  return (
+    <Sky
+      distance={450000}
+      sunPosition={sunPosition}
+      turbidity={THREE.MathUtils.lerp(4.6, 2.35, realisticFactor) + sunriseRaysIntensity * horizonWarmth * 1.1}
+      rayleigh={THREE.MathUtils.lerp(1.9, 1.28, realisticFactor)}
+      mieCoefficient={THREE.MathUtils.lerp(0.0064, 0.0048, realisticFactor)}
+      mieDirectionalG={THREE.MathUtils.lerp(0.76, 0.86, realisticFactor)}
+    />
+  );
+}
+
+function ArchitecturalNightFill({ nightMode, assistOn }: { nightMode: boolean; assistOn: boolean }) {
+  const active = nightMode || assistOn;
+  if (!active) return null;
+
+  const assistBoost = assistOn ? 1.0 : 0.0;
+  const nightBoost = nightMode ? 1.0 : 0.45;
+
+  return (
+    <group>
+      {/* Localized fills keep the architecture readable while surroundings stay dark. */}
+      <pointLight position={[0, 4.8, 0]} intensity={0.86 + nightBoost * 0.36 + assistBoost * 0.8} color={assistOn ? "#fff4d8" : "#b8cdf2"} distance={assistOn ? 28 : 20} decay={1.35} />
+      <pointLight position={[7, 3.4, 6]} intensity={0.24 + nightBoost * 0.2 + assistBoost * 0.3} color={assistOn ? "#ffe7c2" : "#7fa6e6"} distance={assistOn ? 17 : 14} decay={1.5} />
+      <pointLight position={[-7, 3.4, -6]} intensity={0.2 + nightBoost * 0.18 + assistBoost * 0.28} color={assistOn ? "#f4dcc1" : "#85b0f0"} distance={assistOn ? 17 : 14} decay={1.5} />
+      <hemisphereLight args={[assistOn ? "#fff2df" : "#8ea8d2", "#111820", 0.2 + nightBoost * 0.08 + assistBoost * 0.15]} />
+    </group>
+  );
+}
+
+function VoxelClouds({
+  active,
+  sunElevationDeg,
+  cloudDensity,
+  surroundingsBlend,
+}: {
+  active: boolean;
+  sunElevationDeg: number;
+  cloudDensity: number;
+  surroundingsBlend: number;
+}) {
+  const cloudRef = useRef<THREE.Group>(null);
+  const density = clamp01(cloudDensity);
+  const blend = clamp01(surroundingsBlend);
+  const cloudColor = useMemo(() => {
+    const warm = Math.max(0, Math.min(1, 1 - Math.abs(sunElevationDeg - 10) / 30));
+    const base = new THREE.Color("#eef3fb").lerp(new THREE.Color("#f6f7f9"), blend * 0.55);
+    const dusk = new THREE.Color("#ffd9c2").lerp(new THREE.Color("#ffceb0"), blend * 0.35);
+    return base.lerp(dusk, warm * 0.6).getStyle();
+  }, [sunElevationDeg, blend]);
+  const clusters = useMemo(() => (
+    Array.from({ length: Math.round(10 + density * 24) }, (_, i) => {
+      const x = -120 + i * 12 + (Math.random() - 0.5) * 10;
+      const z = -22 + (Math.random() - 0.5) * 26;
+      const y = 18 + Math.random() * 8;
+      const len = 4 + Math.floor(Math.random() * 5);
+      return { x, y, z, len };
+    })
+  ), [density]);
+
+  useFrame(({ clock }) => {
+    if (!active || !cloudRef.current) return;
+    cloudRef.current.position.x = ((clock.elapsedTime * 0.65) % 140) - 70;
+  });
+
+  if (!active) return null;
+
+  return (
+    <group ref={cloudRef} position={[0, 0, 0]}>
+      {clusters.map((c, i) => (
+        <group key={`cl-${i}`} position={[c.x, c.y, c.z]}>
+          {Array.from({ length: c.len }, (_, k) => (
+            <mesh key={k} position={[k * 2.4, Math.sin(k * 0.8) * 0.2, Math.cos(k * 0.7) * 0.9]} raycast={NOOP_RAYCAST}>
+              <boxGeometry args={[2.2, 1.05, 1.35]} />
+              <meshStandardMaterial color={cloudColor} roughness={THREE.MathUtils.lerp(0.95, 0.78, blend)} metalness={0.0} transparent opacity={THREE.MathUtils.lerp(0.72, 0.92, density)} />
+            </mesh>
+          ))}
+        </group>
+      ))}
+    </group>
+  );
+}
+
+function NightStarfield({ active }: { active: boolean }) {
+  const ptsRef = useRef<THREE.Points>(null!);
+
+  useEffect(() => {
+    if (!ptsRef.current || !active) return;
+    const geo = ptsRef.current.geometry;
+    const COUNT = 900;
+    const pos = new Float32Array(COUNT * 3);
+    const col = new Float32Array(COUNT * 3);
+    for (let i = 0; i < COUNT; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(Math.random() * 0.9);
+      const r = 140 + Math.random() * 40;
+      pos[i * 3 + 0] = r * Math.sin(phi) * Math.cos(theta);
+      pos[i * 3 + 1] = r * Math.cos(phi);
+      pos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+      const warm = Math.random();
+      col[i * 3 + 0] = warm > 0.75 ? 1.0 : 0.86;
+      col[i * 3 + 1] = warm > 0.75 ? 0.95 : 0.9;
+      col[i * 3 + 2] = warm > 0.75 ? 0.8 : 1.0;
+    }
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    geo.setDrawRange(0, COUNT);
+  }, [active]);
+
+  if (!active) return null;
+  return (
+    <points ref={ptsRef} raycast={NOOP_RAYCAST}>
+      <bufferGeometry />
+      <pointsMaterial size={0.34} vertexColors transparent opacity={0.9} depthWrite={false} sizeAttenuation />
+    </points>
   );
 }
 
@@ -668,6 +829,62 @@ function Snow() {
   );
 }
 
+// ─── Atmosphere Dust ─────────────────────────────────────────────────────────
+// Very subtle floating particles that add depth cues in sunlit/interior scenes.
+function AtmosphereDust({ active }: { active: boolean }) {
+  const COUNT = 260;
+  const ptsRef = useRef<THREE.Points>(null!);
+  const stateRef = useRef<{ x: number; y: number; z: number; phase: number; speed: number }[]>([]);
+
+  useEffect(() => {
+    if (!ptsRef.current) return;
+    const geo = ptsRef.current.geometry;
+    const pos = new Float32Array(COUNT * 3);
+    stateRef.current = Array.from({ length: COUNT }, (_, i) => {
+      const x = (Math.random() - 0.5) * 30;
+      const y = 0.7 + Math.random() * 9;
+      const z = (Math.random() - 0.5) * 30;
+      pos[i * 3 + 0] = x;
+      pos[i * 3 + 1] = y;
+      pos[i * 3 + 2] = z;
+      return {
+        x,
+        y,
+        z,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.025 + Math.random() * 0.04,
+      };
+    });
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setDrawRange(0, COUNT);
+  }, []);
+
+  useFrame(({ clock }) => {
+    if (!active || !ptsRef.current) return;
+    const T = clock.elapsedTime;
+    const pos = ptsRef.current.geometry.attributes.position as THREE.BufferAttribute | undefined;
+    if (!pos || !stateRef.current.length) return;
+    const pa = pos.array as Float32Array;
+    for (let i = 0; i < COUNT; i++) {
+      const s = stateRef.current[i];
+      if (!s) continue;
+      pa[i * 3 + 0] = s.x + Math.sin(T * s.speed + s.phase) * 0.22;
+      pa[i * 3 + 1] = s.y + Math.cos(T * s.speed * 0.7 + s.phase) * 0.16;
+      pa[i * 3 + 2] = s.z + Math.cos(T * s.speed + s.phase) * 0.2;
+    }
+    pos.needsUpdate = true;
+  });
+
+  if (!active) return null;
+
+  return (
+    <points ref={ptsRef} raycast={NOOP_RAYCAST}>
+      <bufferGeometry />
+      <pointsMaterial size={0.06} color="#fff5d8" transparent opacity={0.18} depthWrite={false} sizeAttenuation />
+    </points>
+  );
+}
+
 // ─── Moonlight ────────────────────────────────────────────────────────────────
 function Moonlight() {
   const glowRef  = useRef<THREE.Mesh>(null!);
@@ -729,10 +946,11 @@ function Moonlight() {
 
 // ─── Realistic Flood ──────────────────────────────────────────────────────────
 // Animated vertex displacement for wave motion + foam particles + caustic light
-function Flood() {
+function Flood({ waterStyle }: { waterStyle: number }) {
   const waterRef  = useRef<THREE.Mesh>(null!);
   const foamRef   = useRef<THREE.Points>(null!);
   const SEG = 40; // water plane subdivisions
+  const style = clamp01(waterStyle);
 
   // Foam particles set up imperatively
   const FOAM = 300;
@@ -771,13 +989,14 @@ function Flood() {
       if (pos && orig) {
         const pa = pos.array as Float32Array;
         const vCount = pa.length / 3;
+        const waveAmp = 0.55 + style * 1.45;
         for (let i = 0; i < vCount; i++) {
           const ox = orig[i*3+0]; const oz = orig[i*3+1]; // plane is XZ in plane geometry before rotation
           // Multi-wave superposition for realism
-          const w1 = Math.sin(ox*0.4 + T*1.2) * 0.09;
-          const w2 = Math.cos(oz*0.3 + T*0.9) * 0.07;
-          const w3 = Math.sin((ox+oz)*0.25 + T*1.5) * 0.05;
-          const w4 = Math.cos(ox*0.6 - oz*0.4 + T*0.7) * 0.03;
+          const w1 = Math.sin(ox*0.4 + T*1.2) * 0.09 * waveAmp;
+          const w2 = Math.cos(oz*0.3 + T*0.9) * 0.07 * waveAmp;
+          const w3 = Math.sin((ox+oz)*0.25 + T*1.5) * 0.05 * waveAmp;
+          const w4 = Math.cos(ox*0.6 - oz*0.4 + T*0.7) * 0.03 * waveAmp;
           pa[i*3+2] = w1+w2+w3+w4; // Z is up in plane geometry (pre-rotation)
         }
         pos.needsUpdate = true;
@@ -815,9 +1034,9 @@ function Flood() {
       <mesh ref={waterRef} rotation={[-Math.PI/2, 0, 0]} position={[0, 0.58, 0]} raycast={NOOP_RAYCAST}>
         <planeGeometry args={[65, 65, SEG, SEG]} />
         <meshStandardMaterial
-          color="#1b6a9a"
-          transparent opacity={0.72}
-          metalness={0.55} roughness={0.0}
+          color={new THREE.Color("#2f6d95").lerp(new THREE.Color("#6aa2cf"), style * 0.32).getStyle()}
+          transparent opacity={THREE.MathUtils.lerp(0.62, 0.84, style)}
+          metalness={THREE.MathUtils.lerp(0.3, 0.7, style)} roughness={THREE.MathUtils.lerp(0.16, 0.02, style)}
           emissive="#052840" emissiveIntensity={0.5}
           side={THREE.DoubleSide}
         />
@@ -854,7 +1073,7 @@ function SolarSystemPlanet({ planet, T }: { planet: typeof PLANETS[0]; T: number
   const angle = T * planet.speed;
   const x = Math.cos(angle) * planet.dist;
   const z = Math.sin(angle) * planet.dist;
-  const Y_BASE = 32;
+  const Y_BASE = 52;
 
   return (
     <group position={[x, Y_BASE + Math.sin(angle * 0.3) * 1.5, z]}>
@@ -940,7 +1159,7 @@ function SolarSystem() {
   return (
     <group ref={groupRef}>
       {/* Central star (Sun) */}
-      <group position={[0, 32, 0]}>
+      <group position={[0, 52, 0]}>
         <mesh>
           <sphereGeometry args={[2.8, 32, 32]} />
           <meshStandardMaterial color="#fff0a0" emissive="#ff9000" emissiveIntensity={3.0} roughness={0.1} />
@@ -950,7 +1169,7 @@ function SolarSystem() {
           <sphereGeometry args={[3.5, 16, 16]} />
           <meshStandardMaterial color="#ffcc00" transparent opacity={0.08} side={THREE.BackSide} depthWrite={false} />
         </mesh>
-        <pointLight intensity={8.0} color="#fff0c0" distance={200} decay={0.8} />
+        <pointLight intensity={0.8} color="#ffe7b5" distance={36} decay={1.35} />
       </group>
 
       {/* Orbit path rings */}
@@ -1023,11 +1242,22 @@ const bloomFrag = `
 `;
 
 const compositeFrag = `
-  uniform sampler2D tDiffuse;
+  uniform sampler2D tScene;
+  uniform sampler2D tBloom;
+  uniform sampler2D tDepth;
   uniform vec2 uResolution;
   uniform float uVignette;
   uniform float uCA;
   uniform float uExposure;
+  uniform float uNear;
+  uniform float uFar;
+  uniform float uFocus;
+  uniform float uDOF;
+  uniform float uAO;
+  uniform float uSharpen;
+  uniform float uGrain;
+  uniform float uTime;
+  uniform float uBloomMix;
 
   // Precise ACES fitted curve (Stephen Hill fit)
   vec3 aces(vec3 x) {
@@ -1036,24 +1266,89 @@ const compositeFrag = `
     return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);
   }
 
+  float linearizeDepth(float d) {
+    float z = d * 2.0 - 1.0;
+    return (2.0 * uNear * uFar) / (uFar + uNear - z * (uFar - uNear));
+  }
+
+  float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
   void main() {
     vec2 uv = gl_FragCoord.xy / uResolution;
     vec2 dir = uv - 0.5;
     float dist = length(dir);
 
+    vec3 sceneCol = texture2D(tScene, uv).rgb;
+    vec3 bloomCol = texture2D(tBloom, uv).rgb;
+
+    float depth = linearizeDepth(texture2D(tDepth, uv).r);
+    float px = 1.0 / uResolution.x;
+    float py = 1.0 / uResolution.y;
+
+    // Screen-space AO approximation from depth neighborhood.
+    float dL = linearizeDepth(texture2D(tDepth, uv + vec2(-px * 2.5, 0.0)).r);
+    float dR = linearizeDepth(texture2D(tDepth, uv + vec2( px * 2.5, 0.0)).r);
+    float dU = linearizeDepth(texture2D(tDepth, uv + vec2(0.0,  py * 2.5)).r);
+    float dD = linearizeDepth(texture2D(tDepth, uv + vec2(0.0, -py * 2.5)).r);
+    float ao = 1.0 - min(0.45, (abs(dL - depth) + abs(dR - depth) + abs(dU - depth) + abs(dD - depth)) * uAO * 0.02);
+
+    // Depth-of-field approximation with a tiny 8-tap bokeh blur.
+    float coc = clamp(abs(depth - uFocus) / max(uDOF, 0.001), 0.0, 1.0);
+    float radius = coc * 1.2;
+    vec2 blurX = vec2(px * radius, 0.0);
+    vec2 blurY = vec2(0.0, py * radius);
+    vec3 blurCol = vec3(0.0);
+    blurCol += texture2D(tScene, uv + blurX).rgb;
+    blurCol += texture2D(tScene, uv - blurX).rgb;
+    blurCol += texture2D(tScene, uv + blurY).rgb;
+    blurCol += texture2D(tScene, uv - blurY).rgb;
+    blurCol += texture2D(tScene, uv + blurX + blurY).rgb;
+    blurCol += texture2D(tScene, uv + blurX - blurY).rgb;
+    blurCol += texture2D(tScene, uv - blurX + blurY).rgb;
+    blurCol += texture2D(tScene, uv - blurX - blurY).rgb;
+    blurCol *= 0.125;
+
+    vec3 col = mix(sceneCol, blurCol, coc * 0.35);
+    col *= ao;
+    col += bloomCol * uBloomMix;
+
+    // Subtle unsharp mask for crisp edges in high/ultra modes.
+    vec3 neigh = (
+      texture2D(tScene, uv + vec2(px, 0.0)).rgb +
+      texture2D(tScene, uv - vec2(px, 0.0)).rgb +
+      texture2D(tScene, uv + vec2(0.0, py)).rgb +
+      texture2D(tScene, uv - vec2(0.0, py)).rgb
+    ) * 0.25;
+    col = mix(col, col + (col - neigh) * 1.2, uSharpen);
+
     // Radial chromatic aberration (stronger toward edges, zero at center)
     float caStr = uCA * dist * dist * 2.5;
     vec2 caOff = normalize(dir + vec2(0.001)) * caStr;
-    float r = texture2D(tDiffuse, clamp(uv + caOff,      0.0, 1.0)).r;
-    float g = texture2D(tDiffuse, uv).g;
-    float b = texture2D(tDiffuse, clamp(uv - caOff*0.7,  0.0, 1.0)).b;
-    vec3 col = vec3(r, g, b);
+    float r = texture2D(tScene, clamp(uv + caOff,      0.0, 1.0)).r;
+    float g = texture2D(tScene, uv).g;
+    float b = texture2D(tScene, clamp(uv - caOff*0.7,  0.0, 1.0)).b;
+    vec3 caCol = vec3(r, g, b);
+    col = mix(col, caCol, 0.25);
+
+    // Film grain for micro-detail; scales down in lower quality.
+    float grain = (hash12(uv * uResolution + uTime * 21.7) - 0.5) * uGrain;
+    col += grain;
 
     // Exposure
     col *= uExposure;
 
     // ACES filmic tonemapping
     col = aces(col);
+
+    // Gentle contrast and vibrance to avoid flat/washed palette.
+    float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = mix(vec3(luma), col, 1.18);
+    col = (col - 0.5) * 1.07 + 0.5;
+    col = clamp(col, 0.0, 1.0);
 
     // Smooth vignette (cosine falloff)
     float vig = 1.0 - smoothstep(0.45, 1.05, dist) * uVignette;
@@ -1066,15 +1361,23 @@ const compositeFrag = `
   }
 `;
 
-function RenderPipeline({ quality }: { quality: "low"|"med"|"high" }) {
+function RenderPipeline({ quality }: { quality: RenderQuality }) {
   const { gl, scene, camera, size } = useThree();
+
+  const depthTexture = useMemo(() => {
+    const depth = new THREE.DepthTexture(size.width, size.height);
+    depth.type = THREE.UnsignedShortType;
+    return depth;
+  }, [size.width, size.height]);
 
   // Two render targets: scene render + bloom pass
   const sceneRT  = useMemo(() => new THREE.WebGLRenderTarget(size.width, size.height, {
     minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
     format: THREE.RGBAFormat, type: THREE.HalfFloatType,
-    samples: quality === "high" ? 8 : quality === "med" ? 4 : 0,
-  }), [size.width, size.height, quality]);
+    depthBuffer: true,
+    depthTexture,
+    samples: quality === "ultra" ? 8 : quality === "high" ? 6 : quality === "med" ? 3 : 0,
+  }), [size.width, size.height, quality, depthTexture]);
 
   const bloomRT = useMemo(() => new THREE.WebGLRenderTarget(size.width, size.height, {
     minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat,
@@ -1091,8 +1394,8 @@ function RenderPipeline({ quality }: { quality: "low"|"med"|"high" }) {
     uniforms: {
       tDiffuse:     { value: null },
       uResolution:  { value: new THREE.Vector2(size.width, size.height) },
-      uIntensity:   { value: quality === "high" ? 0.85 : 0.5 },
-      uThreshold:   { value: 0.55 },
+      uIntensity:   { value: quality === "ultra" ? 0.72 : quality === "high" ? 0.58 : quality === "med" ? 0.45 : 0.32 },
+      uThreshold:   { value: quality === "ultra" ? 0.72 : quality === "high" ? 0.76 : quality === "med" ? 0.8 : 0.85 },
     },
     vertexShader: postVert, fragmentShader: bloomFrag,
     depthTest: false, depthWrite: false,
@@ -1100,15 +1403,26 @@ function RenderPipeline({ quality }: { quality: "low"|"med"|"high" }) {
 
   const compositeMat = useMemo(() => new THREE.ShaderMaterial({
     uniforms: {
-      tDiffuse:    { value: null },
+      tScene:      { value: null },
+      tBloom:      { value: null },
+      tDepth:      { value: depthTexture },
       uResolution: { value: new THREE.Vector2(size.width, size.height) },
-      uVignette:   { value: 0.85 },
-      uCA:         { value: quality === "high" ? 0.006 : 0.003 },
-      uExposure:   { value: 1.0 },
+      uVignette:   { value: quality === "ultra" ? 0.66 : quality === "high" ? 0.62 : 0.58 },
+      uCA:         { value: quality === "ultra" ? 0.0022 : quality === "high" ? 0.0018 : 0.0012 },
+      uExposure:   { value: quality === "ultra" ? 0.98 : quality === "high" ? 0.96 : quality === "med" ? 0.94 : 0.92 },
+      uNear:       { value: camera.near },
+      uFar:        { value: camera.far },
+      uFocus:      { value: quality === "low" ? 30 : quality === "med" ? 28 : quality === "high" ? 26 : 24 },
+      uDOF:        { value: quality === "ultra" ? 42 : quality === "high" ? 46 : quality === "med" ? 50 : 58 },
+      uAO:         { value: quality === "ultra" ? 0.65 : quality === "high" ? 0.55 : quality === "med" ? 0.45 : 0.35 },
+      uSharpen:    { value: quality === "ultra" ? 0.38 : quality === "high" ? 0.28 : quality === "med" ? 0.18 : 0.08 },
+      uGrain:      { value: quality === "ultra" ? 0.01 : quality === "high" ? 0.008 : quality === "med" ? 0.006 : 0.003 },
+      uTime:       { value: 0 },
+      uBloomMix:   { value: quality === "ultra" ? 0.42 : quality === "high" ? 0.34 : quality === "med" ? 0.24 : 0.16 },
     },
     vertexShader: postVert, fragmentShader: compositeFrag,
     depthTest: false, depthWrite: false,
-  }), [quality, size.width, size.height]);
+  }), [quality, size.width, size.height, depthTexture, camera.near, camera.far]);
 
   // Ortho camera for full-screen passes
   const orthoCam = useMemo(() => new THREE.OrthographicCamera(-1,1,1,-1,0,1), []);
@@ -1117,11 +1431,15 @@ function RenderPipeline({ quality }: { quality: "low"|"med"|"high" }) {
     // Update resolution when size changes
     bloomMat.uniforms.uResolution.value.set(size.width, size.height);
     compositeMat.uniforms.uResolution.value.set(size.width, size.height);
+    compositeMat.uniforms.uNear.value = camera.near;
+    compositeMat.uniforms.uFar.value = camera.far;
     sceneRT.setSize(size.width, size.height);
     bloomRT.setSize(size.width, size.height);
-  }, [size.width, size.height, bloomMat, compositeMat, sceneRT, bloomRT]);
+  }, [size.width, size.height, bloomMat, compositeMat, sceneRT, bloomRT, camera.near, camera.far]);
 
-  useFrame(() => {
+  useFrame(({ clock }) => {
+    compositeMat.uniforms.uTime.value = clock.elapsedTime;
+
     // 1. Render scene into sceneRT
     gl.setRenderTarget(sceneRT);
     gl.render(scene, camera);
@@ -1136,7 +1454,9 @@ function RenderPipeline({ quality }: { quality: "low"|"med"|"high" }) {
     bloomScene.remove(bloomMesh);
 
     // 3. Composite pass: bloomRT → screen
-    compositeMat.uniforms.tDiffuse.value = bloomRT.texture;
+    compositeMat.uniforms.tScene.value = sceneRT.texture;
+    compositeMat.uniforms.tBloom.value = bloomRT.texture;
+    compositeMat.uniforms.tDepth.value = sceneRT.depthTexture;
     const compMesh = new THREE.Mesh(triGeo, compositeMat);
     const compScene = new THREE.Scene();
     compScene.add(compMesh);
@@ -1147,8 +1467,9 @@ function RenderPipeline({ quality }: { quality: "low"|"med"|"high" }) {
 
   useEffect(() => () => {
     sceneRT.dispose(); bloomRT.dispose();
+    depthTexture.dispose();
     bloomMat.dispose(); compositeMat.dispose(); triGeo.dispose();
-  }, [sceneRT, bloomRT, bloomMat, compositeMat, triGeo]);
+  }, [sceneRT, bloomRT, depthTexture, bloomMat, compositeMat, triGeo]);
 
   return null;
 }
@@ -1163,28 +1484,27 @@ function PBREnvironment({ sunOn, nightMode }: { sunOn: boolean; nightMode: boole
     const pmrem = new THREE.PMREMGenerator(gl);
     pmrem.compileEquirectangularShader();
 
-    // Build a procedural gradient env map
-    const size = 256;
+    // Reflection environment only; visible sky is rendered separately.
+    const size = 1024;
     const data = new Uint8Array(size * size * 4);
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const t = y / size; // 0 = top, 1 = bottom
+        const horizon = Math.exp(-Math.pow((t - 0.7) * 5.0, 2.0));
+
         let r: number, g: number, b: number;
         if (nightMode) {
-          // Deep navy → dark teal
-          r = Math.round(4  + t*10);
-          g = Math.round(8  + t*18);
-          b = Math.round(22 + t*14);
+          r = Math.round(6 + t * 12 + horizon * 4);
+          g = Math.round(10 + t * 16 + horizon * 5);
+          b = Math.round(24 + t * 22 + horizon * 6);
         } else if (sunOn) {
-          // True sky gradient: deep blue zenith → light blue horizon (no warm tint)
-          r = Math.round(80  + t*100);
-          g = Math.round(140 + t*80);
-          b = Math.round(220 + t*20);
+          r = Math.round(58 + t * 84 + horizon * 10);
+          g = Math.round(118 + t * 78 + horizon * 8);
+          b = Math.round(202 + t * 38 + horizon * 5);
         } else {
-          // Overcast
-          r = Math.round(80 + t*40);
-          g = Math.round(90 + t*40);
-          b = Math.round(100 + t*30);
+          r = Math.round(74 + t * 32 + horizon * 7);
+          g = Math.round(86 + t * 34 + horizon * 6);
+          b = Math.round(104 + t * 26 + horizon * 6);
         }
         const i = (y * size + x) * 4;
         data[i] = r; data[i+1] = g; data[i+2] = b; data[i+3] = 255;
@@ -1196,12 +1516,20 @@ function PBREnvironment({ sunOn, nightMode }: { sunOn: boolean; nightMode: boole
 
     const envMap = pmrem.fromEquirectangular(tex).texture;
     scene.environment = envMap;
-    (scene as any).environmentIntensity = nightMode ? 0.08 : sunOn ? 0.55 : 0.22;
+    scene.background = new THREE.Color(nightMode ? "#01040d" : sunOn ? "#82b9ea" : "#7f96aa");
+    scene.fog = new THREE.FogExp2(
+      nightMode ? "#070d1a" : sunOn ? "#6f9bc8" : "#60788c",
+      nightMode ? 0.0016 : sunOn ? 0.00032 : 0.00075
+    );
+    (scene as any).environmentIntensity = nightMode ? 0.2 : sunOn ? 0.58 : 0.34;
 
     return () => {
       scene.environment = null;
+      scene.background = null;
+      scene.fog = null;
       pmrem.dispose();
       tex.dispose();
+      envMap.dispose();
     };
   }, [gl, scene, sunOn, nightMode]);
 
@@ -1228,6 +1556,7 @@ const groundFrag = /* glsl */ `
   uniform vec3  uColor2;
   uniform float uTime;
   uniform float uWet;
+  uniform float uNight;
   varying vec2  vUv;
   varying vec3  vWorldPos;
   varying vec3  vNormal;
@@ -1306,11 +1635,18 @@ const groundFrag = /* glsl */ `
     float ripple = sin(vWorldPos.x*2.5 + uTime*1.2)*sin(vWorldPos.z*2.8 + uTime*0.9)*0.5+0.5;
     col += ripple * puddleMask * 0.04;
 
+    // Minecraft-shader-style moving cloud shadows and day/night tint.
+    float cloud = fbm(uv * 0.36 + vec2(uTime * 0.013, uTime * 0.004));
+    float shadow = mix(0.86, 1.08, cloud);
+    col *= mix(shadow, 0.94 + cloud * 0.08, uNight);
+    col = mix(col, col * vec3(0.82, 0.9, 1.12), uNight * 0.5);
+    col += vec3(0.05, 0.07, 0.12) * uNight;
+
     gl_FragColor = vec4(col, 1.0);
   }
 `;
 
-function PBRGround({ showGrid, wet }: { showGrid: boolean; wet: boolean }) {
+function PBRGround({ showGrid, wet, nightMode }: { showGrid: boolean; wet: boolean; nightMode: boolean }) {
   const matRef = useRef<THREE.ShaderMaterial>(null!);
   useFrame(({ clock }) => {
     if (matRef.current) matRef.current.uniforms.uTime.value = clock.elapsedTime;
@@ -1320,10 +1656,13 @@ function PBRGround({ showGrid, wet }: { showGrid: boolean; wet: boolean }) {
     uColor2: { value: new THREE.Color("#0e1a10") },
     uTime:   { value: 0 },
     uWet:    { value: wet ? 1.0 : 0.0 },
+    uNight:  { value: nightMode ? 1.0 : 0.0 },
   }), []);
   useEffect(() => {
-    if (matRef.current) matRef.current.uniforms.uWet.value = wet ? 1.0 : 0.0;
-  }, [wet]);
+    if (!matRef.current) return;
+    matRef.current.uniforms.uWet.value = wet ? 1.0 : 0.0;
+    matRef.current.uniforms.uNight.value = nightMode ? 1.0 : 0.0;
+  }, [wet, nightMode]);
 
   return <>
     <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -0.23, 0]} receiveShadow raycast={NOOP_RAYCAST}>
@@ -1337,6 +1676,150 @@ function PBRGround({ showGrid, wet }: { showGrid: boolean; wet: boolean }) {
     </mesh>
     {showGrid && <gridHelper args={[100, 100, "#0a2020", "#091a19"]} position={[0, -0.22, 0]} raycast={NOOP_RAYCAST} />}
   </>;
+}
+
+function makePixelTexture(base: string, variation: number, gridSize: number, repeat: number) {
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  const baseColor = new THREE.Color(base);
+  const cells = Math.floor(size / gridSize);
+  for (let y = 0; y < cells; y++) {
+    for (let x = 0; x < cells; x++) {
+      const n = (Math.sin((x + 13.1) * 12.9898 + (y + 47.7) * 78.233) * 43758.5453) % 1;
+      const mix = Math.abs(n) * variation - variation * 0.5;
+      const c = baseColor.clone().offsetHSL(0, mix * 0.03, mix * 0.18);
+      ctx.fillStyle = c.getStyle();
+      ctx.fillRect(x * gridSize, y * gridSize, gridSize, gridSize);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeat, repeat);
+  tex.minFilter = THREE.NearestMipmapLinearFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+function DistantScenery({
+  nightMode,
+  sunElevationDeg,
+  surroundingsBlend,
+  waterStyle,
+}: {
+  nightMode: boolean;
+  sunElevationDeg: number;
+  surroundingsBlend: number;
+  waterStyle: number;
+}) {
+  const blend = clamp01(surroundingsBlend);
+  const stylized = 1 - blend;
+  const waterBlend = clamp01(waterStyle);
+  const warm = Math.max(0, Math.min(1, 1 - Math.abs(sunElevationDeg - 8) / 24));
+  const grassTint = useMemo(() => new THREE.Color("#4d9a45").lerp(new THREE.Color("#88b45b"), warm * 0.45 + blend * 0.2).getStyle(), [warm, blend]);
+  const darkGrassTint = useMemo(() => new THREE.Color(grassTint).multiplyScalar(nightMode ? 0.38 : 0.92 + blend * 0.1).getStyle(), [grassTint, nightMode, blend]);
+  const dirtTint = useMemo(() => new THREE.Color("#5c3f2d").lerp(new THREE.Color("#7a5840"), blend * 0.35).multiplyScalar(nightMode ? 0.5 : 1).getStyle(), [nightMode, blend]);
+
+  const grassTex = useMemo(() => makePixelTexture("#4d9a45", THREE.MathUtils.lerp(0.42, 0.22, blend), THREE.MathUtils.lerp(16, 8, blend), 7), [blend]);
+  const dirtTex = useMemo(() => makePixelTexture("#5c3f2d", THREE.MathUtils.lerp(0.35, 0.2, blend), THREE.MathUtils.lerp(14, 7, blend), 5), [blend]);
+  const barkTex = useMemo(() => makePixelTexture("#6f4a2a", THREE.MathUtils.lerp(0.4, 0.18, blend), THREE.MathUtils.lerp(14, 6, blend), 4), [blend]);
+  const leafTex = useMemo(() => makePixelTexture("#3f9148", THREE.MathUtils.lerp(0.45, 0.22, blend), THREE.MathUtils.lerp(12, 6, blend), 5), [blend]);
+
+  useEffect(() => {
+    return () => {
+      grassTex?.dispose();
+      dirtTex?.dispose();
+      barkTex?.dispose();
+      leafTex?.dispose();
+    };
+  }, [grassTex, dirtTex, barkTex, leafTex]);
+
+  const terrain = useMemo(() => {
+    const out: { x: number; y: number; z: number; h: number }[] = [];
+    const step = 6;
+    for (let x = -78; x <= 78; x += step) {
+      for (let z = -78; z <= 78; z += step) {
+        if (Math.abs(x) < 20 && Math.abs(z) < 20) continue;
+        const n = Math.sin(x * 0.08) * 0.8 + Math.cos(z * 0.06) * 0.9 + Math.sin((x + z) * 0.035) * 1.2;
+        const h = Math.max(1, Math.round(2 + n));
+        out.push({ x, z, h, y: -0.3 + h * 0.7 });
+      }
+    }
+    return out;
+  }, []);
+
+  const trees = useMemo(() => (
+    Array.from({ length: 72 }, (_, i) => {
+      const a = (i / 72) * Math.PI * 2 + (Math.random() - 0.5) * 0.25;
+      const r = 34 + Math.random() * 48;
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      if (Math.abs(x) < 20 && Math.abs(z) < 20) return null;
+      const h = 2.5 + Math.random() * 2.8;
+      const s = 1.1 + Math.random() * 0.9;
+      return { x, z, h, s };
+    }).filter(Boolean) as { x: number; z: number; h: number; s: number }[]
+  ), []);
+
+  const waterStrips = useMemo(() => ([
+    { p: [0, -0.56, -64] as [number, number, number], s: [180, 1, 26] as [number, number, number] },
+    { p: [0, -0.56, 64] as [number, number, number], s: [180, 1, 26] as [number, number, number] },
+    { p: [-64, -0.56, 0] as [number, number, number], s: [26, 1, 180] as [number, number, number] },
+    { p: [64, -0.56, 0] as [number, number, number], s: [26, 1, 180] as [number, number, number] },
+  ]), []);
+
+  return (
+    <group>
+      {terrain.map((b, i) => (
+        <mesh key={`tb-${i}`} position={[b.x, b.y - b.h * 0.7, b.z]} castShadow receiveShadow raycast={NOOP_RAYCAST}>
+          <boxGeometry args={[5.8, b.h * 1.4, 5.8]} />
+          <meshStandardMaterial color={dirtTint} map={dirtTex ?? undefined} roughness={THREE.MathUtils.lerp(0.95, 0.78, blend)} metalness={0.0} />
+        </mesh>
+      ))}
+
+      {terrain.map((b, i) => (
+        <mesh key={`tg-${i}`} position={[b.x, b.y + 0.04, b.z]} receiveShadow raycast={NOOP_RAYCAST}>
+          <boxGeometry args={[5.7, 0.16, 5.7]} />
+          <meshStandardMaterial color={darkGrassTint} map={grassTex ?? undefined} roughness={THREE.MathUtils.lerp(0.92, 0.7, blend)} metalness={0.0} />
+        </mesh>
+      ))}
+
+      {waterStrips.map((w, i) => (
+        <mesh key={`w-${i}`} position={w.p} scale={w.s} raycast={NOOP_RAYCAST}>
+          <boxGeometry args={[1, 0.12, 1]} />
+          <meshPhysicalMaterial color={nightMode ? "#1f3650" : new THREE.Color("#3d7eb5").lerp(new THREE.Color("#7db4de"), waterBlend * 0.35).getStyle()} roughness={nightMode ? THREE.MathUtils.lerp(0.2, 0.08, waterBlend) : THREE.MathUtils.lerp(0.18, 0.03, waterBlend)} metalness={THREE.MathUtils.lerp(0.04, 0.18, waterBlend)} transmission={THREE.MathUtils.lerp(0.02, 0.12, waterBlend)} reflectivity={THREE.MathUtils.lerp(0.74, 0.98, waterBlend)} clearcoat={THREE.MathUtils.lerp(0.65, 1.0, waterBlend)} clearcoatRoughness={THREE.MathUtils.lerp(0.22, 0.06, waterBlend)} />
+        </mesh>
+      ))}
+
+      {trees.map((t, i) => (
+        <group key={`tree-${i}`} position={[t.x, 0, t.z]} raycast={NOOP_RAYCAST}>
+          <mesh position={[0, t.h * 0.28, 0]} castShadow receiveShadow>
+            <boxGeometry args={[0.72, t.h * 0.56, 0.72]} />
+            <meshStandardMaterial color={nightMode ? "#3f2a1b" : "#6f4a2a"} map={barkTex ?? undefined} roughness={THREE.MathUtils.lerp(0.9, 0.72, blend)} />
+          </mesh>
+          <mesh position={[0, t.h * 0.75, 0]} castShadow>
+            <boxGeometry args={[t.s * 1.7, t.h * 0.34, t.s * 1.7]} />
+            <meshStandardMaterial color={nightMode ? "#1f4f2f" : "#2f7d3f"} map={leafTex ?? undefined} roughness={THREE.MathUtils.lerp(0.9, 0.72, blend)} />
+          </mesh>
+          <mesh position={[0, t.h * 1.03, 0]} castShadow>
+            <boxGeometry args={[t.s * 1.25, t.h * 0.3, t.s * 1.25]} />
+            <meshStandardMaterial color={nightMode ? "#225836" : "#3b8f4d"} map={leafTex ?? undefined} roughness={THREE.MathUtils.lerp(0.88, 0.68, blend)} />
+          </mesh>
+          <mesh position={[0, t.h * 1.25, 0]} castShadow>
+            <boxGeometry args={[t.s * 0.86, t.h * 0.24, t.s * 0.86]} />
+            <meshStandardMaterial color={nightMode ? "#28643d" : "#47a85a"} map={leafTex ?? undefined} roughness={THREE.MathUtils.lerp(0.88, 0.64, blend)} emissive={new THREE.Color("#0b1a0f").lerp(new THREE.Color("#143220"), stylized * 0.4).getStyle()} emissiveIntensity={nightMode ? 0.06 : 0.0} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
 }
 
 
@@ -1835,9 +2318,9 @@ const PALETTE_ROOMS = [
   { type: "Hallway", w: 1.5, h: 3.2, d: 4, color: "#1e2030" }, { type: "Garage", w: 5.5, h: 3.2, d: 5, color: "#222222" },
 ];
 const PALETTE_WALLS = [
-  { type: "Wall H", w: 3, h: 2.8, d: 0.28, color: "#d8e2e8" }, { type: "Wall V", w: 0.28, h: 2.8, d: 3, color: "#d8e2e8" },
-  { type: "Short Wall", w: 1.5, h: 2.8, d: 0.28, color: "#d8e2e8" }, { type: "Half Wall", w: 2, h: 1.2, d: 0.28, color: "#c8d0d8" },
-  { type: "Thick Wall", w: 3, h: 2.8, d: 0.45, color: "#c0ccd8" }, { type: "Tall Wall", w: 3, h: 4.0, d: 0.28, color: "#d8e2e8" },
+  { type: "Wall H", w: 3, h: 2.8, d: 0.28, color: "#bcc8d2" }, { type: "Wall V", w: 0.28, h: 2.8, d: 3, color: "#bcc8d2" },
+  { type: "Short Wall", w: 1.5, h: 2.8, d: 0.28, color: "#bcc8d2" }, { type: "Half Wall", w: 2, h: 1.2, d: 0.28, color: "#aebbc8" },
+  { type: "Thick Wall", w: 3, h: 2.8, d: 0.45, color: "#a6b4c2" }, { type: "Tall Wall", w: 3, h: 4.0, d: 0.28, color: "#bcc8d2" },
 ];
 const PALETTE_OBJECTS = [
   { type: "Chair", w: 0.6, h: 0.9, d: 0.55, color: "#3a5070" }, { type: "Sofa", w: 2.0, h: 0.85, d: 0.88, color: "#3a5070" },
@@ -2136,7 +2619,7 @@ export default function Model3DPage() {
   const sunElevationDeg = liveEnv?.sunElevationDeg ?? fallbackSun.elevationDeg;
   const sunDataSourceLabel = liveEnv ? "LIVE" : "LOCAL ESTIMATE";
   const sunVectorLabel = (liveEnv !== null || Number.isFinite(sunElevationDeg))
-    ? `${Math.round(sunAzimuthDeg)}° az · ${Math.max(0, sunElevationDeg).toFixed(0)}° el`
+    ? `${Math.round(sunAzimuthDeg)}° az · ${sunElevationDeg.toFixed(1)}° el`
     : "UNAVAILABLE";
   const meteoBadgeLabel = liveEnv ? "LIVE FROM OPEN-METEO" : "LIVE MODE: WAITING FOR OPEN-METEO";
 
@@ -2145,7 +2628,7 @@ export default function Model3DPage() {
   const [editMode, setEditMode] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [activeTab, setActiveTab] = useState<"rooms" | "walls" | "objects" | "glass">("rooms");
-  const [showGrid, setShowGrid] = useState(true);
+  const [showGrid, setShowGrid] = useState(false);
   const [showSun, setShowSun] = useState(true);
   const [showWind, setShowWind] = useState(false);
   const [nightLight, setNightLight] = useState(false);
@@ -2154,16 +2637,32 @@ export default function Model3DPage() {
   const [showMoon, setShowMoon] = useState(false);
   const [showFlood, setShowFlood] = useState(false);
   const [showSolarSystem, setShowSolarSystem] = useState(false);
-  const [renderQuality, setRenderQuality] = useState<"low"|"med"|"high">("high");
+  const [timeOfDayMode, setTimeOfDayMode] = useState<TimeOfDayMode>("auto");
+  const [renderQuality, setRenderQuality] = useState<RenderQuality>("high");
   const [showShaders, setShowShaders] = useState(true);
+  const [minecraftPresetOn, setMinecraftPresetOn] = useState(true);
+  const [sunriseRaysIntensity, setSunriseRaysIntensity] = useState(0.78);
+  const [cloudDensity, setCloudDensity] = useState(0.62);
+  const [waterStyle, setWaterStyle] = useState(0.74);
+  const [surroundingsBlend, setSurroundingsBlend] = useState(0.84);
   const [camMode, setCamMode] = useState<"iso" | "top" | "interior">("iso");
   const [fps, setFps] = useState(0);
-  const [wallColor, setWallColor] = useState("#d8e2e8");
+  const [wallColor, setWallColor] = useState("#bcc8d2");
   const [texType, setTexType] = useState<TexType>("none");
   const [winColor, setWinColor] = useState("#1a90e8");
   const [winOpacity, setWinOpacity] = useState(0.5);
   const nid = useRef(5000);
   const selected = objects.find(o => o.id === selectedId) ?? null;
+
+  const shouldForceNightEffects = showMoon || showSolarSystem;
+  const isNightBySun = sunElevationDeg < -0.5;
+  const isNightScene = timeOfDayMode === "night" || (timeOfDayMode === "auto" && (isNightBySun || shouldForceNightEffects));
+  const effectiveShowSun = showSun && !isNightScene;
+  const effectiveShowMoon = showMoon && isNightScene;
+  const effectiveSunriseRays = minecraftPresetOn ? sunriseRaysIntensity : 0.16;
+  const effectiveCloudDensity = minecraftPresetOn ? cloudDensity : 0.36;
+  const effectiveWaterStyle = minecraftPresetOn ? waterStyle : 0.32;
+  const effectiveSurroundingsBlend = minecraftPresetOn ? surroundingsBlend : 0.4;
 
   // Rebuild scene when floor plan data loads
   useEffect(() => {
@@ -2287,6 +2786,12 @@ export default function Model3DPage() {
             ))}
           </div>
           <div style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)", borderRadius: 6, padding: "7px 9px" }}>
+            <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5 }}>Time</div>
+            {([ ["auto", "Auto"], ["day", "Day"], ["night", "Night"] ] as const).map(([mode, label]) => (
+              <button key={mode} onClick={() => setTimeOfDayMode(mode)} style={{ display: "block", width: "100%", padding: "4px 6px", marginBottom: 3, background: timeOfDayMode === mode ? "rgba(13,242,242,0.15)" : "transparent", border: `1px solid ${timeOfDayMode === mode ? "rgba(13,242,242,0.3)" : "rgba(255,255,255,0.05)"}`, borderRadius: 4, color: timeOfDayMode === mode ? "#0df2f2" : "#64748b", fontSize: 9, cursor: "pointer", textAlign: "left", fontFamily: "'DM Mono',monospace" }}>{label}</button>
+            ))}
+          </div>
+          <div style={{ background: "rgba(13,242,242,0.04)", border: "1px solid rgba(13,242,242,0.08)", borderRadius: 6, padding: "7px 9px" }}>
             <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.45)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Overlays</div>
             {[{ l: "Sun", active: showSun, fn: () => setShowSun(v => !v) }, { l: "Grid", active: showGrid, fn: () => setShowGrid(v => !v) }].map(({ l, active, fn }) => (
               <button key={l} onClick={fn} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "4px 0", background: "none", border: "none", cursor: "pointer", marginBottom: 2 }}>
@@ -2296,6 +2801,44 @@ export default function Model3DPage() {
                 </span>
               </button>
             ))}
+          </div>
+          <div style={{ background: "rgba(232,121,249,0.06)", border: "1px solid rgba(232,121,249,0.2)", borderRadius: 6, padding: "7px 9px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div style={{ fontSize: 7.5, color: "rgba(232,121,249,0.75)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Minecraft Shader Preset</div>
+              <button onClick={() => setMinecraftPresetOn(v => !v)} style={{ width: 24, height: 12, borderRadius: 6, background: minecraftPresetOn ? "#e879f9" : "#1e2a2a", border: "none", padding: 0, position: "relative", cursor: "pointer" }}>
+                <span style={{ position: "absolute", top: 2, left: minecraftPresetOn ? 10 : 2, width: 8, height: 8, borderRadius: "50%", background: minecraftPresetOn ? "#140814" : "#64748b", transition: "left 0.2s" }} />
+              </button>
+            </div>
+            {minecraftPresetOn && <>
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                  <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Sunrise Rays</span>
+                  <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{sunriseRaysIntensity.toFixed(2)}</span>
+                </div>
+                <input type="range" min={0} max={1.5} step={0.01} value={sunriseRaysIntensity} onChange={(e) => setSunriseRaysIntensity(parseFloat(e.target.value))} style={{ width: "100%", accentColor: "#f59e0b", cursor: "pointer" }} />
+              </div>
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                  <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Cloud Density</span>
+                  <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{cloudDensity.toFixed(2)}</span>
+                </div>
+                <input type="range" min={0.1} max={1} step={0.01} value={cloudDensity} onChange={(e) => setCloudDensity(parseFloat(e.target.value))} style={{ width: "100%", accentColor: "#7dd3fc", cursor: "pointer" }} />
+              </div>
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                  <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Water Reflect/Wave</span>
+                  <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{waterStyle.toFixed(2)}</span>
+                </div>
+                <input type="range" min={0} max={1} step={0.01} value={waterStyle} onChange={(e) => setWaterStyle(parseFloat(e.target.value))} style={{ width: "100%", accentColor: "#38bdf8", cursor: "pointer" }} />
+              </div>
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                  <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Stylized ↔ Realistic</span>
+                  <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{surroundingsBlend.toFixed(2)}</span>
+                </div>
+                <input type="range" min={0} max={1} step={0.01} value={surroundingsBlend} onChange={(e) => setSurroundingsBlend(parseFloat(e.target.value))} style={{ width: "100%", accentColor: "#34d399", cursor: "pointer" }} />
+              </div>
+            </>}
           </div>
           <div style={{ marginTop: "auto", textAlign: "center" }}>
             <div style={{ fontSize: 11, color: "#0df2f2", fontFamily: "'DM Mono',monospace", fontWeight: 500 }}>{fps} FPS</div>
@@ -2317,20 +2860,29 @@ export default function Model3DPage() {
                 stencil: false,
                 depth: true,
                 toneMapping: THREE.ACESFilmicToneMapping,
-                toneMappingExposure: showMoon ? 0.35 : showSun ? 0.82 : 0.65,
+                toneMappingExposure: isNightScene ? 0.74 : THREE.MathUtils.lerp(1.02, 0.96, effectiveSurroundingsBlend),
               }}
-              dpr={Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, renderQuality === "high" ? 2 : renderQuality === "med" ? 1.5 : 1)}
+              dpr={Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, renderQuality === "ultra" ? 2.5 : renderQuality === "high" ? 2 : renderQuality === "med" ? 1.5 : 1)}
               key={camMode}
               onPointerMissed={() => { if (editMode) setSelectedId(null); }}>
               <Suspense fallback={null}>
+                {/* Visible sky dome for realistic daytime atmosphere. */}
+                <RealisticSky nightMode={isNightScene} sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunriseRaysIntensity={effectiveSunriseRays} surroundingsBlend={effectiveSurroundingsBlend} />
+                <VoxelClouds active={!isNightScene} sunElevationDeg={sunElevationDeg} cloudDensity={effectiveCloudDensity} surroundingsBlend={effectiveSurroundingsBlend} />
+                <NightStarfield active={isNightScene} />
+
                 {/* PBR environment — IBL image-based lighting for all surfaces */}
-                <PBREnvironment sunOn={showSun} nightMode={showMoon || (!showSun && !nightLight)} />
+                <PBREnvironment sunOn={effectiveShowSun} nightMode={isNightScene} />
 
                 {/* Scene lights + weather effects */}
-                <Lighting sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunOn={showSun} nightLightOn={nightLight} />
+                <Lighting sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunOn={effectiveShowSun} nightLightOn={nightLight} nightMode={isNightScene} sunriseRaysIntensity={effectiveSunriseRays} />
+                <ArchitecturalNightFill nightMode={isNightScene} assistOn={nightLight} />
 
                 {/* Shader ground replaces plain mesh ground */}
-                <PBRGround showGrid={showGrid} wet={showFlood} />
+                <PBRGround showGrid={showGrid} wet={showFlood} nightMode={isNightScene} />
+
+                {/* Natural surroundings for depth and color context */}
+                <DistantScenery nightMode={isNightScene} sunElevationDeg={sunElevationDeg} surroundingsBlend={effectiveSurroundingsBlend} waterStyle={effectiveWaterStyle} />
 
                 {/* All scene objects */}
                 {objects.map(obj => (
@@ -2342,12 +2894,13 @@ export default function Model3DPage() {
                 ))}
 
                 {/* Sky & environment overlays */}
-                {showSun && <SunSphere sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} />}
+                {effectiveShowSun && <SunSphere sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunriseRaysIntensity={effectiveSunriseRays} />}
                 {showWind && isLiveEnvReady && <WindSwirl windDirectionDeg={windDirectionDeg} modelW={modelBounds.w} modelD={modelBounds.d} />}
                 {showRain && <Rain />}
                 {showSnow && <Snow />}
-                {showMoon && <Moonlight />}
-                {showFlood && <Flood />}
+                <AtmosphereDust active={!showRain && !showSnow && !showFlood} />
+                {effectiveShowMoon && <Moonlight />}
+                {showFlood && <Flood waterStyle={effectiveWaterStyle} />}
                 {showSolarSystem && <SolarSystem />}
 
                 {editMode && <gridHelper args={[60, 60, "#0df2f2", "#0a3030"]} position={[0, 0.21, 0]} raycast={NOOP_RAYCAST} />}
@@ -2392,7 +2945,7 @@ export default function Model3DPage() {
           {showShaders && (
             <div style={{ position: "absolute", right: 62, bottom: 14, display: "flex", gap: 4, alignItems: "center" }}>
               <span style={{ fontSize: 7, color: "rgba(232,121,249,0.6)", fontFamily: "monospace", letterSpacing: "0.1em", marginRight: 2 }}>RENDER</span>
-              {(["low","med","high"] as const).map(q => (
+              {(["low", "med", "high", "ultra"] as const).map(q => (
                 <button key={q} onClick={() => setRenderQuality(q)} style={{
                   padding: "3px 8px", fontSize: 7, fontFamily: "monospace", cursor: "pointer",
                   background: renderQuality===q ? "rgba(232,121,249,0.18)" : "rgba(6,14,14,0.9)",
@@ -2400,7 +2953,7 @@ export default function Model3DPage() {
                   borderRadius: 4, color: renderQuality===q ? "#e879f9" : "#475569",
                   textTransform: "uppercase", letterSpacing: "0.08em",
                 }}>
-                  {q === "low" ? "PERF" : q === "med" ? "BALANCED" : "ULTRA"}
+                  {q === "low" ? "PERF" : q === "med" ? "BALANCED" : q === "high" ? "HIGH" : "CINEMA"}
                 </button>
               ))}
             </div>
@@ -2412,13 +2965,17 @@ export default function Model3DPage() {
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: liveEnv ? "#7dd3fc" : "#94a3b8" }}>cloud</span>
               <span style={{ fontSize: 8.5, color: liveEnv ? "#bae6fd" : "#cbd5e1", fontFamily: "'DM Mono',monospace" }}>{meteoBadgeLabel}</span>
             </div>
-            {showSun && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(16,185,129,0.09)", border: "1px solid rgba(16,185,129,0.24)", borderRadius: 6 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#34d399" }}>schedule</span>
+              <span style={{ fontSize: 8.5, color: "#a7f3d0", fontFamily: "'DM Mono',monospace" }}>TIME MODE: {timeOfDayMode.toUpperCase()} · ACTIVE: {isNightScene ? "NIGHT" : "DAY"}</span>
+            </div>
+            {effectiveShowSun && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: 6 }}>
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#f59e0b" }}>wb_sunny</span>
               <span style={{ fontSize: 8.5, color: "#fbbf24", fontFamily: "'DM Mono',monospace" }}>SUN {sunVectorLabel} · {sunHours.toFixed(1)}h/day</span>
             </div>}
             {showSun && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 6 }}>
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#fcd34d" }}>explore</span>
-              <span style={{ fontSize: 8.5, color: "#fde68a", fontFamily: "'DM Mono',monospace" }}>SUN POSITION ({sunDataSourceLabel}): AZ {Math.round(sunAzimuthDeg)}° · EL {Math.max(0, sunElevationDeg).toFixed(0)}°</span>
+              <span style={{ fontSize: 8.5, color: "#fde68a", fontFamily: "'DM Mono',monospace" }}>SUN POSITION ({sunDataSourceLabel}): AZ {Math.round(sunAzimuthDeg)}° · EL {sunElevationDeg.toFixed(1)}°</span>
             </div>}
             {showWind && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)", borderRadius: 6 }}>
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#60a5fa" }}>air</span>
@@ -2428,7 +2985,7 @@ export default function Model3DPage() {
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#fde047" }}>lightbulb</span>
               <span style={{ fontSize: 8.5, color: "#fef08a", fontFamily: "'DM Mono',monospace" }}>Studio Lighting ON</span>
             </div>}
-            {showMoon && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 6 }}>
+            {effectiveShowMoon && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 6 }}>
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#a5b4fc" }}>nights_stay</span>
               <span style={{ fontSize: 8.5, color: "#c7d2fe", fontFamily: "'DM Mono',monospace" }}>Moonlight · Stars active</span>
             </div>}
@@ -2450,7 +3007,11 @@ export default function Model3DPage() {
             </div>}
             {showShaders && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(232,121,249,0.08)", border: "1px solid rgba(232,121,249,0.2)", borderRadius: 6 }}>
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#e879f9" }}>lens_blur</span>
-              <span style={{ fontSize: 8.5, color: "#d946ef", fontFamily: "'DM Mono',monospace" }}>PBR Shaders · {renderQuality.toUpperCase()} · SSAO · Bloom · DOF</span>
+              <span style={{ fontSize: 8.5, color: "#d946ef", fontFamily: "'DM Mono',monospace" }}>PBR Shaders · {renderQuality.toUpperCase()} · RTAO · Bloom · DOF · Grain</span>
+            </div>}
+            {minecraftPresetOn && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.28)", borderRadius: 6 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#c4b5fd" }}>auto_awesome</span>
+              <span style={{ fontSize: 8.5, color: "#ddd6fe", fontFamily: "'DM Mono',monospace" }}>Minecraft Shader Preset · REALISTIC BIAS {Math.round(effectiveSurroundingsBlend * 100)}%</span>
             </div>}
             {editMode && <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px", background: "rgba(13,242,242,0.1)", border: "1px solid rgba(13,242,242,0.3)", borderRadius: 6 }}>
               <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#0df2f2" }}>edit</span>
