@@ -21,6 +21,7 @@ type TexType = "none" | "brick" | "concrete" | "wood" | "plaster" | "marble" | "
 type ObjKind = "object" | "wall" | "room";
 type RenderQuality = "low" | "med" | "high" | "ultra";
 type TimeOfDayMode = "auto" | "day" | "night";
+type ShaderLookPreset = "custom" | "golden-hour" | "cinematic-day" | "deep-night";
 type SceneObj = {
   id: string; kind: ObjKind; type: string;
   x: number; y: number; z: number; rotY: number;
@@ -539,40 +540,87 @@ function VoxelClouds({
   cloudDensity: number;
   surroundingsBlend: number;
 }) {
-  const cloudRef = useRef<THREE.Group>(null);
+  const cloudRefs = useRef<Array<THREE.Group | null>>([]);
+  const cloudRuntime = useRef<Array<{ x: number; y: number; z: number; len: number; driftX: number; driftZ: number; speed: number; phase: number }>>([]);
   const density = clamp01(cloudDensity);
   const blend = clamp01(surroundingsBlend);
+  const spanX = 230;
+  const spanZ = 180;
   const cloudColor = useMemo(() => {
     const warm = Math.max(0, Math.min(1, 1 - Math.abs(sunElevationDeg - 10) / 30));
     const base = new THREE.Color("#eef3fb").lerp(new THREE.Color("#f6f7f9"), blend * 0.55);
     const dusk = new THREE.Color("#ffd9c2").lerp(new THREE.Color("#ffceb0"), blend * 0.35);
     return base.lerp(dusk, warm * 0.6).getStyle();
   }, [sunElevationDeg, blend]);
-  const clusters = useMemo(() => (
-    Array.from({ length: Math.round(10 + density * 24) }, (_, i) => {
-      const x = -120 + i * 12 + (Math.random() - 0.5) * 10;
-      const z = -22 + (Math.random() - 0.5) * 26;
-      const y = 18 + Math.random() * 8;
-      const len = 4 + Math.floor(Math.random() * 5);
-      return { x, y, z, len };
-    })
-  ), [density]);
+  const clusters = useMemo(() => {
+    const count = Math.round(14 + density * 34);
+    return Array.from({ length: count }, (_, i) => {
+      const cols = Math.max(4, Math.ceil(Math.sqrt(count * 1.35)));
+      const rows = Math.max(3, Math.ceil(count / cols));
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const cellW = spanX / cols;
+      const cellH = spanZ / rows;
 
-  useFrame(({ clock }) => {
-    if (!active || !cloudRef.current) return;
-    cloudRef.current.position.x = ((clock.elapsedTime * 0.65) % 140) - 70;
+      const x = ((col + 0.5) / cols - 0.5) * spanX + (Math.random() - 0.5) * cellW * 0.46;
+      const z = ((row + 0.5) / rows - 0.5) * spanZ + (Math.random() - 0.5) * cellH * 0.52;
+      const y = 16 + Math.random() * 12;
+      const len = 4 + Math.floor(Math.random() * 5);
+      return {
+        x,
+        y,
+        z,
+        len,
+        driftX: 0.08 + Math.random() * 0.22,
+        driftZ: (Math.random() - 0.5) * 0.11,
+        speed: 0.7 + Math.random() * 0.9,
+        phase: Math.random() * Math.PI * 2,
+      };
+    });
+  }, [density]);
+
+  useEffect(() => {
+    cloudRuntime.current = clusters.map(c => ({ ...c }));
+    cloudRefs.current = new Array(clusters.length).fill(null);
+  }, [clusters]);
+
+  useFrame(({ clock }, delta) => {
+    if (!active || !cloudRuntime.current.length) return;
+    const time = clock.elapsedTime;
+    const sx = spanX * 0.5;
+    const sz = spanZ * 0.5;
+
+    for (let i = 0; i < cloudRuntime.current.length; i++) {
+      const c = cloudRuntime.current[i];
+      const ref = cloudRefs.current[i];
+      if (!c || !ref) continue;
+
+      c.x += c.driftX * c.speed * delta * 8;
+      c.z += c.driftZ * c.speed * delta * 8;
+
+      if (c.x > sx) c.x = -sx;
+      if (c.x < -sx) c.x = sx;
+      if (c.z > sz) c.z = -sz;
+      if (c.z < -sz) c.z = sz;
+
+      ref.position.set(
+        c.x,
+        c.y + Math.sin(time * 0.22 + c.phase) * 0.24,
+        c.z + Math.cos(time * 0.15 + c.phase) * 0.18
+      );
+    }
   });
 
   if (!active) return null;
 
   return (
-    <group ref={cloudRef} position={[0, 0, 0]}>
+    <group>
       {clusters.map((c, i) => (
-        <group key={`cl-${i}`} position={[c.x, c.y, c.z]}>
+        <group key={`cl-${i}`} ref={(node) => { cloudRefs.current[i] = node; }} position={[c.x, c.y, c.z]}>
           {Array.from({ length: c.len }, (_, k) => (
-            <mesh key={k} position={[k * 2.4, Math.sin(k * 0.8) * 0.2, Math.cos(k * 0.7) * 0.9]} raycast={NOOP_RAYCAST}>
-              <boxGeometry args={[2.2, 1.05, 1.35]} />
-              <meshStandardMaterial color={cloudColor} roughness={THREE.MathUtils.lerp(0.95, 0.78, blend)} metalness={0.0} transparent opacity={THREE.MathUtils.lerp(0.72, 0.92, density)} />
+            <mesh key={k} position={[(k - (c.len - 1) * 0.5) * 2.55, Math.sin(k * 0.8 + c.phase) * 0.24, Math.cos(k * 0.65 + c.phase) * 1.1]} raycast={NOOP_RAYCAST}>
+              <boxGeometry args={[2.35, 1.02, 1.45]} />
+              <meshStandardMaterial color={cloudColor} roughness={THREE.MathUtils.lerp(0.95, 0.74, blend)} metalness={0.0} emissive={new THREE.Color("#ffd9c8").lerp(new THREE.Color("#ffffff"), blend * 0.7).getStyle()} emissiveIntensity={Math.max(0.02, (1 - blend) * 0.045)} transparent opacity={THREE.MathUtils.lerp(0.72, 0.94, density)} />
             </mesh>
           ))}
         </group>
@@ -1361,7 +1409,17 @@ const compositeFrag = `
   }
 `;
 
-function RenderPipeline({ quality }: { quality: RenderQuality }) {
+function RenderPipeline({
+  quality,
+  cinematicBoost,
+  sunElevationDeg,
+  nightMode,
+}: {
+  quality: RenderQuality;
+  cinematicBoost: number;
+  sunElevationDeg: number;
+  nightMode: boolean;
+}) {
   const { gl, scene, camera, size } = useThree();
 
   const depthTexture = useMemo(() => {
@@ -1438,6 +1496,21 @@ function RenderPipeline({ quality }: { quality: RenderQuality }) {
   }, [size.width, size.height, bloomMat, compositeMat, sceneRT, bloomRT, camera.near, camera.far]);
 
   useFrame(({ clock }) => {
+    const cb = clamp01(cinematicBoost);
+    const horizonBoost = clamp01(1 - Math.abs(sunElevationDeg - 7) / 19);
+
+    const baseBloomIntensity = quality === "ultra" ? 0.72 : quality === "high" ? 0.58 : quality === "med" ? 0.45 : 0.32;
+    const baseBloomThreshold = quality === "ultra" ? 0.72 : quality === "high" ? 0.76 : quality === "med" ? 0.8 : 0.85;
+    const baseExposure = quality === "ultra" ? 0.98 : quality === "high" ? 0.96 : quality === "med" ? 0.94 : 0.92;
+    const baseBloomMix = quality === "ultra" ? 0.42 : quality === "high" ? 0.34 : quality === "med" ? 0.24 : 0.16;
+    const baseVignette = quality === "ultra" ? 0.66 : quality === "high" ? 0.62 : 0.58;
+
+    bloomMat.uniforms.uIntensity.value = baseBloomIntensity + cb * horizonBoost * 0.34 + (nightMode ? 0.04 : 0);
+    bloomMat.uniforms.uThreshold.value = Math.max(0.5, baseBloomThreshold - cb * horizonBoost * 0.12);
+    compositeMat.uniforms.uBloomMix.value = baseBloomMix + cb * horizonBoost * 0.2;
+    compositeMat.uniforms.uExposure.value = nightMode ? THREE.MathUtils.lerp(0.72, 0.84, cb) : baseExposure + cb * horizonBoost * 0.08;
+    compositeMat.uniforms.uVignette.value = baseVignette + cb * (nightMode ? 0.03 : 0.05);
+
     compositeMat.uniforms.uTime.value = clock.elapsedTime;
 
     // 1. Render scene into sceneRT
@@ -2645,6 +2718,7 @@ export default function Model3DPage() {
   const [cloudDensity, setCloudDensity] = useState(0.62);
   const [waterStyle, setWaterStyle] = useState(0.74);
   const [surroundingsBlend, setSurroundingsBlend] = useState(0.84);
+  const [shaderLookPreset, setShaderLookPreset] = useState<ShaderLookPreset>("custom");
   const [camMode, setCamMode] = useState<"iso" | "top" | "interior">("iso");
   const [fps, setFps] = useState(0);
   const [wallColor, setWallColor] = useState("#bcc8d2");
@@ -2663,6 +2737,37 @@ export default function Model3DPage() {
   const effectiveCloudDensity = minecraftPresetOn ? cloudDensity : 0.36;
   const effectiveWaterStyle = minecraftPresetOn ? waterStyle : 0.32;
   const effectiveSurroundingsBlend = minecraftPresetOn ? surroundingsBlend : 0.4;
+
+  const applyShaderPreset = useCallback((preset: ShaderLookPreset) => {
+    setShaderLookPreset(preset);
+    if (preset === "golden-hour") {
+      setTimeOfDayMode("day");
+      setSunriseRaysIntensity(1.34);
+      setCloudDensity(0.58);
+      setWaterStyle(0.9);
+      setSurroundingsBlend(0.9);
+      setRenderQuality("ultra");
+      return;
+    }
+    if (preset === "cinematic-day") {
+      setTimeOfDayMode("day");
+      setSunriseRaysIntensity(0.94);
+      setCloudDensity(0.72);
+      setWaterStyle(0.82);
+      setSurroundingsBlend(0.86);
+      setRenderQuality("ultra");
+      return;
+    }
+    if (preset === "deep-night") {
+      setTimeOfDayMode("night");
+      setShowMoon(true);
+      setSunriseRaysIntensity(0.22);
+      setCloudDensity(0.42);
+      setWaterStyle(0.78);
+      setSurroundingsBlend(0.88);
+      setRenderQuality("high");
+    }
+  }, [setTimeOfDayMode, setShowMoon, setRenderQuality]);
 
   // Rebuild scene when floor plan data loads
   useEffect(() => {
@@ -2811,32 +2916,60 @@ export default function Model3DPage() {
             </div>
             {minecraftPresetOn && <>
               <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 7.5, color: "#c4b5fd", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3, fontFamily: "'DM Mono',monospace" }}>Reference Look</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 3 }}>
+                  {[
+                    { id: "golden-hour" as ShaderLookPreset, label: "Golden Hour" },
+                    { id: "cinematic-day" as ShaderLookPreset, label: "Cinematic Day" },
+                    { id: "deep-night" as ShaderLookPreset, label: "Deep Night" },
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => applyShaderPreset(p.id)}
+                      style={{
+                        padding: "4px 6px",
+                        borderRadius: 4,
+                        border: `1px solid ${shaderLookPreset === p.id ? "rgba(196,181,253,0.6)" : "rgba(255,255,255,0.08)"}`,
+                        background: shaderLookPreset === p.id ? "rgba(139,92,246,0.2)" : "rgba(255,255,255,0.03)",
+                        color: shaderLookPreset === p.id ? "#ede9fe" : "#c4b5fd",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        fontSize: 8,
+                        fontFamily: "'DM Mono',monospace",
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
                   <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Sunrise Rays</span>
                   <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{sunriseRaysIntensity.toFixed(2)}</span>
                 </div>
-                <input type="range" min={0} max={1.5} step={0.01} value={sunriseRaysIntensity} onChange={(e) => setSunriseRaysIntensity(parseFloat(e.target.value))} style={{ width: "100%", accentColor: "#f59e0b", cursor: "pointer" }} />
+                <input type="range" min={0} max={1.5} step={0.01} value={sunriseRaysIntensity} onChange={(e) => { setShaderLookPreset("custom"); setSunriseRaysIntensity(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#f59e0b", cursor: "pointer" }} />
               </div>
               <div style={{ marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
                   <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Cloud Density</span>
                   <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{cloudDensity.toFixed(2)}</span>
                 </div>
-                <input type="range" min={0.1} max={1} step={0.01} value={cloudDensity} onChange={(e) => setCloudDensity(parseFloat(e.target.value))} style={{ width: "100%", accentColor: "#7dd3fc", cursor: "pointer" }} />
+                <input type="range" min={0.1} max={1} step={0.01} value={cloudDensity} onChange={(e) => { setShaderLookPreset("custom"); setCloudDensity(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#7dd3fc", cursor: "pointer" }} />
               </div>
               <div style={{ marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
                   <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Water Reflect/Wave</span>
                   <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{waterStyle.toFixed(2)}</span>
                 </div>
-                <input type="range" min={0} max={1} step={0.01} value={waterStyle} onChange={(e) => setWaterStyle(parseFloat(e.target.value))} style={{ width: "100%", accentColor: "#38bdf8", cursor: "pointer" }} />
+                <input type="range" min={0} max={1} step={0.01} value={waterStyle} onChange={(e) => { setShaderLookPreset("custom"); setWaterStyle(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#38bdf8", cursor: "pointer" }} />
               </div>
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
                   <span style={{ fontSize: 8, color: "#d8b4fe", fontFamily: "'DM Mono',monospace" }}>Stylized ↔ Realistic</span>
                   <span style={{ fontSize: 8, color: "#f5d0fe", fontFamily: "'DM Mono',monospace" }}>{surroundingsBlend.toFixed(2)}</span>
                 </div>
-                <input type="range" min={0} max={1} step={0.01} value={surroundingsBlend} onChange={(e) => setSurroundingsBlend(parseFloat(e.target.value))} style={{ width: "100%", accentColor: "#34d399", cursor: "pointer" }} />
+                <input type="range" min={0} max={1} step={0.01} value={surroundingsBlend} onChange={(e) => { setShaderLookPreset("custom"); setSurroundingsBlend(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#34d399", cursor: "pointer" }} />
               </div>
             </>}
           </div>
@@ -2915,7 +3048,7 @@ export default function Model3DPage() {
                   minDistance={3} maxDistance={90} />
 
                 {/* Post-processing render pipeline — Blender-quality output */}
-                {showShaders && <RenderPipeline quality={renderQuality} />}
+                {showShaders && <RenderPipeline quality={renderQuality} cinematicBoost={effectiveSunriseRays} sunElevationDeg={sunElevationDeg} nightMode={isNightScene} />}
               </Suspense>
             </Canvas>
           </ThreeErrorBoundary>
