@@ -1813,8 +1813,8 @@ function PBRGround({ showGrid, wet, nightMode, graphicsStylePreset }: { showGrid
       matRef.current.uniforms.uColor.value.set("#2b333c");
       matRef.current.uniforms.uColor2.value.set("#394754");
     } else if (graphicsStylePreset === "minecraft") {
-      matRef.current.uniforms.uColor.value.set("#1f3f22");
-      matRef.current.uniforms.uColor2.value.set("#2c4e2a");
+      matRef.current.uniforms.uColor.value.set("#9f7d4f");
+      matRef.current.uniforms.uColor2.value.set("#bc9a66");
     } else if (graphicsStylePreset === "default") {
       matRef.current.uniforms.uColor.value.set("#030507");
       matRef.current.uniforms.uColor2.value.set("#05080b");
@@ -1892,32 +1892,53 @@ function makeGroundProfileTexture(style: GraphicsStylePreset): THREE.CanvasTextu
   const ctx = cv.getContext("2d")!;
 
   if (style === "minecraft") {
+    // Minecraft-inspired dirt + grass top fringe, biased to light-brown base.
     const tile = 16;
     for (let y = 0; y < size; y += tile) {
       for (let x = 0; x < size; x += tile) {
         const r = Math.random();
-        let c = "#4e8a3a";
-        if (r > 0.82) c = "#6f7b5b";
-        else if (r > 0.66) c = "#6d563d";
-        else if (r > 0.35) c = "#5e9a42";
-        ctx.fillStyle = c;
+        let base = "#a78452";
+        if (r > 0.84) base = "#ba9763";
+        else if (r > 0.68) base = "#967248";
+        else if (r > 0.5) base = "#b38f5d";
+        ctx.fillStyle = base;
         ctx.fillRect(x, y, tile, tile);
-        ctx.fillStyle = "rgba(0,0,0,0.08)";
-        ctx.fillRect(x, y, tile, 1);
-        ctx.fillRect(x, y, 1, tile);
+
+        // Pixel noise and tiny pebbles.
+        for (let i = 0; i < 20; i++) {
+          const px = x + ((Math.random() * tile) | 0);
+          const py = y + ((Math.random() * tile) | 0);
+          ctx.fillStyle = Math.random() > 0.5 ? "#8e6a42" : "#c4a06d";
+          ctx.fillRect(px, py, 1, 1);
+        }
+
+        // Grass fringe near top like classic block top transition.
+        for (let gy = 0; gy < 4; gy++) {
+          for (let gx = 0; gx < tile; gx++) {
+            if (Math.random() > 0.28) {
+              ctx.fillStyle = gy < 2 ? "#6fa945" : "#5f933e";
+              ctx.fillRect(x + gx, y + gy, 1, 1);
+            }
+          }
+        }
+
+        ctx.fillStyle = "rgba(0,0,0,0.14)";
+        ctx.fillRect(x, y + tile - 1, tile, 1);
+        ctx.fillRect(x + tile - 1, y, 1, tile);
       }
     }
   } else if (style === "valorant") {
+    // Tactical sand-concrete look with painted lane guides.
     ctx.fillStyle = "#8f7d6f";
     ctx.fillRect(0, 0, size, size);
-    for (let i = 0; i < 1800; i++) {
+    for (let i = 0; i < 3200; i++) {
       const x = Math.random() * size;
       const y = Math.random() * size;
-      const v = 110 + Math.random() * 70;
-      ctx.fillStyle = `rgba(${v},${v - 8},${v - 16},0.06)`;
-      ctx.fillRect(x, y, 2, 2);
+      const v = 95 + Math.random() * 85;
+      ctx.fillStyle = `rgba(${v},${v - 10},${v - 18},0.09)`;
+      ctx.fillRect(x, y, 2 + Math.random() * 1.4, 2 + Math.random() * 1.2);
     }
-    ctx.strokeStyle = "rgba(245,223,186,0.3)";
+    ctx.strokeStyle = "rgba(245,223,186,0.36)";
     ctx.lineWidth = 4;
     ctx.strokeRect(24, 24, size - 48, size - 48);
     ctx.lineWidth = 2;
@@ -1927,27 +1948,46 @@ function makeGroundProfileTexture(style: GraphicsStylePreset): THREE.CanvasTextu
       ctx.lineTo(size, i);
       ctx.stroke();
     }
+    ctx.strokeStyle = "rgba(72,68,62,0.28)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 10; i++) {
+      const sy = Math.random() * size;
+      ctx.beginPath();
+      ctx.moveTo(0, sy);
+      ctx.bezierCurveTo(size * 0.3, sy + Math.random() * 14, size * 0.6, sy - Math.random() * 18, size, sy + Math.random() * 8);
+      ctx.stroke();
+    }
   } else if (style === "wuthering-waves") {
-    ctx.fillStyle = "#3f4a56";
+    // Cooler rock mix with atmospheric streaks.
+    ctx.fillStyle = "#53606d";
     ctx.fillRect(0, 0, size, size);
-    for (let i = 0; i < 2600; i++) {
+    for (let i = 0; i < 4200; i++) {
       const x = Math.random() * size;
       const y = Math.random() * size;
       const w = 1 + Math.random() * 4;
       const h = 1 + Math.random() * 4;
-      const c = 90 + Math.random() * 80;
-      ctx.fillStyle = `rgba(${c - 25},${c - 10},${c},0.08)`;
+      const c = 92 + Math.random() * 82;
+      ctx.fillStyle = `rgba(${c - 24},${c - 8},${c + 10},0.1)`;
       ctx.fillRect(x, y, w, h);
     }
-    ctx.strokeStyle = "rgba(190,220,255,0.1)";
+    ctx.strokeStyle = "rgba(185,220,255,0.14)";
     ctx.lineWidth = 2;
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 22; i++) {
       ctx.beginPath();
       const sx = Math.random() * size;
       const sy = Math.random() * size;
       ctx.moveTo(sx, sy);
       ctx.lineTo(sx + (Math.random() - 0.5) * 200, sy + (Math.random() - 0.5) * 200);
       ctx.stroke();
+    }
+    for (let i = 0; i < 14; i++) {
+      const gx = Math.random() * size;
+      const gy = Math.random() * size;
+      const rg = ctx.createRadialGradient(gx, gy, 0, gx, gy, 28 + Math.random() * 36);
+      rg.addColorStop(0, "rgba(210,235,255,0.08)");
+      rg.addColorStop(1, "rgba(210,235,255,0)");
+      ctx.fillStyle = rg;
+      ctx.fillRect(gx - 72, gy - 72, 144, 144);
     }
   } else {
     ctx.fillStyle = "#06080b";
@@ -1957,8 +1997,8 @@ function makeGroundProfileTexture(style: GraphicsStylePreset): THREE.CanvasTextu
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(
-    style === "minecraft" ? 18 : style === "valorant" ? 10 : style === "wuthering-waves" ? 11 : 8,
-    style === "minecraft" ? 18 : style === "valorant" ? 10 : style === "wuthering-waves" ? 11 : 8
+    style === "minecraft" ? 22 : style === "valorant" ? 9 : style === "wuthering-waves" ? 10 : 8,
+    style === "minecraft" ? 22 : style === "valorant" ? 9 : style === "wuthering-waves" ? 10 : 8
   );
   t.generateMipmaps = true;
   t.minFilter = style === "minecraft" ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
@@ -1997,25 +2037,80 @@ function DistantScenery({
     return new THREE.Color("#5c3f2d").lerp(new THREE.Color("#7a5840"), blend * 0.35).multiplyScalar(nightMode ? 0.5 : 1).getStyle();
   }, [nightMode, blend, graphicsStylePreset]);
 
-  const smoothTex = graphicsStylePreset === "minecraft" || graphicsStylePreset === "wuthering-waves";
+  const smoothTex = graphicsStylePreset === "wuthering-waves";
   const stylizedTex = graphicsStylePreset === "valorant";
+  const blockyTex = graphicsStylePreset === "minecraft";
 
   const grassTex = useMemo(() => makePixelTexture(
     graphicsStylePreset === "wuthering-waves" ? "#60766f" : graphicsStylePreset === "valorant" ? "#9f8a6f" : "#4d9a45",
     THREE.MathUtils.lerp(0.42, 0.2, blend),
     graphicsStylePreset === "minecraft" ? 5 : stylizedTex ? 9 : THREE.MathUtils.lerp(16, 7, blend),
     graphicsStylePreset === "minecraft" ? 9 : 7,
-    !smoothTex
-  ), [blend, graphicsStylePreset, smoothTex, stylizedTex]);
+    blockyTex || !smoothTex
+  ), [blend, graphicsStylePreset, smoothTex, stylizedTex, blockyTex]);
   const dirtTex = useMemo(() => makePixelTexture(
     graphicsStylePreset === "wuthering-waves" ? "#434f5a" : graphicsStylePreset === "valorant" ? "#7c6a57" : "#5c3f2d",
     THREE.MathUtils.lerp(0.35, 0.18, blend),
     graphicsStylePreset === "minecraft" ? 5 : stylizedTex ? 8 : THREE.MathUtils.lerp(14, 7, blend),
     graphicsStylePreset === "minecraft" ? 7 : 5,
-    !smoothTex
-  ), [blend, graphicsStylePreset, smoothTex, stylizedTex]);
-  const barkTex = useMemo(() => makePixelTexture("#6f4a2a", THREE.MathUtils.lerp(0.4, 0.16, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(14, 6, blend), 4, !smoothTex), [blend, graphicsStylePreset, smoothTex]);
-  const leafTex = useMemo(() => makePixelTexture(graphicsStylePreset === "wuthering-waves" ? "#607468" : "#3f9148", THREE.MathUtils.lerp(0.45, 0.2, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(12, 6, blend), 5, !smoothTex), [blend, graphicsStylePreset, smoothTex]);
+    blockyTex || !smoothTex
+  ), [blend, graphicsStylePreset, smoothTex, stylizedTex, blockyTex]);
+  const barkTex = useMemo(() => makePixelTexture("#6f4a2a", THREE.MathUtils.lerp(0.4, 0.16, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(14, 6, blend), 4, blockyTex || !smoothTex), [blend, graphicsStylePreset, smoothTex, blockyTex]);
+  const leafTex = useMemo(() => makePixelTexture(graphicsStylePreset === "wuthering-waves" ? "#607468" : "#3f9148", THREE.MathUtils.lerp(0.45, 0.2, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(12, 6, blend), 5, blockyTex || !smoothTex), [blend, graphicsStylePreset, smoothTex, blockyTex]);
+
+  // Dedicated texture packs per graphics profile for surrounding objects.
+  const valorantWallTex = useMemo(() => {
+    const t = makeTexture("concrete", "#9a846f");
+    t.repeat.set(8, 8);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    return t;
+  }, []);
+  const valorantMetalTex = useMemo(() => {
+    const t = makeTexture("tile", "#6a5f57");
+    t.repeat.set(6, 6);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    return t;
+  }, []);
+  const wutheringRockTex = useMemo(() => {
+    const t = makeTexture("marble", "#67788a");
+    t.repeat.set(7, 7);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    return t;
+  }, []);
+  const wutheringRuinTex = useMemo(() => {
+    const t = makeTexture("concrete", "#5a6673");
+    t.repeat.set(6, 6);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    return t;
+  }, []);
+
+  useEffect(() => {
+    // Keep nearest filtering for Minecraft, smooth filtering for realistic profiles.
+    if (grassTex) {
+      grassTex.minFilter = blockyTex ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
+      grassTex.magFilter = blockyTex ? THREE.NearestFilter : THREE.LinearFilter;
+      grassTex.needsUpdate = true;
+    }
+    if (dirtTex) {
+      dirtTex.minFilter = blockyTex ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
+      dirtTex.magFilter = blockyTex ? THREE.NearestFilter : THREE.LinearFilter;
+      dirtTex.needsUpdate = true;
+    }
+    if (barkTex) {
+      barkTex.minFilter = blockyTex ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
+      barkTex.magFilter = blockyTex ? THREE.NearestFilter : THREE.LinearFilter;
+      barkTex.needsUpdate = true;
+    }
+    if (leafTex) {
+      leafTex.minFilter = blockyTex ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
+      leafTex.magFilter = blockyTex ? THREE.NearestFilter : THREE.LinearFilter;
+      leafTex.needsUpdate = true;
+    }
+  }, [grassTex, dirtTex, barkTex, leafTex, blockyTex]);
 
   useEffect(() => {
     return () => {
@@ -2023,8 +2118,12 @@ function DistantScenery({
       dirtTex?.dispose();
       barkTex?.dispose();
       leafTex?.dispose();
+      valorantWallTex.dispose();
+      valorantMetalTex.dispose();
+      wutheringRockTex.dispose();
+      wutheringRuinTex.dispose();
     };
-  }, [grassTex, dirtTex, barkTex, leafTex]);
+  }, [grassTex, dirtTex, barkTex, leafTex, valorantWallTex, valorantMetalTex, wutheringRockTex, wutheringRuinTex]);
 
   const terrain = useMemo(() => {
     const out: { x: number; y: number; z: number; h: number }[] = [];
@@ -2162,15 +2261,15 @@ function DistantScenery({
         <group key={`val-${i}`} position={[s.x, 0, s.z]} raycast={NOOP_RAYCAST}>
           <mesh position={[0, s.h * 0.5 - 0.3, 0]} castShadow receiveShadow>
             <boxGeometry args={[s.w, s.h, s.w * 0.85]} />
-            <meshStandardMaterial color="#9b836f" roughness={0.86} metalness={0.03} />
+            <meshStandardMaterial color="#9b836f" map={valorantWallTex} roughness={0.82} metalness={0.04} />
           </mesh>
           <mesh position={[0, s.h + 0.2, 0]} castShadow>
             <boxGeometry args={[s.w * 0.9, 0.42, s.w * 0.76]} />
-            <meshStandardMaterial color="#675a50" roughness={0.72} metalness={0.08} />
+            <meshStandardMaterial color="#675a50" map={valorantMetalTex} roughness={0.68} metalness={0.1} />
           </mesh>
           <mesh position={[0, s.h * 0.5, s.w * 0.45]} castShadow>
             <boxGeometry args={[s.w * 0.7, s.h * 0.75, 0.12]} />
-            <meshStandardMaterial color="#5f534a" roughness={0.82} metalness={0.04} />
+            <meshStandardMaterial color="#5f534a" map={valorantMetalTex} roughness={0.8} metalness={0.06} />
           </mesh>
         </group>
       ))}
@@ -2179,11 +2278,11 @@ function DistantScenery({
         <group key={`vcrate-${i}`} position={[c.x, 0, c.z]} raycast={NOOP_RAYCAST}>
           <mesh position={[0, c.h * 0.5 - 0.25, 0]} castShadow receiveShadow>
             <boxGeometry args={[c.w, c.h, c.w]} />
-            <meshStandardMaterial color="#b18f72" roughness={0.82} metalness={0.02} />
+            <meshStandardMaterial color="#b18f72" map={valorantWallTex} roughness={0.78} metalness={0.04} />
           </mesh>
           <mesh position={[0, c.h * 0.5 - 0.24, 0]} castShadow>
             <boxGeometry args={[c.w * 0.88, c.h * 0.84, c.w * 0.88]} />
-            <meshStandardMaterial color="#544840" roughness={0.9} metalness={0.04} wireframe />
+            <meshStandardMaterial color="#544840" map={valorantMetalTex} roughness={0.84} metalness={0.08} wireframe />
           </mesh>
         </group>
       ))}
@@ -2192,11 +2291,11 @@ function DistantScenery({
         <group key={`wu-${i}`} position={[p.x, 0, p.z]} raycast={NOOP_RAYCAST}>
           <mesh position={[0, p.h * 0.48, 0]} castShadow receiveShadow>
             <coneGeometry args={[p.s, p.h, 5]} />
-            <meshStandardMaterial color="#5b6572" roughness={0.74} metalness={0.1} />
+            <meshStandardMaterial color="#5b6572" map={wutheringRockTex} roughness={0.7} metalness={0.12} />
           </mesh>
           <mesh position={[0, p.h * 0.08, 0]} castShadow>
             <boxGeometry args={[p.s * 1.25, p.h * 0.18, p.s * 1.25]} />
-            <meshStandardMaterial color="#424c58" roughness={0.82} metalness={0.06} />
+            <meshStandardMaterial color="#424c58" map={wutheringRuinTex} roughness={0.78} metalness={0.08} />
           </mesh>
         </group>
       ))}
@@ -2205,15 +2304,15 @@ function DistantScenery({
         <group key={`wruin-${i}`} position={[r.x, 0, r.z]} raycast={NOOP_RAYCAST}>
           <mesh position={[0, r.h * 0.5 - 0.2, 0]} castShadow receiveShadow>
             <boxGeometry args={[r.w, r.h, 1.1]} />
-            <meshStandardMaterial color="#6d7682" roughness={0.8} metalness={0.08} />
+            <meshStandardMaterial color="#6d7682" map={wutheringRuinTex} roughness={0.76} metalness={0.1} />
           </mesh>
           <mesh position={[0, r.h * 0.7, 0]} castShadow>
             <torusGeometry args={[r.w * 0.34, 0.2, 8, 22, Math.PI]} />
-            <meshStandardMaterial color="#818b98" roughness={0.72} metalness={0.12} />
+            <meshStandardMaterial color="#818b98" map={wutheringRockTex} roughness={0.68} metalness={0.16} />
           </mesh>
           <mesh position={[0, -0.48, 0]} receiveShadow>
             <cylinderGeometry args={[r.w * 0.42, r.w * 0.56, 0.16, 12]} />
-            <meshPhysicalMaterial color="#4c6072" roughness={0.12} metalness={0.2} reflectivity={0.9} transmission={0.12} clearcoat={0.9} clearcoatRoughness={0.06} />
+            <meshPhysicalMaterial color="#4c6072" map={wutheringRockTex} roughness={0.12} metalness={0.2} reflectivity={0.9} transmission={0.12} clearcoat={0.9} clearcoatRoughness={0.06} />
           </mesh>
         </group>
       ))}
