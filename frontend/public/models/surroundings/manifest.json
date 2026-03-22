@@ -1,0 +1,154 @@
+{
+  "minecraft": [
+    {
+      "url": "/models/surroundings/minecraft_terrain.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "pixelated",
+      "material": {
+        "roughnessMin": 0.38,
+        "roughnessMax": 0.94,
+        "metalnessMin": 0.0,
+        "metalnessMax": 0.14,
+        "envMapIntensity": 0.58,
+        "brightness": 1.03,
+        "saturation": 1.07
+      }
+    },
+    {
+      "url": "/models/surroundings/minecraft_props.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "pixelated"
+    },
+    {
+      "url": "/models/surroundings/minecraft.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "pixelated"
+    }
+  ],
+  "sakura-blooms": [
+    {
+      "url": "/models/surroundings/sakura_terrain.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "smooth",
+      "material": {
+        "roughnessMin": 0.22,
+        "roughnessMax": 0.84,
+        "metalnessMin": 0.0,
+        "metalnessMax": 0.18,
+        "envMapIntensity": 0.74,
+        "brightness": 1.06,
+        "saturation": 1.03
+      }
+    },
+    {
+      "url": "/models/surroundings/sakura_foliage.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "smooth"
+    },
+    {
+      "url": "/models/surroundings/sakura-blooms.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "smooth"
+    }
+  ],
+  "valorant": [
+    {
+      "url": "/models/surroundings/valorant_terrain.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "smooth",
+      "material": {
+        "roughnessMin": 0.3,
+        "roughnessMax": 0.86,
+        "metalnessMin": 0.02,
+        "metalnessMax": 0.28,
+        "envMapIntensity": 0.64,
+        "brightness": 1.03,
+        "saturation": 0.99
+      }
+    },
+    {
+      "url": "/models/surroundings/valorant_props.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "smooth"
+    },
+    {
+      "url": "/models/surroundings/valorant.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "smooth"
+    }
+  ],
+  "wuthering-waves": [
+    {
+      "url": "/models/surroundings/wuthering_terrain.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "smooth",
+      "material": {
+        "roughnessMin": 0.26,
+        "roughnessMax": 0.86,
+        "metalnessMin": 0.03,
+        "metalnessMax": 0.34,
+        "envMapIntensity": 0.68,
+        "brightness": 1.04,
+        "saturation": 1.0
+      }
+    },
+    {
+      "url": "/models/surroundings/wuthering_props.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "smooth"
+    },
+    {
+      "url": "/models/surroundings/wuthering-waves.gltf",
+      "position": [0, -0.34, 0],
+      "rotationDeg": [0, 0, 0],
+      "scale": 1,
+      "castShadow": true,
+      "receiveShadow": true,
+      "textureMode": "smooth"
+    }
+  ]
+}

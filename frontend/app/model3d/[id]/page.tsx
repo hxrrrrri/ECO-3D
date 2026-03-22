@@ -1,9 +1,9 @@
 "use client";
-import { useRef, useMemo, Suspense, useState, useEffect, useLayoutEffect, useCallback, Component } from "react";
+import { useRef, useMemo, Suspense, useState, useEffect, useLayoutEffect, useCallback, Component, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, Text, Sky } from "@react-three/drei";
+import { OrbitControls, Text, Sky, useGLTF } from "@react-three/drei";
 
 import * as THREE from "three";
 import { useEco3DStore } from "@/store/useEco3DStore";
@@ -30,6 +30,84 @@ type SceneObj = {
   x: number; y: number; z: number; rotY: number;
   w: number; h: number; d: number;
   color: string; tex?: TexType;
+};
+
+type BlenderAssetEntry = {
+  url: string;
+  position?: [number, number, number];
+  rotationDeg?: [number, number, number];
+  scale?: number | [number, number, number];
+  castShadow?: boolean;
+  receiveShadow?: boolean;
+  textureMode?: "auto" | "pixelated" | "smooth";
+  material?: {
+    roughnessMin?: number;
+    roughnessMax?: number;
+    metalnessMin?: number;
+    metalnessMax?: number;
+    envMapIntensity?: number;
+    normalScale?: number;
+    saturation?: number;
+    brightness?: number;
+  };
+};
+
+type BlenderSurroundingsManifest = Partial<Record<GraphicsStylePreset, BlenderAssetEntry[]>>;
+type SurroundingsRuntimeStatus = {
+  source: "blender" | "procedural";
+  loaded: number;
+  expected: number;
+};
+type SurroundingsRenderMode = "blender" | "normal";
+
+const PROFILE_SURROUNDINGS_GLB: Partial<Record<GraphicsStylePreset, string>> = {
+  minecraft: "/models/surroundings/minecraft.glb",
+  "sakura-blooms": "/models/surroundings/sakura-blooms.glb",
+  valorant: "/models/surroundings/valorant.glb",
+  "wuthering-waves": "/models/surroundings/wuthering-waves.glb",
+};
+
+const PROFILE_ASSET_MATERIAL_PRESET: Record<Exclude<GraphicsStylePreset, "default">, Required<NonNullable<BlenderAssetEntry["material"]>>> = {
+  minecraft: {
+    roughnessMin: 0.32,
+    roughnessMax: 0.92,
+    metalnessMin: 0.0,
+    metalnessMax: 0.18,
+    envMapIntensity: 0.62,
+    normalScale: 1.0,
+    saturation: 1.06,
+    brightness: 1.03,
+  },
+  "sakura-blooms": {
+    roughnessMin: 0.24,
+    roughnessMax: 0.84,
+    metalnessMin: 0.0,
+    metalnessMax: 0.22,
+    envMapIntensity: 0.74,
+    normalScale: 1.0,
+    saturation: 1.04,
+    brightness: 1.05,
+  },
+  valorant: {
+    roughnessMin: 0.3,
+    roughnessMax: 0.88,
+    metalnessMin: 0.02,
+    metalnessMax: 0.3,
+    envMapIntensity: 0.64,
+    normalScale: 0.95,
+    saturation: 0.98,
+    brightness: 1.02,
+  },
+  "wuthering-waves": {
+    roughnessMin: 0.26,
+    roughnessMax: 0.86,
+    metalnessMin: 0.02,
+    metalnessMax: 0.32,
+    envMapIntensity: 0.68,
+    normalScale: 1.0,
+    saturation: 0.99,
+    brightness: 1.04,
+  },
 };
 
 const BACKGROUND_TRACKS: { id: MusicTrackId; label: string; src: string }[] = [
@@ -2888,6 +2966,234 @@ function DistantScenery({
   );
 }
 
+function BlenderSurroundingsModel({
+  url,
+  graphicsStylePreset,
+  position = [0, -0.34, 0],
+  rotationDeg = [0, 0, 0],
+  scale = [1, 1, 1],
+  castShadow = true,
+  receiveShadow = true,
+  textureMode = "auto",
+  material,
+}: {
+  url: string;
+  graphicsStylePreset: GraphicsStylePreset;
+  position?: [number, number, number];
+  rotationDeg?: [number, number, number];
+  scale?: number | [number, number, number];
+  castShadow?: boolean;
+  receiveShadow?: boolean;
+  textureMode?: "auto" | "pixelated" | "smooth";
+  material?: BlenderAssetEntry["material"];
+}) {
+  const { gl } = useThree();
+  const gltf = useGLTF(url);
+  const maxAniso = useMemo(() => Math.min(12, gl.capabilities.getMaxAnisotropy()), [gl]);
+  const profilePreset = useMemo(() => {
+    if (graphicsStylePreset === "default") return null;
+    return PROFILE_ASSET_MATERIAL_PRESET[graphicsStylePreset];
+  }, [graphicsStylePreset]);
+  const tuning = useMemo(() => {
+    const base = profilePreset ?? {
+      roughnessMin: 0.3,
+      roughnessMax: 0.9,
+      metalnessMin: 0.0,
+      metalnessMax: 0.3,
+      envMapIntensity: 0.6,
+      normalScale: 1.0,
+      saturation: 1.0,
+      brightness: 1.0,
+    };
+    const custom = material ?? {};
+    return {
+      roughnessMin: custom.roughnessMin ?? base.roughnessMin,
+      roughnessMax: custom.roughnessMax ?? base.roughnessMax,
+      metalnessMin: custom.metalnessMin ?? base.metalnessMin,
+      metalnessMax: custom.metalnessMax ?? base.metalnessMax,
+      envMapIntensity: custom.envMapIntensity ?? base.envMapIntensity,
+      normalScale: custom.normalScale ?? base.normalScale,
+      saturation: custom.saturation ?? base.saturation,
+      brightness: custom.brightness ?? base.brightness,
+    };
+  }, [profilePreset, material]);
+  const normalizedScale = useMemo<[number, number, number]>(() =>
+    typeof scale === "number" ? [scale, scale, scale] : scale
+  , [scale]);
+  const rotation = useMemo<[number, number, number]>(() => [
+    THREE.MathUtils.degToRad(rotationDeg[0]),
+    THREE.MathUtils.degToRad(rotationDeg[1]),
+    THREE.MathUtils.degToRad(rotationDeg[2]),
+  ], [rotationDeg]);
+
+  const model = useMemo(() => {
+    const cloned = gltf.scene.clone(true);
+    cloned.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = castShadow;
+      mesh.receiveShadow = receiveShadow;
+      const mat = mesh.material as THREE.Material | THREE.Material[];
+      const mats = Array.isArray(mat) ? mat : [mat];
+      for (const m of mats) {
+        if (!(m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshPhysicalMaterial)) continue;
+        m.roughness = THREE.MathUtils.clamp(m.roughness, tuning.roughnessMin, tuning.roughnessMax);
+        m.metalness = THREE.MathUtils.clamp(m.metalness, tuning.metalnessMin, tuning.metalnessMax);
+        m.envMapIntensity = tuning.envMapIntensity;
+        if (m.color) {
+          m.color.multiplyScalar(tuning.brightness);
+          m.color.lerp(new THREE.Color(0.5, 0.5, 0.5), 1 - tuning.saturation);
+        }
+
+        const pixelMode = textureMode === "pixelated" || (textureMode === "auto" && graphicsStylePreset === "minecraft");
+        const textureList = [m.map, m.normalMap, m.roughnessMap, m.metalnessMap, m.aoMap];
+        for (const tex of textureList) {
+          if (!tex) continue;
+          tex.anisotropy = maxAniso;
+          if (pixelMode) {
+            tex.magFilter = THREE.NearestFilter;
+            tex.minFilter = THREE.NearestMipmapNearestFilter;
+          } else {
+            tex.magFilter = THREE.LinearFilter;
+            tex.minFilter = THREE.LinearMipmapLinearFilter;
+          }
+          tex.needsUpdate = true;
+        }
+
+        if (m.map) {
+          m.map.colorSpace = THREE.SRGBColorSpace;
+        }
+        if (m.normalScale) {
+          m.normalScale.setScalar(tuning.normalScale);
+        }
+      }
+    });
+    return cloned;
+  }, [gltf.scene, graphicsStylePreset, castShadow, receiveShadow, textureMode, maxAniso, tuning]);
+
+  return (
+    <group position={position} rotation={rotation} scale={normalizedScale} raycast={NOOP_RAYCAST}>
+      <primitive object={model} />
+    </group>
+  );
+}
+
+function ProfileSurroundings({
+  graphicsStylePreset,
+  fallback,
+  onStatusChange,
+  forceProcedural,
+}: {
+  graphicsStylePreset: GraphicsStylePreset;
+  fallback: ReactNode;
+  onStatusChange?: (status: SurroundingsRuntimeStatus) => void;
+  forceProcedural?: boolean;
+}) {
+  const [resolvedEntries, setResolvedEntries] = useState<BlenderAssetEntry[] | null>(null);
+
+  useEffect(() => {
+    if (!forceProcedural) return;
+    setResolvedEntries([]);
+    onStatusChange?.({ source: "procedural", loaded: 0, expected: 0 });
+  }, [forceProcedural, onStatusChange]);
+
+  useEffect(() => {
+    if (forceProcedural) return;
+    let cancelled = false;
+
+    const resolveEntries = async () => {
+      let entries: BlenderAssetEntry[] = [];
+
+      try {
+        const manifestRes = await fetch("/models/surroundings/manifest.json", { cache: "no-store" });
+        if (manifestRes.ok) {
+          const manifest = (await manifestRes.json()) as BlenderSurroundingsManifest;
+          const fromManifest = manifest[graphicsStylePreset];
+          if (Array.isArray(fromManifest) && fromManifest.length > 0) {
+            entries = fromManifest.filter((e): e is BlenderAssetEntry => !!e?.url);
+          }
+        }
+      } catch {
+        // Fall back to legacy single-file mapping.
+      }
+
+      if (entries.length === 0) {
+        const modelUrl = PROFILE_SURROUNDINGS_GLB[graphicsStylePreset];
+        if (modelUrl) {
+          entries = [{
+            url: modelUrl,
+            position: [0, -0.34, 0],
+            rotationDeg: [0, 0, 0],
+            scale: 1,
+            castShadow: true,
+            receiveShadow: true,
+          }];
+        }
+      }
+
+      if (entries.length === 0) {
+        if (!cancelled) {
+          setResolvedEntries([]);
+          onStatusChange?.({ source: "procedural", loaded: 0, expected: 0 });
+        }
+        return;
+      }
+
+      const exists = await Promise.all(entries.map(async (entry) => {
+        try {
+          const res = await fetch(entry.url, { method: "HEAD" });
+          return res.ok;
+        } catch {
+          return false;
+        }
+      }));
+
+      if (!cancelled) {
+        const resolved = entries.filter((_, i) => exists[i]);
+        setResolvedEntries(resolved);
+        onStatusChange?.({
+          source: resolved.length > 0 ? "blender" : "procedural",
+          loaded: resolved.length,
+          expected: entries.length,
+        });
+      }
+    };
+
+    resolveEntries();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [graphicsStylePreset, onStatusChange, forceProcedural]);
+
+  if (forceProcedural || !resolvedEntries || resolvedEntries.length === 0) {
+    return (
+      <>
+        {fallback}
+      </>
+    );
+  }
+
+  return (
+    <Suspense fallback={fallback}>
+      {resolvedEntries.map((entry, idx) => (
+        <BlenderSurroundingsModel
+          key={`${entry.url}-${idx}`}
+          url={entry.url}
+          graphicsStylePreset={graphicsStylePreset}
+          position={entry.position}
+          rotationDeg={entry.rotationDeg}
+          scale={entry.scale}
+          castShadow={entry.castShadow}
+          receiveShadow={entry.receiveShadow}
+          textureMode={entry.textureMode}
+          material={entry.material}
+        />
+      ))}
+    </Suspense>
+  );
+}
+
 function RoamingMinecraftLife({ active }: { active: boolean }) {
   const refs = useRef<Array<THREE.Group | null>>([]);
   const cowHeadRefs = useRef<Array<THREE.Group | null>>([]);
@@ -3869,6 +4175,8 @@ export default function Model3DPage() {
   const [waterStyle, setWaterStyle] = useState(0.74);
   const [surroundingsBlend, setSurroundingsBlend] = useState(0.84);
   const [shaderLookPreset, setShaderLookPreset] = useState<ShaderLookPreset>("custom");
+  const [surroundingsRuntimeStatus, setSurroundingsRuntimeStatus] = useState<SurroundingsRuntimeStatus>({ source: "procedural", loaded: 0, expected: 0 });
+  const [surroundingsRenderMode, setSurroundingsRenderMode] = useState<SurroundingsRenderMode>("blender");
   const [sunsetCinematic, setSunsetCinematic] = useState(false);
   const [camMode, setCamMode] = useState<"iso" | "top" | "interior">("iso");
   const [fps, setFps] = useState(0);
@@ -3902,6 +4210,8 @@ export default function Model3DPage() {
   const effectiveCloudDensity = sunsetCinematic ? THREE.MathUtils.clamp(Math.max(cloudDensity, 0.45), 0.1, 0.86) : cloudDensity;
   const effectiveWaterStyle = waterStyle;
   const effectiveSurroundingsBlend = sunsetCinematic ? Math.max(surroundingsBlend, 0.72) : surroundingsBlend;
+  const profileSupportsBlendToggle = graphicsStylePreset === "minecraft" || graphicsStylePreset === "sakura-blooms" || graphicsStylePreset === "valorant" || graphicsStylePreset === "wuthering-waves";
+  const forceProceduralSurroundings = profileSupportsBlendToggle && surroundingsRenderMode === "normal";
 
   const applyGraphicsStylePreset = useCallback((preset: GraphicsStylePreset) => {
     if (preset === "default") {
@@ -3984,6 +4294,12 @@ export default function Model3DPage() {
   useEffect(() => {
     applyGraphicsStylePreset(graphicsStylePreset);
   }, [graphicsStylePreset, applyGraphicsStylePreset]);
+
+  useEffect(() => {
+    if (graphicsStylePreset === "default") {
+      setSurroundingsRuntimeStatus({ source: "procedural", loaded: 0, expected: 0 });
+    }
+  }, [graphicsStylePreset]);
 
   useEffect(() => {
     if (!sunsetCinematic) {
@@ -4268,6 +4584,52 @@ export default function Model3DPage() {
                     <option value="wuthering-waves">Wuthering Waves Inspired</option>
                   </select>
                 </div>
+                {graphicsStylePreset !== "default" && (
+                  <div style={{ marginBottom: 7, padding: "6px 7px", borderRadius: 5, border: `1px solid ${surroundingsRuntimeStatus.source === "blender" ? "rgba(74,222,128,0.45)" : "rgba(248,113,113,0.45)"}`, background: surroundingsRuntimeStatus.source === "blender" ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.1)" }}>
+                    <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.56)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2, fontFamily: "'DM Mono',monospace" }}>Blender Assets</div>
+                    <div style={{ fontSize: 8.2, color: surroundingsRuntimeStatus.source === "blender" ? "#86efac" : "#fca5a5", fontFamily: "'DM Mono',monospace" }}>
+                      {surroundingsRuntimeStatus.source === "blender"
+                        ? `Loaded ${surroundingsRuntimeStatus.loaded}/${surroundingsRuntimeStatus.expected} Blender assets`
+                        : `Procedural fallback (${surroundingsRuntimeStatus.loaded}/${surroundingsRuntimeStatus.expected} asset files found)`}
+                    </div>
+                    {profileSupportsBlendToggle && (
+                      <div style={{ marginTop: 6, display: "flex", gap: 4 }}>
+                        <button
+                          onClick={() => setSurroundingsRenderMode("blender")}
+                          style={{
+                            flex: 1,
+                            padding: "4px 6px",
+                            borderRadius: 4,
+                            border: `1px solid ${surroundingsRenderMode === "blender" ? "rgba(74,222,128,0.6)" : "rgba(255,255,255,0.1)"}`,
+                            background: surroundingsRenderMode === "blender" ? "rgba(16,185,129,0.2)" : "rgba(255,255,255,0.03)",
+                            color: surroundingsRenderMode === "blender" ? "#86efac" : "#94a3b8",
+                            cursor: "pointer",
+                            fontSize: 8,
+                            fontFamily: "'DM Mono',monospace",
+                          }}
+                        >
+                          Blender
+                        </button>
+                        <button
+                          onClick={() => setSurroundingsRenderMode("normal")}
+                          style={{
+                            flex: 1,
+                            padding: "4px 6px",
+                            borderRadius: 4,
+                            border: `1px solid ${surroundingsRenderMode === "normal" ? "rgba(248,113,113,0.6)" : "rgba(255,255,255,0.1)"}`,
+                            background: surroundingsRenderMode === "normal" ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.03)",
+                            color: surroundingsRenderMode === "normal" ? "#fca5a5" : "#94a3b8",
+                            cursor: "pointer",
+                            fontSize: 8,
+                            fontFamily: "'DM Mono',monospace",
+                          }}
+                        >
+                          Normal 3D
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div style={{ marginBottom: 6 }}>
                   <div style={{ fontSize: 7.5, color: "rgba(13,242,242,0.56)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3, fontFamily: "'DM Mono',monospace" }}>Reference Look</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 3 }}>
@@ -4396,7 +4758,14 @@ export default function Model3DPage() {
                 <PBRGround showGrid={showGrid} wet={showFlood} nightMode={isNightScene} graphicsStylePreset={graphicsStylePreset} />
 
                 {/* Natural surroundings for depth and color context */}
-                {graphicsStylePreset !== "default" && <DistantScenery nightMode={isNightScene} sunElevationDeg={visualSunElevationDeg} surroundingsBlend={effectiveSurroundingsBlend} waterStyle={effectiveWaterStyle} graphicsStylePreset={graphicsStylePreset} />}
+                {graphicsStylePreset !== "default" && (
+                  <ProfileSurroundings
+                    graphicsStylePreset={graphicsStylePreset}
+                    fallback={<DistantScenery nightMode={isNightScene} sunElevationDeg={visualSunElevationDeg} surroundingsBlend={effectiveSurroundingsBlend} waterStyle={effectiveWaterStyle} graphicsStylePreset={graphicsStylePreset} />}
+                    onStatusChange={setSurroundingsRuntimeStatus}
+                    forceProcedural={forceProceduralSurroundings}
+                  />
+                )}
                 {graphicsStylePreset === "minecraft" && <RoamingMinecraftLife active={!showFlood && !showSnow} />}
 
                 {/* All scene objects */}
