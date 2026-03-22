@@ -22,7 +22,7 @@ type ObjKind = "object" | "wall" | "room";
 type RenderQuality = "low" | "med" | "high" | "ultra";
 type TimeOfDayMode = "auto" | "day" | "night";
 type ShaderLookPreset = "custom" | "golden-hour" | "cinematic-day" | "deep-night";
-type GraphicsStylePreset = "default" | "minecraft" | "valorant" | "wuthering-waves";
+type GraphicsStylePreset = "default" | "minecraft" | "valorant" | "wuthering-waves" | "sakura-blooms";
 type MusicTrackId = "night-slow" | "cinematic-chase-inspired" | "ambient-dusk";
 type MusicPlaybackState = "idle" | "playing" | "paused" | "error";
 type SceneObj = {
@@ -421,18 +421,25 @@ function Lighting({
   const isSunAboveHorizon = sunElevationDeg > 0;
   const useNightLighting = nightMode && !studioMode;
   const horizonBoost = clamp01(1 - Math.abs(sunElevationDeg - 6) / 18);
+  const sunsetWarmth = clamp01(1 - Math.abs(sunElevationDeg - 4) / 14);
   const raysBoost = 1 + horizonBoost * sunriseRaysIntensity * 0.95;
+  const sunKeyColor = new THREE.Color("#fff2cf").lerp(new THREE.Color("#ffad69"), sunsetWarmth * 0.92).getStyle();
+  const sunFillColor = new THREE.Color("#ffd4a0").lerp(new THREE.Color("#ff8f56"), sunsetWarmth * 0.75).getStyle();
+  const ambientDay = new THREE.Color("#d8e8ff").lerp(new THREE.Color("#ffd8b6"), sunsetWarmth * 0.52).getStyle();
+  const hemiSky = new THREE.Color("#bcdcff").lerp(new THREE.Color("#ffb57f"), sunsetWarmth * 0.55).getStyle();
+  const hemiGround = new THREE.Color("#1a2424").lerp(new THREE.Color("#3a2620"), sunsetWarmth * 0.45).getStyle();
   return <>
-    <ambientLight intensity={studioMode ? 0.7 : useNightLighting ? 0.12 : (sunOn ? 0.26 : 0.38)} color={studioMode ? "#fff9ef" : useNightLighting ? "#9db6d8" : "#d8e8ff"} />
-    <hemisphereLight args={studioMode ? ["#fff6e8","#8d9b8a",0.45] : useNightLighting ? ["#506a8a", "#0f1620", 0.2] : ["#bcdcff", "#1a2424", 0.28]} />
+    <ambientLight intensity={studioMode ? 0.7 : useNightLighting ? 0.12 : (sunOn ? 0.34 : 0.42)} color={studioMode ? "#fff9ef" : useNightLighting ? "#9db6d8" : ambientDay} />
+    <hemisphereLight args={studioMode ? ["#fff6e8","#8d9b8a",0.45] : useNightLighting ? ["#506a8a", "#0f1620", 0.2] : [hemiSky, hemiGround, 0.38]} />
     {studioMode && <>
       <directionalLight position={[14, 20, 10]} intensity={1.15} color="#fff8ef" castShadow shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-left={-32} shadow-camera-right={32} shadow-camera-top={32} shadow-camera-bottom={-32} shadow-camera-near={0.5} shadow-camera-far={100} />
       <directionalLight position={[-12, 15, -8]} intensity={0.55} color="#d8eeff" />
       <directionalLight position={[0, 10, -16]} intensity={0.35} color="#ffeedd" />
       <pointLight position={[0, 6, 0]} intensity={0.35} color="#ffe8cc" distance={40} decay={1.2} />
     </>}
-    {!studioMode && !useNightLighting && sunOn && isSunAboveHorizon && <directionalLight position={pos} intensity={1.45 * raysBoost} castShadow color="#fff2cf" shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-near={0.5} shadow-camera-far={120} shadow-camera-left={-35} shadow-camera-right={35} shadow-camera-top={35} shadow-camera-bottom={-35} />}
-    {!studioMode && !useNightLighting && sunOn && isSunAboveHorizon && <pointLight position={[pos[0] * 0.6, Math.max(1.8, pos[1] * 0.45), pos[2] * 0.6]} intensity={0.22 + sunriseRaysIntensity * 0.85 * horizonBoost} color="#ffd4a0" distance={95} decay={1.35} />}
+    {!useNightLighting && sunOn && isSunAboveHorizon && <directionalLight position={pos} intensity={1.55 * raysBoost * (1 + sunsetWarmth * 0.18)} castShadow color={sunKeyColor} shadow-mapSize-width={2048} shadow-mapSize-height={2048} shadow-camera-near={0.5} shadow-camera-far={120} shadow-camera-left={-35} shadow-camera-right={35} shadow-camera-top={35} shadow-camera-bottom={-35} />}
+    {!useNightLighting && sunOn && isSunAboveHorizon && <pointLight position={[pos[0] * 0.62, Math.max(1.6, pos[1] * 0.42), pos[2] * 0.62]} intensity={0.58 + sunriseRaysIntensity * 1.35 * horizonBoost} color={sunFillColor} distance={106} decay={1.28} />}
+    {!useNightLighting && sunOn && isSunAboveHorizon && <pointLight position={[pos[0] * 0.28, 1.2, pos[2] * 0.28]} intensity={0.16 + sunsetWarmth * 0.24} color="#ff9a62" distance={52} decay={1.45} />}
     {!studioMode && !useNightLighting && !sunOn && <><pointLight position={[0, 14, 0]} intensity={0.55} color="#ffffff" /><pointLight position={[-10, 8, -10]} intensity={0.2} color="#c8d8ff" /><pointLight position={[10, 8, 10]} intensity={0.2} color="#ffd8c8" /></>}
     {useNightLighting && <>
       <directionalLight position={[-16, 20, -14]} intensity={0.38} color="#8ea8d8" castShadow shadow-mapSize-width={1024} shadow-mapSize-height={1024} shadow-camera-left={-30} shadow-camera-right={30} shadow-camera-top={30} shadow-camera-bottom={-30} />
@@ -444,10 +451,9 @@ function Lighting({
 // ─── Sun Sphere ───────────────────────────────────────────────────────────────
 function SunSphere({ sunAzimuthDeg, sunElevationDeg, sunriseRaysIntensity }: { sunAzimuthDeg: number; sunElevationDeg: number; sunriseRaysIntensity: number }) {
   const sunRef = useRef<THREE.Group>(null);
-  const ringRef = useRef<THREE.Mesh>(null);
   const belowHorizon = sunElevationDeg < -1.0;
   const horizonBoost = clamp01(1 - Math.abs(sunElevationDeg - 5) / 18);
-  const glowBoost = 1 + sunriseRaysIntensity * horizonBoost * 1.2;
+  const glowBoost = 1 + sunriseRaysIntensity * horizonBoost * 0.55;
 
   const getSunPos = useCallback(
     (): [number, number, number] => sunAnglesToScenePosition(sunAzimuthDeg, sunElevationDeg, 20),
@@ -458,7 +464,6 @@ function SunSphere({ sunAzimuthDeg, sunElevationDeg, sunriseRaysIntensity }: { s
 
   useFrame((s) => {
     if (belowHorizon) return;
-    if (ringRef.current) ringRef.current.rotation.z = s.clock.elapsedTime * 0.6;
     if (sunRef.current) {
       const np = getSunPos();
       sunRef.current.position.lerp(new THREE.Vector3(...np), 0.002);
@@ -469,16 +474,69 @@ function SunSphere({ sunAzimuthDeg, sunElevationDeg, sunriseRaysIntensity }: { s
 
   return (
     <group ref={sunRef} position={pos}>
-      <mesh><sphereGeometry args={[0.65, 20, 20]} /><meshStandardMaterial color="#fcd34d" emissive="#f59e0b" emissiveIntensity={1.9 * glowBoost} /></mesh>
-      <mesh ref={ringRef}><torusGeometry args={[1.0, 0.06, 8, 32]} /><meshStandardMaterial color="#f59e0b" emissive="#f59e0b" emissiveIntensity={1.35 * glowBoost} /></mesh>
-      {Array.from({ length: 8 }).map((_, i) => {
-        const a = (i / 8) * Math.PI * 2;
-        return <mesh key={i} position={[Math.cos(a) * 1.3, Math.sin(a) * 1.3, 0]} rotation={[0, 0, a]}>
-          <boxGeometry args={[0.5, 0.04, 0.04]} />
-          <meshStandardMaterial color="#fcd34d" emissive="#fbbf24" emissiveIntensity={1.2 * glowBoost} />
-        </mesh>;
-      })}
-      <pointLight intensity={3.0 + sunriseRaysIntensity * 2.2} color="#fcd34d" distance={68} decay={1.5} />
+      <mesh>
+        <sphereGeometry args={[0.62, 20, 20]} />
+        <meshStandardMaterial color="#ffd27a" emissive="#ffb45f" emissiveIntensity={0.92 * glowBoost} />
+      </mesh>
+      <mesh>
+        <sphereGeometry args={[1.22, 20, 20]} />
+        <meshBasicMaterial color="#ffd9a8" transparent opacity={0.1 + horizonBoost * 0.08} depthWrite={false} blending={THREE.AdditiveBlending} />
+      </mesh>
+      <pointLight intensity={1.55 + sunriseRaysIntensity * 0.8} color="#ffd09a" distance={56} decay={1.7} />
+    </group>
+  );
+}
+
+function SunRayBeams({
+  active,
+  sunAzimuthDeg,
+  sunElevationDeg,
+  strength,
+}: {
+  active: boolean;
+  sunAzimuthDeg: number;
+  sunElevationDeg: number;
+  strength: number;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const matsRef = useRef<Array<THREE.MeshBasicMaterial | null>>([]);
+
+  const sunPos = useMemo(() => {
+    const [x, y, z] = sunAnglesToScenePosition(sunAzimuthDeg, sunElevationDeg, 19);
+    return new THREE.Vector3(x, y, z);
+  }, [sunAzimuthDeg, sunElevationDeg]);
+
+  useFrame(({ clock }) => {
+    if (!active || !groupRef.current) return;
+    groupRef.current.position.copy(sunPos.clone().multiplyScalar(0.84));
+    groupRef.current.lookAt(0, 0.5, 0);
+    const horizonFactor = clamp01(1 - Math.max(0, sunElevationDeg - 10) / 28);
+    const pulse = 0.97 + Math.sin(clock.elapsedTime * 0.55) * 0.03;
+    for (let i = 0; i < matsRef.current.length; i++) {
+      const m = matsRef.current[i];
+      if (!m) continue;
+      m.opacity = (0.048 + i * 0.018) * clamp01(strength) * horizonFactor * pulse;
+    }
+  });
+
+  if (!active || sunElevationDeg < 0 || sunElevationDeg > 40) return null;
+
+  return (
+    <group ref={groupRef} raycast={NOOP_RAYCAST}>
+      {[0, 1, 2].map((i) => (
+        <mesh key={`beam-${i}`} rotation={[Math.PI * 0.5, (i - 1) * 0.1, 0]}>
+          <coneGeometry args={[0.44 + i * 0.2, 24 + i * 6, 20, 1, true]} />
+          <meshBasicMaterial
+            ref={(node) => { matsRef.current[i] = node; }}
+            color={i === 0 ? "#ffe9cb" : i === 1 ? "#ffdeb6" : "#ffd29f"}
+            transparent
+            opacity={0.06}
+            blending={THREE.AdditiveBlending}
+            depthWrite={false}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -498,25 +556,204 @@ function RealisticSky({
 }) {
   const sunPosition = useMemo<[number, number, number]>(() => {
     const a = THREE.MathUtils.degToRad(sunAzimuthDeg);
-    const e = THREE.MathUtils.degToRad(Math.max(1.5, sunElevationDeg));
+    const e = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(sunElevationDeg, -2, 85));
     const r = 1200;
     return [Math.sin(a) * Math.cos(e) * r, Math.sin(e) * r, -Math.cos(a) * Math.cos(e) * r];
   }, [sunAzimuthDeg, sunElevationDeg]);
 
   if (nightMode) return null;
 
-  const horizonWarmth = clamp01(1 - Math.abs(sunElevationDeg - 8) / 24);
+  const horizonWarmth = clamp01(1 - Math.abs(sunElevationDeg - 7) / 18);
   const realisticFactor = clamp01(surroundingsBlend);
 
   return (
     <Sky
       distance={450000}
       sunPosition={sunPosition}
-      turbidity={THREE.MathUtils.lerp(4.6, 2.35, realisticFactor) + sunriseRaysIntensity * horizonWarmth * 1.1}
-      rayleigh={THREE.MathUtils.lerp(1.9, 1.28, realisticFactor)}
-      mieCoefficient={THREE.MathUtils.lerp(0.0064, 0.0048, realisticFactor)}
-      mieDirectionalG={THREE.MathUtils.lerp(0.76, 0.86, realisticFactor)}
+      turbidity={THREE.MathUtils.lerp(5.2, 3.8, realisticFactor) + horizonWarmth * 0.42 + sunriseRaysIntensity * 0.08}
+      rayleigh={THREE.MathUtils.lerp(4.6, 3.6, realisticFactor) + horizonWarmth * 0.35}
+      mieCoefficient={THREE.MathUtils.lerp(0.0028, 0.0018, realisticFactor) + horizonWarmth * 0.00012}
+      mieDirectionalG={THREE.MathUtils.lerp(0.62, 0.7, realisticFactor)}
     />
+  );
+}
+
+const eveningSkyVert = /* glsl */ `
+  varying vec3 vWorld;
+  void main() {
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorld = wp.xyz;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const eveningSkyFrag = /* glsl */ `
+  varying vec3 vWorld;
+  uniform vec3 uTop;
+  uniform vec3 uMid;
+  uniform vec3 uHorizon;
+  uniform vec3 uSunGlow;
+  uniform vec3 uSunDir;
+  uniform float uIntensity;
+
+  void main() {
+    vec3 dir = normalize(vWorld);
+    float h = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+
+    vec3 base = mix(uHorizon, uMid, smoothstep(0.0, 0.55, h));
+    base = mix(base, uTop, smoothstep(0.42, 1.0, h));
+
+    float sunDot = max(dot(dir, normalize(uSunDir)), 0.0);
+    float halo = pow(sunDot, 7.0) * 0.52 + pow(sunDot, 28.0) * 0.78;
+    vec3 col = base + uSunGlow * halo;
+
+    col *= uIntensity;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+function EveningGradientSky({
+  nightMode,
+  sunAzimuthDeg,
+  sunElevationDeg,
+  graphicsStylePreset,
+}: {
+  nightMode: boolean;
+  sunAzimuthDeg: number;
+  sunElevationDeg: number;
+  graphicsStylePreset: GraphicsStylePreset;
+}) {
+  const matRef = useRef<THREE.ShaderMaterial>(null!);
+
+  const sunDir = useMemo(() => {
+    const [x, y, z] = sunAnglesToScenePosition(sunAzimuthDeg, sunElevationDeg, 1.0);
+    return new THREE.Vector3(x, y, z).normalize();
+  }, [sunAzimuthDeg, sunElevationDeg]);
+
+  useEffect(() => {
+    if (!matRef.current) return;
+    if (graphicsStylePreset === "sakura-blooms") {
+      matRef.current.uniforms.uTop.value.set("#6a6bc6");
+      matRef.current.uniforms.uMid.value.set("#c57fc6");
+      matRef.current.uniforms.uHorizon.value.set("#ff9f6a");
+      matRef.current.uniforms.uSunGlow.value.set("#ffd2a1");
+      matRef.current.uniforms.uIntensity.value = 1.04;
+    } else if (graphicsStylePreset === "minecraft") {
+      matRef.current.uniforms.uTop.value.set("#5c72c5");
+      matRef.current.uniforms.uMid.value.set("#8f70c8");
+      matRef.current.uniforms.uHorizon.value.set("#ff9e5f");
+      matRef.current.uniforms.uSunGlow.value.set("#ffd09a");
+      matRef.current.uniforms.uIntensity.value = 1.0;
+    } else {
+      matRef.current.uniforms.uTop.value.set("#5971ba");
+      matRef.current.uniforms.uMid.value.set("#8b75bf");
+      matRef.current.uniforms.uHorizon.value.set("#ffa56e");
+      matRef.current.uniforms.uSunGlow.value.set("#ffd8aa");
+      matRef.current.uniforms.uIntensity.value = 0.98;
+    }
+  }, [graphicsStylePreset]);
+
+  useFrame(() => {
+    if (!matRef.current) return;
+    matRef.current.uniforms.uSunDir.value.copy(sunDir);
+  });
+
+  if (nightMode) return null;
+
+  return (
+    <mesh scale={[360, 360, 360]} raycast={NOOP_RAYCAST}>
+      <sphereGeometry args={[1, 56, 40]} />
+      <shaderMaterial
+        ref={matRef}
+        vertexShader={eveningSkyVert}
+        fragmentShader={eveningSkyFrag}
+        side={THREE.BackSide}
+        depthWrite={false}
+        uniforms={{
+          uTop: { value: new THREE.Color("#5f72c0") },
+          uMid: { value: new THREE.Color("#8b74bf") },
+          uHorizon: { value: new THREE.Color("#ffab75") },
+          uSunGlow: { value: new THREE.Color("#ffd8aa") },
+          uSunDir: { value: sunDir.clone() },
+          uIntensity: { value: 1.0 },
+        }}
+      />
+    </mesh>
+  );
+}
+
+function UniversalWaterBody({
+  nightMode,
+  style,
+}: {
+  nightMode: boolean;
+  style: GraphicsStylePreset;
+}) {
+  const strips = useMemo(() => ([
+    { pos: [0, -0.56, -64] as [number, number, number], rot: [-Math.PI / 2, 0, 0] as [number, number, number], size: [180, 26, 56, 14] as [number, number, number, number] },
+    { pos: [0, -0.56, 64] as [number, number, number], rot: [-Math.PI / 2, 0, 0] as [number, number, number], size: [180, 26, 56, 14] as [number, number, number, number] },
+    { pos: [-64, -0.56, 0] as [number, number, number], rot: [-Math.PI / 2, Math.PI / 2, 0] as [number, number, number], size: [180, 26, 56, 14] as [number, number, number, number] },
+    { pos: [64, -0.56, 0] as [number, number, number], rot: [-Math.PI / 2, Math.PI / 2, 0] as [number, number, number], size: [180, 26, 56, 14] as [number, number, number, number] },
+  ]), []);
+
+  const refs = useRef<Array<THREE.Mesh | null>>([]);
+
+  useFrame(({ clock }) => {
+    const T = clock.elapsedTime;
+    for (let i = 0; i < refs.current.length; i++) {
+      const m = refs.current[i];
+      if (!m) continue;
+      const geo = m.geometry as THREE.PlaneGeometry;
+      const pos = geo.attributes.position as THREE.BufferAttribute;
+      const pa = pos.array as Float32Array;
+      for (let v = 0; v < pa.length / 3; v++) {
+        const x = pa[v * 3 + 0];
+        const y = pa[v * 3 + 1];
+        pa[v * 3 + 2] = Math.sin(x * 0.05 + T * 0.8) * 0.07 + Math.cos(y * 0.08 + T * 0.65) * 0.05;
+      }
+      pos.needsUpdate = true;
+      geo.computeVertexNormals();
+    }
+  });
+
+  const waterColor = nightMode
+    ? "#1a2e4a"
+    : style === "sakura-blooms"
+      ? "#8f79b8"
+      : style === "minecraft"
+        ? "#4f83c3"
+        : style === "valorant"
+          ? "#5f7488"
+          : style === "wuthering-waves"
+            ? "#4b6a89"
+            : "#5d86be";
+
+  return (
+    <group>
+      {strips.map((s, i) => (
+        <mesh
+          key={`uw-${i}`}
+          ref={(node) => { refs.current[i] = node; }}
+          position={s.pos}
+          rotation={s.rot}
+          raycast={NOOP_RAYCAST}
+        >
+          <planeGeometry args={s.size} />
+          <meshPhysicalMaterial
+            color={waterColor}
+            roughness={nightMode ? 0.09 : 0.05}
+            metalness={0.18}
+            transmission={0.18}
+            reflectivity={1.0}
+            clearcoat={1.0}
+            clearcoatRoughness={0.05}
+            transparent
+            opacity={0.92}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      ))}
+    </group>
   );
 }
 
@@ -540,7 +777,7 @@ function ArchitecturalNightFill({ nightMode, assistOn }: { nightMode: boolean; a
 
 function StylePresetFill({ graphicsStylePreset, nightMode }: { graphicsStylePreset: GraphicsStylePreset; nightMode: boolean }) {
   if (nightMode) return null;
-  if (graphicsStylePreset !== "valorant" && graphicsStylePreset !== "wuthering-waves") return null;
+  if (graphicsStylePreset !== "valorant" && graphicsStylePreset !== "wuthering-waves" && graphicsStylePreset !== "sakura-blooms") return null;
 
   if (graphicsStylePreset === "valorant") {
     return (
@@ -549,6 +786,16 @@ function StylePresetFill({ graphicsStylePreset, nightMode }: { graphicsStylePres
         <hemisphereLight args={["#f4ddc0", "#8c7765", 0.34]} />
         <directionalLight position={[-10, 12, 9]} intensity={0.58} color="#f3d3ae" />
         <directionalLight position={[9, 10, -8]} intensity={0.42} color="#e3eef8" />
+      </group>
+    );
+  }
+
+  if (graphicsStylePreset === "sakura-blooms") {
+    return (
+      <group>
+        <hemisphereLight args={["#ffe6f1", "#8e7688", 0.36]} />
+        <directionalLight position={[-10, 12, 9]} intensity={0.52} color="#ffd1e3" />
+        <directionalLight position={[9, 10, -8]} intensity={0.38} color="#f7f2ff" />
       </group>
     );
   }
@@ -1546,32 +1793,113 @@ function RenderPipeline({
     const cb = clamp01(cinematicBoost);
     const horizonBoost = clamp01(1 - Math.abs(sunElevationDeg - 7) / 19);
 
-    const baseBloomIntensity = quality === "ultra" ? 0.72 : quality === "high" ? 0.58 : quality === "med" ? 0.45 : 0.32;
-    const baseBloomThreshold = quality === "ultra" ? 0.72 : quality === "high" ? 0.76 : quality === "med" ? 0.8 : 0.85;
-    const baseExposure = quality === "ultra" ? 0.98 : quality === "high" ? 0.96 : quality === "med" ? 0.94 : 0.92;
-    const baseBloomMix = quality === "ultra" ? 0.42 : quality === "high" ? 0.34 : quality === "med" ? 0.24 : 0.16;
+    const baseBloomIntensity = quality === "ultra" ? 0.44 : quality === "high" ? 0.36 : quality === "med" ? 0.28 : 0.2;
+    const baseBloomThreshold = quality === "ultra" ? 0.88 : quality === "high" ? 0.9 : quality === "med" ? 0.92 : 0.94;
+    const baseExposure = quality === "ultra" ? 0.84 : quality === "high" ? 0.82 : quality === "med" ? 0.8 : 0.78;
+    const baseBloomMix = quality === "ultra" ? 0.2 : quality === "high" ? 0.16 : quality === "med" ? 0.12 : 0.08;
     const baseVignette = quality === "ultra" ? 0.66 : quality === "high" ? 0.62 : 0.58;
 
-    const style = {
-      // More realistic grading: lower stylized bloom/aberration and balanced color response.
-      bloomMul: graphicsStylePreset === "valorant" ? 0.68 : graphicsStylePreset === "wuthering-waves" ? 0.74 : graphicsStylePreset === "minecraft" ? 0.96 : 0.84,
-      bloomMixAdd: graphicsStylePreset === "valorant" ? -0.05 : graphicsStylePreset === "wuthering-waves" ? -0.04 : graphicsStylePreset === "minecraft" ? 0.0 : -0.05,
-      bloomThresholdAdd: graphicsStylePreset === "valorant" ? 0.06 : graphicsStylePreset === "wuthering-waves" ? 0.05 : graphicsStylePreset === "minecraft" ? 0.03 : 0.12,
-      exposureAdd: graphicsStylePreset === "valorant" ? 0.03 : graphicsStylePreset === "wuthering-waves" ? 0.02 : graphicsStylePreset === "minecraft" ? 0.02 : -0.01,
-      vignetteAdd: graphicsStylePreset === "valorant" ? -0.05 : graphicsStylePreset === "wuthering-waves" ? -0.01 : graphicsStylePreset === "minecraft" ? 0.0 : 0.02,
-      caMul: graphicsStylePreset === "valorant" ? 0.3 : graphicsStylePreset === "wuthering-waves" ? 0.35 : 0.55,
-      grainMul: graphicsStylePreset === "valorant" ? 0.45 : graphicsStylePreset === "wuthering-waves" ? 0.6 : graphicsStylePreset === "minecraft" ? 0.55 : 0.85,
-      dofMul: graphicsStylePreset === "valorant" ? 1.08 : graphicsStylePreset === "wuthering-waves" ? 1.15 : graphicsStylePreset === "minecraft" ? 1.05 : 1.9,
-      saturation: graphicsStylePreset === "valorant" ? 1.01 : graphicsStylePreset === "wuthering-waves" ? 1.03 : graphicsStylePreset === "minecraft" ? 1.05 : 1.0,
-      contrast: graphicsStylePreset === "valorant" ? 1.02 : graphicsStylePreset === "wuthering-waves" ? 1.03 : graphicsStylePreset === "minecraft" ? 1.04 : 1.0,
-      gradeColor: graphicsStylePreset === "valorant" ? new THREE.Color("#f4eadf") : graphicsStylePreset === "wuthering-waves" ? new THREE.Color("#e4eef7") : graphicsStylePreset === "minecraft" ? new THREE.Color("#f2f8ef") : new THREE.Color("#ffffff"),
-      gradeStrength: graphicsStylePreset === "valorant" ? 0.04 : graphicsStylePreset === "wuthering-waves" ? 0.05 : graphicsStylePreset === "minecraft" ? 0.04 : 0.0,
-    };
+    const style = (() => {
+      if (graphicsStylePreset === "valorant") {
+        return {
+          bloomMul: 0.68,
+          bloomMixAdd: -0.05,
+          bloomThresholdAdd: 0.06,
+          exposureAdd: 0.03,
+          vignetteAdd: -0.05,
+          caMul: 0.12,
+          grainMul: 0.2,
+          dofMul: 1.08,
+          saturation: 1.01,
+          contrast: 1.02,
+          gradeColor: new THREE.Color("#f4eadf"),
+          gradeStrength: 0.04,
+        };
+      }
+      if (graphicsStylePreset === "wuthering-waves") {
+        return {
+          bloomMul: 0.74,
+          bloomMixAdd: -0.04,
+          bloomThresholdAdd: 0.05,
+          exposureAdd: 0.02,
+          vignetteAdd: -0.01,
+          caMul: 0.14,
+          grainMul: 0.22,
+          dofMul: 1.15,
+          saturation: 1.03,
+          contrast: 1.03,
+          gradeColor: new THREE.Color("#e4eef7"),
+          gradeStrength: 0.05,
+        };
+      }
+      if (graphicsStylePreset === "minecraft") {
+        return {
+          bloomMul: 0.9,
+          bloomMixAdd: 0.01,
+          bloomThresholdAdd: 0.06,
+          exposureAdd: 0.08,
+          vignetteAdd: 0.02,
+          caMul: 0.08,
+          grainMul: 0.12,
+          dofMul: 0.94,
+          saturation: 1.12,
+          contrast: 1.09,
+          gradeColor: new THREE.Color("#ffc58f"),
+          gradeStrength: 0.12,
+        };
+      }
+      if (graphicsStylePreset === "sakura-blooms") {
+        return {
+          bloomMul: 0.84,
+          bloomMixAdd: -0.01,
+          bloomThresholdAdd: 0.08,
+          exposureAdd: 0.07,
+          vignetteAdd: 0.0,
+          caMul: 0.1,
+          grainMul: 0.14,
+          dofMul: 0.9,
+          saturation: 1.08,
+          contrast: 1.04,
+          gradeColor: new THREE.Color("#ffd7e9"),
+          gradeStrength: 0.1,
+        };
+      }
+      if (graphicsStylePreset === "default") {
+        return {
+          bloomMul: 0.45,
+          bloomMixAdd: -0.08,
+          bloomThresholdAdd: 0.14,
+          exposureAdd: -0.02,
+          vignetteAdd: 0.0,
+          caMul: 0.0,
+          grainMul: 0.0,
+          dofMul: 1.0,
+          saturation: 1.0,
+          contrast: 1.0,
+          gradeColor: new THREE.Color("#ffffff"),
+          gradeStrength: 0.0,
+        };
+      }
+      return {
+        bloomMul: 0.78,
+        bloomMixAdd: -0.05,
+        bloomThresholdAdd: 0.12,
+        exposureAdd: 0.02,
+        vignetteAdd: 0.02,
+        caMul: 0.14,
+        grainMul: 0.2,
+        dofMul: 1.35,
+        saturation: 1.04,
+        contrast: 1.05,
+        gradeColor: new THREE.Color("#ffcba0"),
+        gradeStrength: 0.1,
+      };
+    })();
 
-    bloomMat.uniforms.uIntensity.value = (baseBloomIntensity + cb * horizonBoost * 0.34 + (nightMode ? 0.04 : 0)) * style.bloomMul;
+    bloomMat.uniforms.uIntensity.value = (baseBloomIntensity + cb * horizonBoost * 0.2 + (nightMode ? 0.02 : 0)) * style.bloomMul;
     bloomMat.uniforms.uThreshold.value = Math.max(0.58, baseBloomThreshold - cb * horizonBoost * 0.12 + style.bloomThresholdAdd);
-    compositeMat.uniforms.uBloomMix.value = baseBloomMix + cb * horizonBoost * 0.2 + style.bloomMixAdd;
-    compositeMat.uniforms.uExposure.value = (nightMode ? THREE.MathUtils.lerp(0.72, 0.84, cb) : baseExposure + cb * horizonBoost * 0.08) + style.exposureAdd;
+    compositeMat.uniforms.uBloomMix.value = baseBloomMix + cb * horizonBoost * 0.1 + style.bloomMixAdd;
+    compositeMat.uniforms.uExposure.value = (nightMode ? THREE.MathUtils.lerp(0.72, 0.82, cb) : baseExposure + cb * horizonBoost * 0.04) + style.exposureAdd;
     compositeMat.uniforms.uVignette.value = Math.max(0.35, baseVignette + cb * (nightMode ? 0.03 : 0.05) + style.vignetteAdd);
     compositeMat.uniforms.uCA.value = (quality === "ultra" ? 0.0022 : quality === "high" ? 0.0018 : 0.0012) * style.caMul;
     compositeMat.uniforms.uGrain.value = (quality === "ultra" ? 0.01 : quality === "high" ? 0.008 : quality === "med" ? 0.006 : 0.003) * style.grainMul;
@@ -1652,6 +1980,10 @@ function PBREnvironment({ sunOn, nightMode, graphicsStylePreset }: { sunOn: bool
           r = Math.round(44 + t * 30 + horizon * 6);
           g = Math.round(62 + t * 38 + horizon * 8);
           b = Math.round(84 + t * 48 + horizon * 10);
+        } else if (graphicsStylePreset === "sakura-blooms") {
+          r = Math.round(146 + t * 66 + horizon * 20);
+          g = Math.round(106 + t * 56 + horizon * 15);
+          b = Math.round(134 + t * 62 + horizon * 18);
         } else if (sunOn) {
           r = Math.round(58 + t * 84 + horizon * 10);
           g = Math.round(118 + t * 78 + horizon * 8);
@@ -1675,11 +2007,13 @@ function PBREnvironment({ sunOn, nightMode, graphicsStylePreset }: { sunOn: bool
       nightMode
         ? "#01040d"
         : graphicsStylePreset === "default"
-          ? "#020308"
+          ? "#000000"
           : graphicsStylePreset === "valorant"
           ? "#c8b9a4"
           : graphicsStylePreset === "wuthering-waves"
             ? "#8396a8"
+            : graphicsStylePreset === "sakura-blooms"
+              ? "#f1bfd3"
             : sunOn
               ? "#82b9ea"
               : "#7f96aa"
@@ -1688,17 +2022,19 @@ function PBREnvironment({ sunOn, nightMode, graphicsStylePreset }: { sunOn: bool
       nightMode
         ? "#070d1a"
         : graphicsStylePreset === "default"
-          ? "#05070b"
+          ? "#000000"
           : graphicsStylePreset === "valorant"
           ? "#9a8776"
           : graphicsStylePreset === "wuthering-waves"
             ? "#6e7f90"
+            : graphicsStylePreset === "sakura-blooms"
+              ? "#b68ea2"
             : sunOn
               ? "#6f9bc8"
               : "#60788c",
-      nightMode ? 0.0016 : graphicsStylePreset === "default" ? 0.0 : graphicsStylePreset === "valorant" ? 0.00016 : graphicsStylePreset === "wuthering-waves" ? 0.00042 : sunOn ? 0.00032 : 0.00075
+      nightMode ? 0.0016 : graphicsStylePreset === "default" ? 0.0 : graphicsStylePreset === "valorant" ? 0.00016 : graphicsStylePreset === "wuthering-waves" ? 0.00042 : graphicsStylePreset === "sakura-blooms" ? 0.00034 : sunOn ? 0.00032 : 0.00075
     );
-    (scene as any).environmentIntensity = nightMode ? 0.2 : graphicsStylePreset === "default" ? 0.08 : graphicsStylePreset === "valorant" ? 0.5 : graphicsStylePreset === "wuthering-waves" ? 0.5 : sunOn ? 0.58 : 0.34;
+    (scene as any).environmentIntensity = nightMode ? 0.2 : graphicsStylePreset === "default" ? 0.0 : graphicsStylePreset === "valorant" ? 0.5 : graphicsStylePreset === "wuthering-waves" ? 0.5 : graphicsStylePreset === "sakura-blooms" ? 0.62 : sunOn ? 0.58 : 0.34;
 
     return () => {
       scene.environment = null;
@@ -1834,18 +2170,21 @@ function PBRGround({ showGrid, wet, nightMode, graphicsStylePreset }: { showGrid
     uColor2: { value: new THREE.Color("#0e1a10") },
     uTime:   { value: 0 },
     uWet:    { value: wet ? 1.0 : 0.0 },
-    uNight:  { value: nightMode ? 1.0 : 0.0 },
+    uNight:  { value: 0.0 },
   }), []);
   useEffect(() => {
     if (!matRef.current) return;
     matRef.current.uniforms.uWet.value = wet ? 1.0 : 0.0;
-    matRef.current.uniforms.uNight.value = nightMode ? 1.0 : 0.0;
+    matRef.current.uniforms.uNight.value = nightMode && graphicsStylePreset !== "default" ? 1.0 : 0.0;
     if (graphicsStylePreset === "valorant") {
       matRef.current.uniforms.uColor.value.set("#2d3138");
       matRef.current.uniforms.uColor2.value.set("#3a4048");
     } else if (graphicsStylePreset === "wuthering-waves") {
       matRef.current.uniforms.uColor.value.set("#2b333c");
       matRef.current.uniforms.uColor2.value.set("#394754");
+    } else if (graphicsStylePreset === "sakura-blooms") {
+      matRef.current.uniforms.uColor.value.set("#b7808f");
+      matRef.current.uniforms.uColor2.value.set("#d7a3b4");
     } else if (graphicsStylePreset === "minecraft") {
       matRef.current.uniforms.uColor.value.set("#8f6436");
       matRef.current.uniforms.uColor2.value.set("#b8844f");
@@ -1877,10 +2216,10 @@ function PBRGround({ showGrid, wet, nightMode, graphicsStylePreset }: { showGrid
         <planeGeometry args={[120, 120, 1, 1]} />
         <meshStandardMaterial
           map={styleGroundTex}
-          roughness={graphicsStylePreset === "valorant" ? 0.84 : graphicsStylePreset === "wuthering-waves" ? 0.73 : 0.88}
-          metalness={graphicsStylePreset === "valorant" ? 0.08 : graphicsStylePreset === "wuthering-waves" ? 0.1 : 0.02}
+          roughness={graphicsStylePreset === "valorant" ? 0.84 : graphicsStylePreset === "wuthering-waves" ? 0.73 : graphicsStylePreset === "sakura-blooms" ? 0.8 : 0.88}
+          metalness={graphicsStylePreset === "valorant" ? 0.08 : graphicsStylePreset === "wuthering-waves" ? 0.1 : graphicsStylePreset === "sakura-blooms" ? 0.03 : 0.02}
           transparent
-          opacity={graphicsStylePreset === "minecraft" ? 0.96 : 0.92}
+          opacity={graphicsStylePreset === "minecraft" ? 0.96 : graphicsStylePreset === "sakura-blooms" ? 0.94 : 0.92}
         />
       </mesh>
     )}
@@ -2024,6 +2363,35 @@ function makeGroundProfileTexture(style: GraphicsStylePreset): THREE.CanvasTextu
       ctx.fillStyle = rg;
       ctx.fillRect(gx - 72, gy - 72, 144, 144);
     }
+  } else if (style === "sakura-blooms") {
+    // Soft spring meadow with pink petals and blossom highlights.
+    ctx.fillStyle = "#c892a7";
+    ctx.fillRect(0, 0, size, size);
+    for (let y = 0; y < size; y += 16) {
+      for (let x = 0; x < size; x += 16) {
+        const roll = Math.random();
+        let base = "#be879f";
+        if (roll > 0.8) base = "#d8a8bb";
+        else if (roll > 0.58) base = "#ad748e";
+        ctx.fillStyle = base;
+        ctx.fillRect(x, y, 16, 16);
+        for (let i = 0; i < 22; i++) {
+          const px = x + ((Math.random() * 16) | 0);
+          const py = y + ((Math.random() * 16) | 0);
+          ctx.fillStyle = Math.random() > 0.52 ? "#ffd9eb" : "#f2bdd6";
+          ctx.fillRect(px, py, 1, 1);
+        }
+      }
+    }
+    for (let i = 0; i < 28; i++) {
+      const cx = Math.random() * size;
+      const cy = Math.random() * size;
+      const rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, 18 + Math.random() * 28);
+      rg.addColorStop(0, "rgba(255,225,240,0.22)");
+      rg.addColorStop(1, "rgba(255,225,240,0)");
+      ctx.fillStyle = rg;
+      ctx.fillRect(cx - 52, cy - 52, 104, 104);
+    }
   } else {
     ctx.fillStyle = "#06080b";
     ctx.fillRect(0, 0, size, size);
@@ -2032,14 +2400,99 @@ function makeGroundProfileTexture(style: GraphicsStylePreset): THREE.CanvasTextu
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(
-    style === "minecraft" ? 22 : style === "valorant" ? 9 : style === "wuthering-waves" ? 10 : 8,
-    style === "minecraft" ? 22 : style === "valorant" ? 9 : style === "wuthering-waves" ? 10 : 8
+    style === "minecraft" ? 22 : style === "valorant" ? 9 : style === "wuthering-waves" ? 10 : style === "sakura-blooms" ? 14 : 8,
+    style === "minecraft" ? 22 : style === "valorant" ? 9 : style === "wuthering-waves" ? 10 : style === "sakura-blooms" ? 14 : 8
   );
   t.generateMipmaps = true;
-  t.minFilter = style === "minecraft" ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
-  t.magFilter = style === "minecraft" ? THREE.NearestFilter : THREE.LinearFilter;
+  t.minFilter = (style === "minecraft" || style === "sakura-blooms") ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
+  t.magFilter = (style === "minecraft" || style === "sakura-blooms") ? THREE.NearestFilter : THREE.LinearFilter;
   t.anisotropy = 8;
   return t;
+}
+
+function SakuraRainbow({ active }: { active: boolean }) {
+  if (!active) return null;
+  const arcs = [
+    { c: "#ff5f7f", r: 62 },
+    { c: "#ff9a5f", r: 60.8 },
+    { c: "#ffd85f", r: 59.6 },
+    { c: "#89d86f", r: 58.4 },
+    { c: "#6fc9ff", r: 57.2 },
+    { c: "#9d95ff", r: 56.0 },
+    { c: "#db9cff", r: 54.8 },
+  ];
+
+  return (
+    <group position={[0, 38, -115]} rotation={[0.32, 0, 0]} raycast={NOOP_RAYCAST}>
+      {arcs.map((a, i) => (
+        <mesh key={`rb-${i}`} rotation={[Math.PI * 0.5, 0, 0]}>
+          <torusGeometry args={[a.r, 0.26, 6, 96, Math.PI]} />
+          <meshBasicMaterial color={a.c} transparent opacity={0.3} depthWrite={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function SakuraPetals({ active }: { active: boolean }) {
+  const COUNT = 380;
+  const ptsRef = useRef<THREE.Points>(null!);
+  const dataRef = useRef<Array<{ x: number; y: number; z: number; drift: number; speed: number; phase: number }>>([]);
+
+  useEffect(() => {
+    if (!ptsRef.current || !active) return;
+    const geo = ptsRef.current.geometry;
+    const pos = new Float32Array(COUNT * 3);
+    dataRef.current = Array.from({ length: COUNT }, (_, i) => {
+      const x = (Math.random() - 0.5) * 86;
+      const y = 2 + Math.random() * 20;
+      const z = (Math.random() - 0.5) * 86;
+      pos[i * 3 + 0] = x;
+      pos[i * 3 + 1] = y;
+      pos[i * 3 + 2] = z;
+      return {
+        x,
+        y,
+        z,
+        drift: 0.18 + Math.random() * 0.5,
+        speed: 0.06 + Math.random() * 0.12,
+        phase: Math.random() * Math.PI * 2,
+      };
+    });
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setDrawRange(0, COUNT);
+  }, [active]);
+
+  useFrame(({ clock }) => {
+    if (!active || !ptsRef.current || !dataRef.current.length) return;
+    const T = clock.elapsedTime;
+    const pos = ptsRef.current.geometry.attributes.position as THREE.BufferAttribute | undefined;
+    if (!pos) return;
+    const pa = pos.array as Float32Array;
+    for (let i = 0; i < COUNT; i++) {
+      const d = dataRef.current[i];
+      pa[i * 3 + 0] = d.x + Math.sin(T * 0.55 + d.phase) * d.drift;
+      pa[i * 3 + 1] -= d.speed;
+      pa[i * 3 + 2] = d.z + Math.cos(T * 0.42 + d.phase) * (d.drift * 0.6);
+      if (pa[i * 3 + 1] < -0.2) {
+        d.x = (Math.random() - 0.5) * 86;
+        d.z = (Math.random() - 0.5) * 86;
+        pa[i * 3 + 0] = d.x;
+        pa[i * 3 + 1] = 20 + Math.random() * 4;
+        pa[i * 3 + 2] = d.z;
+      }
+    }
+    pos.needsUpdate = true;
+  });
+
+  if (!active) return null;
+
+  return (
+    <points ref={ptsRef} raycast={NOOP_RAYCAST}>
+      <bufferGeometry />
+      <pointsMaterial size={0.12} color="#ffd9eb" transparent opacity={0.7} depthWrite={false} sizeAttenuation />
+    </points>
+  );
 }
 
 function DistantScenery({
@@ -2062,6 +2515,7 @@ function DistantScenery({
   const grassTint = useMemo(() => {
     if (graphicsStylePreset === "valorant") return new THREE.Color("#868574").lerp(new THREE.Color("#b79f84"), warm * 0.25).getStyle();
     if (graphicsStylePreset === "wuthering-waves") return new THREE.Color("#51645d").lerp(new THREE.Color("#748070"), warm * 0.3).getStyle();
+    if (graphicsStylePreset === "sakura-blooms") return new THREE.Color("#cb90a9").lerp(new THREE.Color("#f0b5cc"), warm * 0.5 + blend * 0.24).getStyle();
     if (graphicsStylePreset === "minecraft") return new THREE.Color("#3f8a3f").lerp(new THREE.Color("#7dad5f"), warm * 0.5 + blend * 0.24).getStyle();
     return new THREE.Color("#4d9a45").lerp(new THREE.Color("#88b45b"), warm * 0.45 + blend * 0.2).getStyle();
   }, [warm, blend, graphicsStylePreset]);
@@ -2069,29 +2523,30 @@ function DistantScenery({
   const dirtTint = useMemo(() => {
     if (graphicsStylePreset === "valorant") return new THREE.Color("#705f50").lerp(new THREE.Color("#9a8268"), blend * 0.25).multiplyScalar(nightMode ? 0.5 : 1).getStyle();
     if (graphicsStylePreset === "wuthering-waves") return new THREE.Color("#353b42").lerp(new THREE.Color("#56606a"), blend * 0.45).multiplyScalar(nightMode ? 0.52 : 0.92).getStyle();
+    if (graphicsStylePreset === "sakura-blooms") return new THREE.Color("#8f6172").lerp(new THREE.Color("#ba8399"), blend * 0.4).multiplyScalar(nightMode ? 0.52 : 0.96).getStyle();
     if (graphicsStylePreset === "minecraft") return new THREE.Color("#8b5d34").lerp(new THREE.Color("#b47c44"), blend * 0.34).multiplyScalar(nightMode ? 0.62 : 1.05).getStyle();
     return new THREE.Color("#5c3f2d").lerp(new THREE.Color("#7a5840"), blend * 0.35).multiplyScalar(nightMode ? 0.5 : 1).getStyle();
   }, [nightMode, blend, graphicsStylePreset]);
 
-  const smoothTex = graphicsStylePreset !== "minecraft";
-  const blockyTex = graphicsStylePreset === "minecraft";
+  const smoothTex = graphicsStylePreset !== "minecraft" && graphicsStylePreset !== "sakura-blooms";
+  const blockyTex = graphicsStylePreset === "minecraft" || graphicsStylePreset === "sakura-blooms";
 
   const grassTex = useMemo(() => makePixelTexture(
-    graphicsStylePreset === "wuthering-waves" ? "#60766f" : graphicsStylePreset === "valorant" ? "#9f8a6f" : "#4d9a45",
+    graphicsStylePreset === "wuthering-waves" ? "#60766f" : graphicsStylePreset === "valorant" ? "#9f8a6f" : graphicsStylePreset === "sakura-blooms" ? "#d39cb8" : "#4d9a45",
     THREE.MathUtils.lerp(0.34, 0.16, blend),
-    graphicsStylePreset === "minecraft" ? 5 : graphicsStylePreset === "valorant" ? 18 : graphicsStylePreset === "wuthering-waves" ? 20 : THREE.MathUtils.lerp(16, 8, blend),
-    graphicsStylePreset === "minecraft" ? 9 : graphicsStylePreset === "valorant" ? 5 : graphicsStylePreset === "wuthering-waves" ? 6 : 7,
+    graphicsStylePreset === "minecraft" ? 5 : graphicsStylePreset === "valorant" ? 18 : graphicsStylePreset === "wuthering-waves" ? 20 : graphicsStylePreset === "sakura-blooms" ? 12 : THREE.MathUtils.lerp(16, 8, blend),
+    graphicsStylePreset === "minecraft" ? 9 : graphicsStylePreset === "valorant" ? 5 : graphicsStylePreset === "wuthering-waves" ? 6 : graphicsStylePreset === "sakura-blooms" ? 8 : 7,
     blockyTex || !smoothTex
   ), [blend, graphicsStylePreset, smoothTex, blockyTex]);
   const dirtTex = useMemo(() => makePixelTexture(
-    graphicsStylePreset === "wuthering-waves" ? "#434f5a" : graphicsStylePreset === "valorant" ? "#7c6a57" : graphicsStylePreset === "minecraft" ? "#8f6036" : "#5c3f2d",
+    graphicsStylePreset === "wuthering-waves" ? "#434f5a" : graphicsStylePreset === "valorant" ? "#7c6a57" : graphicsStylePreset === "minecraft" ? "#8f6036" : graphicsStylePreset === "sakura-blooms" ? "#9a6b7f" : "#5c3f2d",
     THREE.MathUtils.lerp(0.3, 0.14, blend),
-    graphicsStylePreset === "minecraft" ? 5 : graphicsStylePreset === "valorant" ? 17 : graphicsStylePreset === "wuthering-waves" ? 18 : THREE.MathUtils.lerp(14, 8, blend),
-    graphicsStylePreset === "minecraft" ? 7 : graphicsStylePreset === "valorant" ? 5 : graphicsStylePreset === "wuthering-waves" ? 5 : 5,
+    graphicsStylePreset === "minecraft" ? 5 : graphicsStylePreset === "valorant" ? 17 : graphicsStylePreset === "wuthering-waves" ? 18 : graphicsStylePreset === "sakura-blooms" ? 12 : THREE.MathUtils.lerp(14, 8, blend),
+    graphicsStylePreset === "minecraft" ? 7 : graphicsStylePreset === "valorant" ? 5 : graphicsStylePreset === "wuthering-waves" ? 5 : graphicsStylePreset === "sakura-blooms" ? 7 : 5,
     blockyTex || !smoothTex
   ), [blend, graphicsStylePreset, smoothTex, blockyTex]);
-  const barkTex = useMemo(() => makePixelTexture("#6f4a2a", THREE.MathUtils.lerp(0.4, 0.16, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(14, 6, blend), 4, blockyTex || !smoothTex), [blend, graphicsStylePreset, smoothTex, blockyTex]);
-  const leafTex = useMemo(() => makePixelTexture(graphicsStylePreset === "wuthering-waves" ? "#607468" : "#3f9148", THREE.MathUtils.lerp(0.45, 0.2, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(12, 6, blend), 5, blockyTex || !smoothTex), [blend, graphicsStylePreset, smoothTex, blockyTex]);
+  const barkTex = useMemo(() => makePixelTexture(graphicsStylePreset === "sakura-blooms" ? "#7f5966" : "#6f4a2a", THREE.MathUtils.lerp(0.4, 0.16, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(14, 6, blend), 4, blockyTex || !smoothTex), [blend, graphicsStylePreset, smoothTex, blockyTex]);
+  const leafTex = useMemo(() => makePixelTexture(graphicsStylePreset === "wuthering-waves" ? "#607468" : graphicsStylePreset === "sakura-blooms" ? "#f3bfd5" : "#3f9148", THREE.MathUtils.lerp(0.45, 0.2, blend), graphicsStylePreset === "minecraft" ? 4 : THREE.MathUtils.lerp(12, 6, blend), 5, blockyTex || !smoothTex), [blend, graphicsStylePreset, smoothTex, blockyTex]);
 
   // Dedicated texture packs per graphics profile for surrounding objects.
   const valorantWallTex = useMemo(() => {
@@ -2126,8 +2581,8 @@ function DistantScenery({
     if (graphicsStylePreset === "minecraft") {
       return makePixelTexture("#6b8f52", 0.34, 6, 26, true);
     }
-    const t = makeTexture(graphicsStylePreset === "valorant" ? "concrete" : "marble", graphicsStylePreset === "valorant" ? "#a98f74" : "#6d8296");
-    t.repeat.set(graphicsStylePreset === "valorant" ? 9 : 8, graphicsStylePreset === "valorant" ? 9 : 8);
+    const t = makeTexture(graphicsStylePreset === "valorant" ? "concrete" : graphicsStylePreset === "sakura-blooms" ? "plaster" : "marble", graphicsStylePreset === "valorant" ? "#a98f74" : graphicsStylePreset === "sakura-blooms" ? "#cf9eb4" : "#6d8296");
+    t.repeat.set(graphicsStylePreset === "valorant" ? 9 : graphicsStylePreset === "sakura-blooms" ? 10 : 8, graphicsStylePreset === "valorant" ? 9 : graphicsStylePreset === "sakura-blooms" ? 10 : 8);
     t.minFilter = THREE.LinearMipmapLinearFilter;
     t.magFilter = THREE.LinearFilter;
     t.anisotropy = 8;
@@ -2135,10 +2590,10 @@ function DistantScenery({
   }, [graphicsStylePreset]);
   const mountainTex = useMemo(() => {
     const t = makeTexture(
-      graphicsStylePreset === "minecraft" ? "brick" : graphicsStylePreset === "valorant" ? "concrete" : "marble",
-      graphicsStylePreset === "minecraft" ? "#5f704a" : graphicsStylePreset === "valorant" ? "#7e6c5e" : "#58697a"
+      graphicsStylePreset === "minecraft" ? "brick" : graphicsStylePreset === "valorant" ? "concrete" : graphicsStylePreset === "sakura-blooms" ? "plaster" : "marble",
+      graphicsStylePreset === "minecraft" ? "#5f704a" : graphicsStylePreset === "valorant" ? "#7e6c5e" : graphicsStylePreset === "sakura-blooms" ? "#b28aa0" : "#58697a"
     );
-    t.repeat.set(graphicsStylePreset === "minecraft" ? 6 : 5, graphicsStylePreset === "minecraft" ? 6 : 5);
+    t.repeat.set(graphicsStylePreset === "minecraft" ? 6 : graphicsStylePreset === "sakura-blooms" ? 7 : 5, graphicsStylePreset === "minecraft" ? 6 : graphicsStylePreset === "sakura-blooms" ? 7 : 5);
     t.anisotropy = 8;
     if (graphicsStylePreset !== "minecraft") {
       t.minFilter = THREE.LinearMipmapLinearFilter;
@@ -2188,14 +2643,20 @@ function DistantScenery({
 
   const terrain = useMemo(() => {
     const out: { x: number; y: number; z: number; h: number }[] = [];
-    const step = graphicsStylePreset === "valorant" ? 8 : 6;
+    const step = graphicsStylePreset === "valorant" ? 8 : graphicsStylePreset === "sakura-blooms" ? 5 : 6;
     for (let x = -78; x <= 78; x += step) {
       for (let z = -78; z <= 78; z += step) {
         if (Math.abs(x) < 20 && Math.abs(z) < 20) continue;
         const n = graphicsStylePreset === "valorant"
           ? Math.sin(x * 0.05) * 0.4 + Math.cos(z * 0.04) * 0.35
-          : Math.sin(x * 0.08) * 0.8 + Math.cos(z * 0.06) * 0.9 + Math.sin((x + z) * 0.035) * 1.2;
-        const h = graphicsStylePreset === "valorant" ? Math.max(1, Math.round(1.2 + n)) : Math.max(1, Math.round(2 + n));
+          : graphicsStylePreset === "sakura-blooms"
+            ? Math.sin(x * 0.06) * 0.95 + Math.cos(z * 0.065) * 1.05 + Math.sin((x + z) * 0.032) * 1.28
+            : Math.sin(x * 0.08) * 0.8 + Math.cos(z * 0.06) * 0.9 + Math.sin((x + z) * 0.035) * 1.2;
+        const h = graphicsStylePreset === "valorant"
+          ? Math.max(1, Math.round(1.2 + n))
+          : graphicsStylePreset === "sakura-blooms"
+            ? Math.max(1, Math.round(2.2 + n))
+            : Math.max(1, Math.round(2 + n));
         out.push({ x, z, h, y: -0.3 + h * 0.7 });
       }
     }
@@ -2203,15 +2664,15 @@ function DistantScenery({
   }, [graphicsStylePreset]);
 
   const trees = useMemo(() => (
-    Array.from({ length: graphicsStylePreset === "valorant" ? 34 : graphicsStylePreset === "wuthering-waves" ? 96 : 72 }, (_, i) => {
-      const count = graphicsStylePreset === "valorant" ? 34 : graphicsStylePreset === "wuthering-waves" ? 96 : 72;
+    Array.from({ length: graphicsStylePreset === "valorant" ? 34 : graphicsStylePreset === "wuthering-waves" ? 96 : graphicsStylePreset === "sakura-blooms" ? 116 : 72 }, (_, i) => {
+      const count = graphicsStylePreset === "valorant" ? 34 : graphicsStylePreset === "wuthering-waves" ? 96 : graphicsStylePreset === "sakura-blooms" ? 116 : 72;
       const a = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * (graphicsStylePreset === "valorant" ? 0.14 : 0.25);
       const r = 34 + Math.random() * 48;
       const x = Math.cos(a) * r;
       const z = Math.sin(a) * r;
       if (Math.abs(x) < 20 && Math.abs(z) < 20) return null;
-      const h = graphicsStylePreset === "wuthering-waves" ? 2.1 + Math.random() * 3.4 : 2.5 + Math.random() * 2.8;
-      const s = graphicsStylePreset === "valorant" ? 0.9 + Math.random() * 0.55 : 1.1 + Math.random() * 0.9;
+      const h = graphicsStylePreset === "wuthering-waves" ? 2.1 + Math.random() * 3.4 : graphicsStylePreset === "sakura-blooms" ? 2.2 + Math.random() * 2.4 : 2.5 + Math.random() * 2.8;
+      const s = graphicsStylePreset === "valorant" ? 0.9 + Math.random() * 0.55 : graphicsStylePreset === "sakura-blooms" ? 1.55 + Math.random() * 1.2 : 1.1 + Math.random() * 0.9;
       return { x, z, h, s };
     }).filter(Boolean) as { x: number; z: number; h: number; s: number }[]
   ), [graphicsStylePreset]);
@@ -2273,15 +2734,15 @@ function DistantScenery({
   ), []);
 
   const farMountains = useMemo(() => (
-    Array.from({ length: graphicsStylePreset === "minecraft" ? 28 : 34 }, (_, i) => {
-      const count = graphicsStylePreset === "minecraft" ? 28 : 34;
+    Array.from({ length: graphicsStylePreset === "minecraft" ? 28 : graphicsStylePreset === "sakura-blooms" ? 30 : 34 }, (_, i) => {
+      const count = graphicsStylePreset === "minecraft" ? 28 : graphicsStylePreset === "sakura-blooms" ? 30 : 34;
       const a = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.08;
       const r = 170 + Math.random() * 120;
       return {
         x: Math.cos(a) * r,
         z: Math.sin(a) * r,
-        h: graphicsStylePreset === "minecraft" ? 24 + Math.random() * 34 : 20 + Math.random() * 28,
-        s: graphicsStylePreset === "minecraft" ? 16 + Math.random() * 14 : 18 + Math.random() * 18,
+        h: graphicsStylePreset === "minecraft" ? 24 + Math.random() * 34 : graphicsStylePreset === "sakura-blooms" ? 26 + Math.random() * 22 : 20 + Math.random() * 28,
+        s: graphicsStylePreset === "minecraft" ? 16 + Math.random() * 14 : graphicsStylePreset === "sakura-blooms" ? 15 + Math.random() * 11 : 18 + Math.random() * 18,
       };
     })
   ), [graphicsStylePreset]);
@@ -2296,19 +2757,21 @@ function DistantScenery({
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.34, 0]} raycast={NOOP_RAYCAST}>
             <planeGeometry args={[620, 620, 1, 1]} />
             <meshStandardMaterial
-              color={graphicsStylePreset === "valorant" ? "#aa9077" : graphicsStylePreset === "wuthering-waves" ? "#72879b" : "#6f9157"}
+              color={graphicsStylePreset === "valorant" ? "#aa9077" : graphicsStylePreset === "wuthering-waves" ? "#72879b" : graphicsStylePreset === "sakura-blooms" ? "#cf9cb5" : "#6f9157"}
               map={farGroundTex ?? undefined}
               roughness={graphicsStylePreset === "minecraft" ? 0.94 : 0.88}
               metalness={graphicsStylePreset === "wuthering-waves" ? 0.08 : 0.03}
             />
           </mesh>
 
+          <SakuraRainbow active={graphicsStylePreset === "sakura-blooms" && !nightMode} />
+
           {/* Mountain ring kept lightweight (no shadows/raycast) for FPS. */}
           {farMountains.map((m, i) => (
             <mesh key={`far-m-${i}`} position={[m.x, m.h * 0.5 - 0.34, m.z]} raycast={NOOP_RAYCAST}>
               <coneGeometry args={[m.s, m.h, graphicsStylePreset === "minecraft" ? 4 : 6]} />
               <meshStandardMaterial
-                color={graphicsStylePreset === "valorant" ? "#7e6c5e" : graphicsStylePreset === "wuthering-waves" ? "#58697a" : "#567044"}
+                color={graphicsStylePreset === "valorant" ? "#7e6c5e" : graphicsStylePreset === "wuthering-waves" ? "#58697a" : graphicsStylePreset === "sakura-blooms" ? "#9f7a90" : "#567044"}
                 map={mountainTex}
                 roughness={graphicsStylePreset === "minecraft" ? 0.9 : 0.82}
                 metalness={graphicsStylePreset === "wuthering-waves" ? 0.08 : 0.03}
@@ -2332,10 +2795,10 @@ function DistantScenery({
         </mesh>
       ))}
 
-      {showBaseTerrain && waterStrips.map((w, i) => (
+      {false && waterStrips.map((w, i) => (
         <mesh key={`w-${i}`} position={w.p} scale={w.s} raycast={NOOP_RAYCAST}>
           <boxGeometry args={[1, 0.12, 1]} />
-          <meshPhysicalMaterial color={nightMode ? "#1f3650" : graphicsStylePreset === "valorant" ? new THREE.Color("#6f7c86").lerp(new THREE.Color("#9eabb4"), waterBlend * 0.2).getStyle() : graphicsStylePreset === "wuthering-waves" ? new THREE.Color("#385163").lerp(new THREE.Color("#6b8196"), waterBlend * 0.42).getStyle() : new THREE.Color("#3d7eb5").lerp(new THREE.Color("#7db4de"), waterBlend * 0.35).getStyle()} roughness={nightMode ? THREE.MathUtils.lerp(0.2, 0.08, waterBlend) : graphicsStylePreset === "valorant" ? THREE.MathUtils.lerp(0.34, 0.2, waterBlend) : THREE.MathUtils.lerp(0.18, 0.03, waterBlend)} metalness={THREE.MathUtils.lerp(0.04, graphicsStylePreset === "valorant" ? 0.11 : 0.18, waterBlend)} transmission={THREE.MathUtils.lerp(0.02, graphicsStylePreset === "valorant" ? 0.06 : 0.12, waterBlend)} reflectivity={THREE.MathUtils.lerp(0.74, graphicsStylePreset === "valorant" ? 0.86 : 0.98, waterBlend)} clearcoat={THREE.MathUtils.lerp(0.65, 1.0, waterBlend)} clearcoatRoughness={THREE.MathUtils.lerp(0.22, graphicsStylePreset === "valorant" ? 0.14 : 0.06, waterBlend)} />
+          <meshPhysicalMaterial color={nightMode ? "#1f3650" : graphicsStylePreset === "valorant" ? new THREE.Color("#6f7c86").lerp(new THREE.Color("#9eabb4"), waterBlend * 0.2).getStyle() : graphicsStylePreset === "wuthering-waves" ? new THREE.Color("#385163").lerp(new THREE.Color("#6b8196"), waterBlend * 0.42).getStyle() : graphicsStylePreset === "sakura-blooms" ? new THREE.Color("#7c8db8").lerp(new THREE.Color("#d3a0c6"), waterBlend * 0.55).getStyle() : new THREE.Color("#3d7eb5").lerp(new THREE.Color("#7db4de"), waterBlend * 0.35).getStyle()} roughness={nightMode ? THREE.MathUtils.lerp(0.2, 0.08, waterBlend) : graphicsStylePreset === "valorant" ? THREE.MathUtils.lerp(0.34, 0.2, waterBlend) : graphicsStylePreset === "sakura-blooms" ? THREE.MathUtils.lerp(0.2, 0.05, waterBlend) : THREE.MathUtils.lerp(0.18, 0.03, waterBlend)} metalness={THREE.MathUtils.lerp(0.04, graphicsStylePreset === "valorant" ? 0.11 : graphicsStylePreset === "sakura-blooms" ? 0.2 : 0.18, waterBlend)} transmission={THREE.MathUtils.lerp(0.02, graphicsStylePreset === "valorant" ? 0.06 : graphicsStylePreset === "sakura-blooms" ? 0.16 : 0.12, waterBlend)} reflectivity={THREE.MathUtils.lerp(0.74, graphicsStylePreset === "valorant" ? 0.86 : graphicsStylePreset === "sakura-blooms" ? 1.0 : 0.98, waterBlend)} clearcoat={THREE.MathUtils.lerp(0.65, 1.0, waterBlend)} clearcoatRoughness={THREE.MathUtils.lerp(0.22, graphicsStylePreset === "valorant" ? 0.14 : 0.06, waterBlend)} />
         </mesh>
       ))}
 
@@ -2343,19 +2806,19 @@ function DistantScenery({
         <group key={`tree-${i}`} position={[t.x, 0, t.z]} raycast={NOOP_RAYCAST}>
           <mesh position={[0, t.h * 0.28, 0]} castShadow receiveShadow>
             <boxGeometry args={[0.72, t.h * 0.56, 0.72]} />
-            <meshStandardMaterial color={nightMode ? "#3f2a1b" : "#6f4a2a"} map={barkTex ?? undefined} roughness={THREE.MathUtils.lerp(0.9, 0.72, blend)} />
+            <meshStandardMaterial color={nightMode ? "#3f2a1b" : graphicsStylePreset === "sakura-blooms" ? "#7a5564" : "#6f4a2a"} map={barkTex ?? undefined} roughness={THREE.MathUtils.lerp(0.9, 0.72, blend)} />
           </mesh>
           <mesh position={[0, t.h * 0.75, 0]} castShadow>
             <boxGeometry args={[t.s * 1.7, t.h * 0.34, t.s * 1.7]} />
-            <meshStandardMaterial color={nightMode ? "#1f4f2f" : "#2f7d3f"} map={leafTex ?? undefined} roughness={THREE.MathUtils.lerp(0.9, 0.72, blend)} />
+            <meshStandardMaterial color={nightMode ? "#1f4f2f" : graphicsStylePreset === "sakura-blooms" ? "#f2b8d0" : "#2f7d3f"} map={leafTex ?? undefined} roughness={THREE.MathUtils.lerp(0.9, 0.72, blend)} />
           </mesh>
           <mesh position={[0, t.h * 1.03, 0]} castShadow>
             <boxGeometry args={[t.s * 1.25, t.h * 0.3, t.s * 1.25]} />
-            <meshStandardMaterial color={nightMode ? "#225836" : "#3b8f4d"} map={leafTex ?? undefined} roughness={THREE.MathUtils.lerp(0.88, 0.68, blend)} />
+            <meshStandardMaterial color={nightMode ? "#225836" : graphicsStylePreset === "sakura-blooms" ? "#f6c9dc" : "#3b8f4d"} map={leafTex ?? undefined} roughness={THREE.MathUtils.lerp(0.88, 0.68, blend)} />
           </mesh>
           <mesh position={[0, t.h * 1.25, 0]} castShadow>
             <boxGeometry args={[t.s * 0.86, t.h * 0.24, t.s * 0.86]} />
-            <meshStandardMaterial color={nightMode ? "#28643d" : "#47a85a"} map={leafTex ?? undefined} roughness={THREE.MathUtils.lerp(0.88, 0.64, blend)} emissive={new THREE.Color("#0b1a0f").lerp(new THREE.Color("#143220"), stylized * 0.4).getStyle()} emissiveIntensity={nightMode ? 0.06 : 0.0} />
+            <meshStandardMaterial color={nightMode ? "#28643d" : graphicsStylePreset === "sakura-blooms" ? "#ffe0ef" : "#47a85a"} map={leafTex ?? undefined} roughness={THREE.MathUtils.lerp(0.88, 0.64, blend)} emissive={graphicsStylePreset === "sakura-blooms" ? new THREE.Color("#5f3145").lerp(new THREE.Color("#8f4e69"), stylized * 0.3).getStyle() : new THREE.Color("#0b1a0f").lerp(new THREE.Color("#143220"), stylized * 0.4).getStyle()} emissiveIntensity={nightMode ? 0.06 : graphicsStylePreset === "sakura-blooms" ? 0.03 : 0.0} />
           </mesh>
         </group>
       ))}
@@ -2419,6 +2882,8 @@ function DistantScenery({
           </mesh>
         </group>
       ))}
+
+      <SakuraPetals active={graphicsStylePreset === "sakura-blooms" && !nightMode} />
     </group>
   );
 }
@@ -3404,6 +3869,7 @@ export default function Model3DPage() {
   const [waterStyle, setWaterStyle] = useState(0.74);
   const [surroundingsBlend, setSurroundingsBlend] = useState(0.84);
   const [shaderLookPreset, setShaderLookPreset] = useState<ShaderLookPreset>("custom");
+  const [sunsetCinematic, setSunsetCinematic] = useState(false);
   const [camMode, setCamMode] = useState<"iso" | "top" | "interior">("iso");
   const [fps, setFps] = useState(0);
   const [wallColor, setWallColor] = useState("#bcc8d2");
@@ -3418,29 +3884,52 @@ export default function Model3DPage() {
   const shouldForceNightEffects = showSolarSystem;
   const isNightBySun = sunElevationDeg < -0.5;
   const isNightScene = timeOfDayMode === "night" || (timeOfDayMode === "auto" && (isNightBySun || shouldForceNightEffects));
+  const styledSunAzimuthDeg = sunAzimuthDeg;
+  const styledSunElevationDeg = sunElevationDeg;
+  const cinematicSunAzimuthDeg = sunsetCinematic
+    ? styledSunAzimuthDeg
+    : styledSunAzimuthDeg;
+  const cinematicSunElevationDeg = sunsetCinematic
+    ? styledSunElevationDeg
+    : styledSunElevationDeg;
+  const visualSunAzimuthDeg = cinematicSunAzimuthDeg;
+  const visualSunElevationDeg = (timeOfDayMode === "day" && graphicsStylePreset !== "default")
+    ? Math.max(cinematicSunElevationDeg, 20)
+    : cinematicSunElevationDeg;
   const effectiveShowSun = showSun && !isNightScene;
   const effectiveShowMoon = showMoon;
-  const effectiveSunriseRays = sunriseRaysIntensity;
-  const effectiveCloudDensity = cloudDensity;
+  const effectiveSunriseRays = sunsetCinematic ? Math.max(sunriseRaysIntensity, 0.82) : sunriseRaysIntensity;
+  const effectiveCloudDensity = sunsetCinematic ? THREE.MathUtils.clamp(Math.max(cloudDensity, 0.45), 0.1, 0.86) : cloudDensity;
   const effectiveWaterStyle = waterStyle;
-  const effectiveSurroundingsBlend = surroundingsBlend;
+  const effectiveSurroundingsBlend = sunsetCinematic ? Math.max(surroundingsBlend, 0.72) : surroundingsBlend;
 
   const applyGraphicsStylePreset = useCallback((preset: GraphicsStylePreset) => {
     if (preset === "default") {
+      setSunsetCinematic(false);
+      setShaderLookPreset("custom");
       setTimeOfDayMode("auto");
-      setSunriseRaysIntensity(0.16);
-      setCloudDensity(0.36);
-      setWaterStyle(0.32);
-      setSurroundingsBlend(0.4);
+      setSunriseRaysIntensity(0.12);
+      setCloudDensity(0.34);
+      setWaterStyle(0.3);
+      setSurroundingsBlend(0.35);
       setRenderQuality("high");
       return;
     }
     if (preset === "minecraft") {
       setTimeOfDayMode("day");
-      setSunriseRaysIntensity(0.88);
-      setCloudDensity(0.62);
-      setWaterStyle(0.86);
-      setSurroundingsBlend(0.92);
+      setSunriseRaysIntensity(1.48);
+      setCloudDensity(0.76);
+      setWaterStyle(0.96);
+      setSurroundingsBlend(1.0);
+      setRenderQuality("ultra");
+      return;
+    }
+    if (preset === "sakura-blooms") {
+      setTimeOfDayMode("day");
+      setSunriseRaysIntensity(1.08);
+      setCloudDensity(0.74);
+      setWaterStyle(0.72);
+      setSurroundingsBlend(0.98);
       setRenderQuality("ultra");
       return;
     }
@@ -3459,7 +3948,7 @@ export default function Model3DPage() {
     setWaterStyle(0.92);
     setSurroundingsBlend(0.95);
     setRenderQuality("ultra");
-  }, [setTimeOfDayMode, setRenderQuality]);
+  }, [setRenderQuality, setSunsetCinematic, setTimeOfDayMode]);
 
   const applyShaderPreset = useCallback((preset: ShaderLookPreset) => {
     setShaderLookPreset(preset);
@@ -3495,6 +3984,20 @@ export default function Model3DPage() {
   useEffect(() => {
     applyGraphicsStylePreset(graphicsStylePreset);
   }, [graphicsStylePreset, applyGraphicsStylePreset]);
+
+  useEffect(() => {
+    if (!sunsetCinematic) {
+      applyGraphicsStylePreset(graphicsStylePreset);
+      return;
+    }
+    setTimeOfDayMode("day");
+    setShowSun(true);
+    setShaderLookPreset("golden-hour");
+    setSunriseRaysIntensity(v => Math.max(v, 0.82));
+    setCloudDensity(v => Math.max(v, 0.45));
+    setSurroundingsBlend(v => Math.max(v, 0.72));
+    setRenderQuality("ultra");
+  }, [sunsetCinematic, graphicsStylePreset, applyGraphicsStylePreset]);
 
   // Rebuild scene when floor plan data loads
   useEffect(() => {
@@ -3760,6 +4263,7 @@ export default function Model3DPage() {
                   >
                     <option value="default">Default 3D</option>
                     <option value="minecraft">Minecraft Inspired</option>
+                    <option value="sakura-blooms">Sakura Blooms</option>
                     <option value="valorant">Valorant Inspired</option>
                     <option value="wuthering-waves">Wuthering Waves Inspired</option>
                   </select>
@@ -3792,12 +4296,33 @@ export default function Model3DPage() {
                     ))}
                   </div>
                 </div>
+                <div style={{ marginBottom: 7, padding: "6px 7px", borderRadius: 5, border: `1px solid ${sunsetCinematic ? "rgba(251,146,60,0.55)" : "rgba(255,255,255,0.08)"}`, background: sunsetCinematic ? "linear-gradient(135deg, rgba(249,115,22,0.14), rgba(245,158,11,0.08))" : "rgba(255,255,255,0.02)" }}>
+                  <button
+                    onClick={() => setSunsetCinematic(v => !v)}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span style={{ fontSize: 8, color: sunsetCinematic ? "#fdba74" : "#7dd3fc", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: "0.06em" }}>Sunset Cinematic Lock</span>
+                    <span style={{ width: 24, height: 12, borderRadius: 6, background: sunsetCinematic ? "#fb923c" : "#1e2a2a", display: "block", position: "relative", transition: "background 0.2s" }}>
+                      <span style={{ position: "absolute", top: 2, left: sunsetCinematic ? 10 : 2, width: 8, height: 8, borderRadius: "50%", background: sunsetCinematic ? "#3a1202" : "#475569", transition: "left 0.2s" }} />
+                    </span>
+                  </button>
+                </div>
                 <div style={{ marginBottom: 6 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
                     <span style={{ fontSize: 8, color: "#7dd3fc", fontFamily: "'DM Mono',monospace" }}>Sunrise Rays</span>
                     <span style={{ fontSize: 8, color: "#bae6fd", fontFamily: "'DM Mono',monospace" }}>{sunriseRaysIntensity.toFixed(2)}</span>
                   </div>
-                  <input type="range" min={0} max={1.5} step={0.01} value={sunriseRaysIntensity} onChange={(e) => { setShaderLookPreset("custom"); setSunriseRaysIntensity(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#f59e0b", cursor: "pointer" }} />
+                  <input type="range" min={0} max={2.2} step={0.01} value={sunriseRaysIntensity} onChange={(e) => { setShaderLookPreset("custom"); setSunriseRaysIntensity(parseFloat(e.target.value)); }} style={{ width: "100%", accentColor: "#f59e0b", cursor: "pointer" }} />
                 </div>
                 <div style={{ marginBottom: 6 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
@@ -3844,22 +4369,26 @@ export default function Model3DPage() {
                 stencil: false,
                 depth: true,
                 toneMapping: THREE.ACESFilmicToneMapping,
-                toneMappingExposure: isNightScene ? 0.74 : THREE.MathUtils.lerp(1.02, 0.96, effectiveSurroundingsBlend) * (graphicsStylePreset === "valorant" ? 1.04 : graphicsStylePreset === "wuthering-waves" ? 0.92 : graphicsStylePreset === "minecraft" ? 1.02 : 0.98),
+                toneMappingExposure: isNightScene
+                  ? 0.66
+                  : graphicsStylePreset === "default"
+                    ? 0.72
+                    : THREE.MathUtils.lerp(1.0, 1.16, effectiveSurroundingsBlend) * (0.92 + effectiveSunriseRays * 0.22) * (graphicsStylePreset === "valorant" ? 1.03 : graphicsStylePreset === "wuthering-waves" ? 1.0 : graphicsStylePreset === "minecraft" ? 1.05 : graphicsStylePreset === "sakura-blooms" ? 1.03 : 1.02),
               }}
               dpr={Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, renderQuality === "ultra" ? 2.5 : renderQuality === "high" ? 2 : renderQuality === "med" ? 1.5 : 1)}
               key={camMode}
               onPointerMissed={() => { if (editMode) setSelectedId(null); }}>
               <Suspense fallback={null}>
                 {/* Visible sky dome for realistic daytime atmosphere. */}
-                <RealisticSky nightMode={isNightScene || graphicsStylePreset === "default"} sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunriseRaysIntensity={effectiveSunriseRays} surroundingsBlend={effectiveSurroundingsBlend} />
-                <VoxelClouds active={!isNightScene && graphicsStylePreset !== "default"} sunElevationDeg={sunElevationDeg} cloudDensity={effectiveCloudDensity} surroundingsBlend={effectiveSurroundingsBlend} />
+                {graphicsStylePreset !== "default" && <RealisticSky nightMode={isNightScene} sunAzimuthDeg={visualSunAzimuthDeg} sunElevationDeg={visualSunElevationDeg} sunriseRaysIntensity={effectiveSunriseRays} surroundingsBlend={effectiveSurroundingsBlend} />}
+                <VoxelClouds active={!isNightScene && graphicsStylePreset !== "default"} sunElevationDeg={visualSunElevationDeg} cloudDensity={effectiveCloudDensity} surroundingsBlend={effectiveSurroundingsBlend} />
                 <NightStarfield active={isNightScene} />
 
                 {/* PBR environment — IBL image-based lighting for all surfaces */}
                 <PBREnvironment sunOn={effectiveShowSun} nightMode={isNightScene} graphicsStylePreset={graphicsStylePreset} />
 
                 {/* Scene lights + weather effects */}
-                <Lighting sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunOn={effectiveShowSun} nightLightOn={nightLight} nightMode={isNightScene} sunriseRaysIntensity={effectiveSunriseRays} />
+                <Lighting sunAzimuthDeg={visualSunAzimuthDeg} sunElevationDeg={visualSunElevationDeg} sunOn={effectiveShowSun} nightLightOn={nightLight} nightMode={isNightScene} sunriseRaysIntensity={effectiveSunriseRays} />
                 <ArchitecturalNightFill nightMode={isNightScene} assistOn={nightLight} />
                 <StylePresetFill graphicsStylePreset={graphicsStylePreset} nightMode={isNightScene} />
 
@@ -3867,8 +4396,8 @@ export default function Model3DPage() {
                 <PBRGround showGrid={showGrid} wet={showFlood} nightMode={isNightScene} graphicsStylePreset={graphicsStylePreset} />
 
                 {/* Natural surroundings for depth and color context */}
-                {graphicsStylePreset !== "default" && <DistantScenery nightMode={isNightScene} sunElevationDeg={sunElevationDeg} surroundingsBlend={effectiveSurroundingsBlend} waterStyle={effectiveWaterStyle} graphicsStylePreset={graphicsStylePreset} />}
-                {graphicsStylePreset !== "default" && <RoamingMinecraftLife active={!showFlood && !showSnow} />}
+                {graphicsStylePreset !== "default" && <DistantScenery nightMode={isNightScene} sunElevationDeg={visualSunElevationDeg} surroundingsBlend={effectiveSurroundingsBlend} waterStyle={effectiveWaterStyle} graphicsStylePreset={graphicsStylePreset} />}
+                {graphicsStylePreset === "minecraft" && <RoamingMinecraftLife active={!showFlood && !showSnow} />}
 
                 {/* All scene objects */}
                 {objects.map(obj => (
@@ -3880,11 +4409,12 @@ export default function Model3DPage() {
                 ))}
 
                 {/* Sky & environment overlays */}
-                {effectiveShowSun && <SunSphere sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} sunriseRaysIntensity={effectiveSunriseRays} />}
+                {graphicsStylePreset !== "default" && effectiveShowSun && <SunSphere sunAzimuthDeg={visualSunAzimuthDeg} sunElevationDeg={visualSunElevationDeg} sunriseRaysIntensity={effectiveSunriseRays} />}
+                {graphicsStylePreset !== "default" && <SunRayBeams active={effectiveShowSun} sunAzimuthDeg={visualSunAzimuthDeg} sunElevationDeg={visualSunElevationDeg} strength={effectiveSunriseRays} />}
                 {showWind && isLiveEnvReady && <WindSwirl windDirectionDeg={windDirectionDeg} modelW={modelBounds.w} modelD={modelBounds.d} />}
                 {showRain && <Rain />}
                 {showSnow && <Snow />}
-                <AtmosphereDust active={!showRain && !showSnow && !showFlood} />
+                <AtmosphereDust active={graphicsStylePreset !== "default" && !showRain && !showSnow && !showFlood} />
                 {effectiveShowMoon && <Moonlight />}
                 {showFlood && <Flood waterStyle={effectiveWaterStyle} />}
                 {showSolarSystem && <SolarSystem />}
@@ -3901,7 +4431,7 @@ export default function Model3DPage() {
                   minDistance={3} maxDistance={90} />
 
                 {/* Post-processing render pipeline — Blender-quality output */}
-                {showShaders && <RenderPipeline quality={renderQuality} cinematicBoost={effectiveSunriseRays} sunElevationDeg={sunElevationDeg} nightMode={isNightScene} graphicsStylePreset={graphicsStylePreset} />}
+                {showShaders && <RenderPipeline quality={renderQuality} cinematicBoost={effectiveSunriseRays} sunElevationDeg={visualSunElevationDeg} nightMode={isNightScene} graphicsStylePreset={graphicsStylePreset} />}
               </Suspense>
             </Canvas>
           </ThreeErrorBoundary>
