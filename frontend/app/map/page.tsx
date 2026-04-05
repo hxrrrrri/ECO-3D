@@ -3,7 +3,7 @@ import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
-import { analyzePlot, generateFloorPlan } from "@/lib/api";
+import { API_BASE_URL, analyzePlot, generateFloorPlan } from "@/lib/api";
 import dynamic from "next/dynamic";
 
 const MapComponent = dynamic(() => import("@/components/MapComponent"), {
@@ -84,8 +84,7 @@ export default function MapPage() {
     setError(null);
 
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const resp = await fetch(`${apiBase}/plot-boundary?lat=${lat}&lon=${lon}`);
+      const resp = await fetch(`${API_BASE_URL}/plot-boundary?lat=${lat}&lon=${lon}`);
       if (resp.ok) {
         const data = await resp.json();
         setPlotBoundary(data.boundary ?? null);
@@ -115,7 +114,6 @@ export default function MapPage() {
     setLrError("");
     setLrResult(null);
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const params = new URLSearchParams({
         state: lrState,
         district: lrDistrict,
@@ -123,7 +121,7 @@ export default function MapPage() {
         ...(selectedLat ? { lat: String(selectedLat) } : {}),
         ...(selectedLon ? { lon: String(selectedLon) } : {}),
       });
-      const resp = await fetch(`${apiBase}/land-record/lookup?${params}`);
+      const resp = await fetch(`${API_BASE_URL}/land-record/lookup?${params}`);
       const data = await resp.json();
       if (data.error) {
         setLrError(data.error);
@@ -131,15 +129,17 @@ export default function MapPage() {
         setLrResult(data);
         // If we got a boundary back, use it as the plot boundary
         if (data.boundary && data.boundary.length >= 3) {
-          // boundary is [[lon,lat],...] — convert to [[lat,lon]] for MapComponent
-          const converted = data.boundary.map((c: number[]) => [c[1], c[0]]);
-          setPlotBoundary(converted);
+          // Keep canonical [lon,lat] ordering end-to-end.
+          const normalizedBoundary = data.boundary
+            .filter((c: unknown) => Array.isArray(c) && c.length >= 2)
+            .map((c: number[]) => [Number(c[0]), Number(c[1])]);
+          setPlotBoundary(normalizedBoundary);
           if (data.area_sqm) {
             setPlotArea(data.area_sqm);
             setSelectedPlotArea(data.area_sqm);
           }
-          if (!selectedLat && data.boundary[0]) {
-            setSelectedLocation(data.boundary[0][1], data.boundary[0][0]);
+          if (!selectedLat && normalizedBoundary[0]) {
+            setSelectedLocation(normalizedBoundary[0][1], normalizedBoundary[0][0]);
           }
           setStage("ready");
           setBuildability({ ok: true, reason: "Boundary loaded from land records." });
@@ -195,7 +195,7 @@ export default function MapPage() {
       await new Promise(r => setTimeout(r, 500));
       router.push(`/analysis/${currentPlotId}`);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Analysis failed — is backend running on port 8000?";
+      const msg = e instanceof Error ? e.message : "Analysis failed — is backend running on the configured API URL?";
       setError(msg);
       setStage("ready");
     } finally {

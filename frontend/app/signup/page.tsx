@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { API_BASE_URL } from "@/lib/api";
 
 function Scanline() {
     return (
@@ -26,7 +27,7 @@ export default function SignupPage() {
         setError("");
 
         try {
-            const res = await fetch("http://localhost:8000/auth/signup", {
+            const res = await fetch(`${API_BASE_URL}/auth/signup`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ email, password, full_name: fullName }),
@@ -38,7 +39,7 @@ export default function SignupPage() {
             }
 
             // Automatically login
-            const loginRes = await fetch("http://localhost:8000/auth/login", {
+            const loginRes = await fetch(`${API_BASE_URL}/auth/login`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ email, password }),

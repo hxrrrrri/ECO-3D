@@ -11,16 +11,38 @@ Key fixes over v5:
 - Perimeter walls always drawn regardless of wall data.
 - Wind particles bright cyan, visible on dark background.
 """
+import asyncio
 import logging, math, random, time, hashlib
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import desc, select
 from database.models import AnalysisRecord, FloorPlanRecord, PlotRecord
-from models.schemas import Door, FloorPlanResponse, FloorPlanVariant, GenerateFloorPlanRequest, Room, Wall, Window
+from models.schemas import Door, EcoAuditReportSchema, FloorPlanResponse, FloorPlanVariant, GenerateFloorPlanRequest, Room, Wall, Window
+from ai.floorplan.correction_loop import IterationHistory, run_correction_loop
+from ai.floorplan.ga_engine import run_all_algorithms
+from ai.floorplan.genetic import chromosome_to_response, generate_floor_plan_variants, generate_walls
+from ai.floorplan.eco_validator import run_eco_audit
 
 logger = logging.getLogger(__name__)
 WALL_EXT = 0.23; WALL_INT = 0.12; FLOOR_H = 3.0
+
+
+def _normalize_generation_method(value: Optional[str]) -> str:
+    raw = (value or "deterministic").strip().lower()
+    compact = "".join(ch for ch in raw if ch.isalnum())
+    ga_aliases = {
+        "ga",
+        "gaoptimizer",
+        "gaoptimiser",
+        "gaoptimization",
+        "gaoptimisation",
+        "genetic",
+        "geneticalgo",
+        "geneticalgorithm",
+        "evolutionary",
+    }
+    return "ga" if compact in ga_aliases else "deterministic"
 
 # ── Compass ──────────────────────────────────────────────────────────────────
 COMPASS={"N":0,"NNE":22.5,"NE":45,"ENE":67.5,"E":90,"ESE":112.5,"SE":135,"SSE":157.5,
@@ -91,6 +113,17 @@ HOUSE_TYPE_PROFILES = {
 class Site:
     w:float; h:float; lat:float; lon:float
     wind:str; slope:float; flood:float; ndvi:float; sun_h:float
+    elevation: float = 120.0
+    rainfall_mm: float = 1200.0
+    solar_radiation: float = 5.2
+    clay_pct: float = 25.0
+    soil_ph: float = 6.8
+    bulk_density: float = 1.4
+    wind_speed_ms: float = 4.0
+    distance_to_water: float = 1000.0
+    buildability: float = 72.0
+    tree_coordinates: List[dict] = field(default_factory=list)
+    polygon: List[List[float]] = field(default_factory=list)
 
 # ── Footprint ────────────────────────────────────────────────────────────────
 def _fp(site:Site,area:float,floors:int)->Tuple[float,float]:
@@ -101,6 +134,37 @@ def _fp(site:Site,area:float,floors:int)->Tuple[float,float]:
     if w>uw: w=uw; h=a/w
     if h>uh: h=uh; w=a/h
     return min(w,uw),min(h,uh)
+
+
+def _ga_regularized_envelope(area: float, floors: int, shape: str) -> Tuple[float, float]:
+    a = max(area / max(floors, 1), 30.0)
+    ratio_map = {
+        "rectangle": 1.35,
+        "square": 1.0,
+        "l-shape": 1.25,
+        "t-shape": 1.2,
+        "irregular": 1.15,
+        "circle": 1.0,
+    }
+    r = ratio_map.get((shape or "rectangle").strip().lower(), 1.2)
+    w = max(8.0, math.sqrt(a * r))
+    h = max(8.0, a / max(w, 1e-6))
+    return w, h
+
+
+def _ga_variant_index_for_algorithm(algorithm: str) -> int:
+    key = (algorithm or "").strip().lower()
+    if "nsga" in key:
+        return 0
+    if "moea" in key:
+        return 1
+    if "shade" in key:
+        return 2
+    if "island" in key:
+        return 3
+    if "cma" in key:
+        return 5
+    return 4
 
 # ── Area allocation ───────────────────────────────────────────────────────────
 def _alloc(types:List[str],total:float,house_type:str="Eco-Villa (Single Story)")->Dict[str,List[float]]:
@@ -455,16 +519,57 @@ def _explicit_geometry(rooms:List[Room],site:Optional[Site]=None):
             if a.floor!=b.floor: continue
             oy=_ov(a.y,a.y+a.height,b.y,b.y+b.height)
             ox2=_ov(a.x,a.x+a.width,b.x,b.x+b.width)
-            if abs((a.x+a.width)-b.x)<0.09 and oy>0.7:
+            shared_x = None
+            if abs((a.x+a.width)-b.x)<0.09:
+                shared_x = b.x
+            elif abs((b.x+b.width)-a.x)<0.09:
+                shared_x = a.x
+
+            shared_y = None
+            if abs((a.y+a.height)-b.y)<0.09:
+                shared_y = b.y
+            elif abs((b.y+b.height)-a.y)<0.09:
+                shared_y = a.y
+
+            if shared_x is not None and oy>0.45:
                 dy=max(a.y,b.y)+oy/2
                 doors.append(Door(id=f"door_{dri}",room_to=b.id or b.type,type="interior",
-                    x=round(b.x,2),y=round(dy,2),width=min(0.9,oy*0.55),
+                    x=round(shared_x,2),y=round(dy,2),width=max(0.75,min(0.95,oy*0.55)),
                     orientation="vertical",symbol="arc_swing",floor=a.floor)); dri+=1
-            elif abs((a.y+a.height)-b.y)<0.09 and ox2>0.7:
+            elif shared_y is not None and ox2>0.45:
                 dx=max(a.x,b.x)+ox2/2
                 doors.append(Door(id=f"door_{dri}",room_to=b.id or b.type,type="interior",
-                    x=round(dx,2),y=round(b.y,2),width=min(0.9,ox2*0.55),
+                    x=round(dx,2),y=round(shared_y,2),width=max(0.75,min(0.95,ox2*0.55)),
                     orientation="horizontal",symbol="arc_swing",floor=a.floor)); dri+=1
+
+    # Ensure functional circulation even when room ordering weakens pair-based adjacency detection.
+    interior_target = max(6, len([r for r in rooms if r.floor == 1]) // 2)
+    if len(doors) < interior_target:
+        existing = {(round(float(d.x), 2), round(float(d.y), 2), d.orientation) for d in doors}
+        interior_segments = sorted(
+            [w for w in walls if w.type == "interior" and w.floor == 1 and w.length >= 1.0],
+            key=lambda w: w.length,
+            reverse=True,
+        )
+        for wall in interior_segments:
+            if len(doors) >= interior_target:
+                break
+            sig = (round(float(wall.x), 2), round(float(wall.y), 2), wall.orientation)
+            if sig in existing:
+                continue
+            doors.append(Door(
+                id=f"door_{dri}",
+                room_to="adjacent_room",
+                type="interior",
+                x=round(float(wall.x), 2),
+                y=round(float(wall.y), 2),
+                width=max(0.75, min(0.95, float(wall.length) * 0.35)),
+                orientation=wall.orientation,
+                symbol="arc_swing",
+                floor=1,
+            ))
+            existing.add(sig)
+            dri += 1
     if rooms:
         floor1 = [r for r in rooms if r.floor == 1]
         preferred = [r for r in floor1 if r.type in ("living", "dining", "office", "kitchen")]
@@ -641,6 +746,15 @@ def _repair_layout(rooms: List[Room], site: Site, total: float, floors: int) -> 
     return fixed
 
 
+def _select_low_overlap_layout(base_layout: List[Room], site: Site, total: float, floors: int) -> List[Room]:
+    if not base_layout:
+        return base_layout
+    repaired = _repair_layout(base_layout, site, total, floors)
+    base_overlap = _room_overlap_ratio(base_layout)
+    repaired_overlap = _room_overlap_ratio(repaired)
+    return repaired if repaired_overlap + 1e-6 < base_overlap else base_layout
+
+
 def _layout_penalty(rooms: List[Room], site: Site, total: float, floors: int) -> float:
     if not rooms:
         return 1.0
@@ -713,9 +827,11 @@ def _ga_search_variants(
         })
 
     def evaluate(ind):
-        layout = _make_layout(ind["types"], ind["amap"], site, total, floors, shape, ind["variant"])
-        layout = _repair_layout(layout, site, total, floors)
+        raw_layout = _make_layout(ind["types"], ind["amap"], site, total, floors, shape, ind["variant"])
+        layout = _select_low_overlap_layout(raw_layout, site, total, floors)
         if not layout:
+            return None
+        if _room_overlap_ratio(layout) > 0.02:
             return None
         walls, doors, windows = _explicit_geometry(layout, site)
         scores = _score(layout, site, windows)
@@ -787,6 +903,7 @@ def _ga_search_variants(
         va = round(sum(r.width * r.height for r in cand["layout"]), 1)
         variants.append(FloorPlanVariant(
             id=i + 1,
+            algorithm="Legacy-GA",
             style=f"GA Evolution {i + 1}",
             layout=cand["layout"],
             total_area=va,
@@ -806,6 +923,10 @@ def _ga_search_variants(
 
 async def _load_site(req:GenerateFloorPlanRequest,db:AsyncSession)->Site:
     lat,lon,wind,slope,flood,ndvi,sun_h=10.0,76.0,"SW",4.0,0.25,0.45,8.0
+    elevation,rainfall,solar_rad,clay_pct,buildability=120.0,1200.0,5.2,25.0,72.0
+    soil_ph,bulk_density,wind_speed_ms,distance_to_water=6.8,1.4,4.0,1000.0
+    tree_coordinates: List[dict] = []
+    polygon: List[List[float]] = []
     sw=sh=math.sqrt(req.plot_area_sqm or 150)*1.8
     try:
         r=await db.execute(select(AnalysisRecord).where(AnalysisRecord.plot_id==req.plot_id).order_by(desc(AnalysisRecord.created_at)))
@@ -813,22 +934,389 @@ async def _load_site(req:GenerateFloorPlanRequest,db:AsyncSession)->Site:
         if a:
             slope=float(a.slope or slope); flood=float(a.flood_probability or flood)
             ndvi=float(a.ndvi or ndvi); wind=str(a.wind_direction or wind)
+            elevation=float(a.elevation or elevation)
+            rainfall=float(a.rainfall_mm or rainfall)
+            buildability=float(a.buildability_score or buildability)
+            tree_coordinates=list(a.tree_coordinates or [])
             raw=a.raw_features or {}
             lat=float(raw.get("_lat",raw.get("lat",lat))); lon=float(raw.get("_lon",raw.get("lon",lon)))
             sun_h=float(raw.get("sun_exposure_hours",a.sun_exposure_hours or sun_h))
+            solar_rad=float(raw.get("solar_radiation", raw.get("solar_radiation_kwh", solar_rad)))
+            clay_pct=float(raw.get("clay_pct", clay_pct))
+            soil_ph=float(raw.get("soil_ph", soil_ph))
+            bulk_density=float(raw.get("bulk_density", bulk_density))
+            wind_speed_ms=float(raw.get("wind_ms", raw.get("wind_speed_ms", wind_speed_ms)))
+            distance_to_water=float(raw.get("distance_to_water_m", distance_to_water))
     except Exception as e: logger.warning("site: %s",e)
     try:
         r2=await db.execute(select(PlotRecord).where(PlotRecord.plot_id==req.plot_id))
         p=r2.scalars().first()
         if p and p.polygon:
-            pts=p.polygon; cx=sum(c[0] for c in pts)/len(pts); cy=sum(c[1] for c in pts)/len(pts)
-            lm=111320*math.cos(math.radians(cy))
-            xs=[(c[0]-cx)*lm for c in pts]; ys=[(c[1]-cy)*111320 for c in pts]
-            sw=max(abs(max(xs)-min(xs)),8.0); sh=max(abs(max(ys)-min(ys)),8.0)
+            raw_pts=[list(c[:2]) for c in p.polygon if isinstance(c,(list,tuple)) and len(c)>=2]
+            target_area=float(req.plot_area_sqm or 0.0)
+            candidates: List[Tuple[List[List[float]], float, float, float]] = []
+
+            # Accept both [lon, lat] and [lat, lon] payloads and choose
+            # the mapping that best matches the requested plot area.
+            for lon_idx, lat_idx in ((0,1),(1,0)):
+                norm_pts: List[List[float]] = []
+                valid=True
+                for pt in raw_pts:
+                    try:
+                        lon_v=float(pt[lon_idx]); lat_v=float(pt[lat_idx])
+                    except (TypeError, ValueError, IndexError):
+                        valid=False; break
+                    if not (-180.0<=lon_v<=180.0 and -90.0<=lat_v<=90.0):
+                        valid=False; break
+                    norm_pts.append([lon_v, lat_v])
+                if not valid or len(norm_pts)<3:
+                    continue
+
+                lon0=sum(v[0] for v in norm_pts)/len(norm_pts)
+                lat0=sum(v[1] for v in norm_pts)/len(norm_pts)
+                m_lon=111320*math.cos(math.radians(lat0))
+                xs=[(v[0]-lon0)*m_lon for v in norm_pts]
+                ys=[(v[1]-lat0)*111320 for v in norm_pts]
+                w=max(abs(max(xs)-min(xs)),0.1)
+                h=max(abs(max(ys)-min(ys)),0.1)
+                area_est=w*h
+                score=abs(area_est-target_area) if target_area>0 else -area_est
+                candidates.append((norm_pts, w, h, score))
+
+            if candidates:
+                best_pts, bw, bh, _ = min(candidates, key=lambda item: item[3])
+                sw=max(bw,8.0); sh=max(bh,8.0)
+                polygon=best_pts
+            elif len(raw_pts)>=3:
+                # Fallback for already-projected local coordinates in meters.
+                numeric_pts: List[List[float]] = []
+                for pt in raw_pts:
+                    try:
+                        numeric_pts.append([float(pt[0]), float(pt[1])])
+                    except (TypeError, ValueError, IndexError):
+                        pass
+                if len(numeric_pts)>=3:
+                    xs=[v[0] for v in numeric_pts]; ys=[v[1] for v in numeric_pts]
+                    sw=max(abs(max(xs)-min(xs)),8.0)
+                    sh=max(abs(max(ys)-min(ys)),8.0)
+                    polygon=numeric_pts
     except Exception as e: logger.warning("plot: %s",e)
-    return Site(sw,sh,lat,lon,wind,slope,flood,ndvi,sun_h)
+    return Site(
+        sw,sh,lat,lon,wind,slope,flood,ndvi,sun_h,
+        elevation=elevation,
+        rainfall_mm=rainfall,
+        solar_radiation=solar_rad,
+        clay_pct=clay_pct,
+        soil_ph=soil_ph,
+        bulk_density=bulk_density,
+        wind_speed_ms=wind_speed_ms,
+        distance_to_water=distance_to_water,
+        buildability=buildability,
+        tree_coordinates=tree_coordinates,
+        polygon=polygon,
+    )
 
 VNAMES=["Solar Court","Breeze Bar","Compact Core","Split Privacy","L Courtyard","Garden Verandah"]
+
+
+def _build_correction_env(
+    req: GenerateFloorPlanRequest,
+    site: Site,
+    total: float,
+    shape: str,
+) -> Dict[str, Any]:
+    return {
+        "plot_id": req.plot_id,
+        "lat": site.lat,
+        "lon": site.lon,
+        "plot_area_sqm": total,
+        "plot_w": site.w,
+        "plot_h": site.h,
+        "plot_polygon": site.polygon,
+        "flood_probability": site.flood,
+        "buildability_score": site.buildability,
+        "slope": site.slope,
+        "elevation": site.elevation,
+        "rainfall_mm": site.rainfall_mm,
+        "wind_direction": site.wind,
+        "wind_speed_ms": site.wind_speed_ms,
+        "sun_exposure_hours": site.sun_h,
+        "ndvi": site.ndvi,
+        "clay_pct": site.clay_pct,
+        "soil_ph": site.soil_ph,
+        "bulk_density": site.bulk_density,
+        "distance_to_water_m": site.distance_to_water,
+        "solar_radiation": site.solar_radiation,
+        "solar_radiation_kwh": site.solar_radiation,
+        "tree_coordinates": site.tree_coordinates,
+        "preserve_trees": req.preserve_trees,
+        "plot_shape": shape,
+        "room_preferences": req.room_preferences or {},
+    }
+
+
+def _criterion_score_from_audit_payload(audit_payload: Dict[str, Any], criterion_id: int, default_score: float = 0.0) -> float:
+    for row in list(audit_payload.get("criteria", []) or []):
+        if int(row.get("criterion_id", -1)) == int(criterion_id):
+            return float(row.get("score", default_score))
+    return float(default_score)
+
+
+def _history_to_schema(history: IterationHistory, variant_index_map: Dict[int, int]) -> Dict[str, Any]:
+    def _room_payload(room: Any) -> Dict[str, Any]:
+        if isinstance(room, dict):
+            return dict(room)
+        try:
+            return asdict(room)
+        except Exception:
+            return {
+                "id": getattr(room, "id", None),
+                "type": str(getattr(room, "type", "")),
+                "width": float(getattr(room, "width", 0.0)),
+                "height": float(getattr(room, "height", 0.0)),
+                "x": float(getattr(room, "x", 0.0)),
+                "y": float(getattr(room, "y", 0.0)),
+                "floor": int(getattr(room, "floor", 1)),
+                "orientation": str(getattr(room, "orientation", "S")),
+            }
+
+    def _window_payload(window: Any) -> Dict[str, Any]:
+        if isinstance(window, dict):
+            return dict(window)
+        try:
+            return asdict(window)
+        except Exception:
+            return {
+                "id": getattr(window, "id", None),
+                "wall": str(getattr(window, "wall", "")),
+                "position": float(getattr(window, "position", 0.5)),
+                "width": float(getattr(window, "width", 1.0)),
+                "floor": int(getattr(window, "floor", 1)),
+                "sill_height": float(getattr(window, "sill_height", 0.9)),
+                "head_height": float(getattr(window, "head_height", 2.1)),
+            }
+
+    def _wall_payload(wall: Any) -> Dict[str, Any]:
+        if isinstance(wall, dict):
+            return dict(wall)
+        try:
+            return asdict(wall)
+        except Exception:
+            return {
+                "id": getattr(wall, "id", None),
+                "room_id": str(getattr(wall, "room_id", "")),
+                "type": str(getattr(wall, "type", "interior")),
+                "orientation": str(getattr(wall, "orientation", "horizontal")),
+                "x": float(getattr(wall, "x", 0.0)),
+                "y": float(getattr(wall, "y", 0.0)),
+                "length": float(getattr(wall, "length", 0.0)),
+                "thickness": float(getattr(wall, "thickness", 0.12)),
+                "floor": int(getattr(wall, "floor", 1)),
+            }
+
+    snapshots: List[Dict[str, Any]] = []
+    for snap in history.snapshots:
+        correction_payload: Optional[Dict[str, Any]] = None
+        if snap.correction is not None:
+            correction_payload = {
+                "iteration": int(snap.correction.iteration),
+                "mutations_applied": [asdict(mutation) for mutation in (snap.correction.mutations_applied or [])],
+                "n_mutations": int(snap.correction.n_mutations),
+                "criteria_targeted": [int(c) for c in (snap.correction.criteria_targeted or [])],
+                "eco_score_before": float(snap.correction.eco_score_before),
+                "eco_score_after": float(snap.correction.eco_score_after),
+                "score_delta": float(snap.correction.score_delta),
+                "improvement": bool(snap.correction.improvement),
+            }
+
+        snapshot_rooms = [_room_payload(room) for room in list(getattr(snap.chromosome, "rooms", []) or [])]
+        snapshot_windows = [_window_payload(window) for window in list(getattr(snap.chromosome, "windows", []) or [])]
+        snapshot_walls = [_wall_payload(wall) for wall in list(generate_walls(list(getattr(snap.chromosome, "rooms", []) or [])) or [])]
+        snapshot_audit = asdict(snap.audit)
+
+        snapshots.append(
+            {
+                "iteration": int(snap.iteration),
+                "eco_score": float(snap.audit.composite_eco_score),
+                "n_criteria_passed": int(snap.audit.n_criteria_passed),
+                "n_criteria_failed": int(snap.audit.n_criteria_failed),
+                "correction": correction_payload,
+                "cumulative_fixes": list(snap.cumulative_fixes or []),
+                "audit": snapshot_audit,
+                "rooms": snapshot_rooms,
+                "windows": snapshot_windows,
+                "walls": snapshot_walls,
+                "variant_index": variant_index_map.get(int(snap.iteration)),
+            }
+        )
+
+    return {
+        "total_iterations": int(history.total_iterations),
+        "converged": bool(history.converged),
+        "convergence_reason": str(history.convergence_reason),
+        "initial_eco_score": float(history.initial_eco_score),
+        "final_eco_score": float(history.final_eco_score),
+        "total_improvement": float(history.total_improvement),
+        "eco_score_curve": [float(v) for v in (history.eco_score_curve or [])],
+        "snapshots": snapshots,
+        "corrections_applied": list(history.corrections_applied or []),
+    }
+
+
+def _build_response_from_correction_history(
+    req: GenerateFloorPlanRequest,
+    site: Site,
+    method: str,
+    chromosomes: List[Any],
+    history: IterationHistory,
+    env_data: Dict[str, Any],
+) -> FloorPlanResponse:
+    def _layout_signature(layout: List[Room]) -> Tuple[Tuple[str, float, float, float, float, int], ...]:
+        rows: List[Tuple[str, float, float, float, float, int]] = []
+        for room in list(layout or []):
+            rows.append(
+                (
+                    str(getattr(room, "type", "")),
+                    round(float(getattr(room, "x", 0.0)), 2),
+                    round(float(getattr(room, "y", 0.0)), 2),
+                    round(float(getattr(room, "width", 0.0)), 2),
+                    round(float(getattr(room, "height", 0.0)), 2),
+                    int(getattr(room, "floor", 1)),
+                )
+            )
+        rows.sort()
+        return tuple(rows)
+
+    algorithm_variants: List[FloorPlanVariant] = []
+    for idx, chrom in enumerate(chromosomes):
+        payload = chromosome_to_response(chrom, idx, env_data)
+        audit = run_eco_audit(
+            variant_id=idx + 100,
+            algorithm=str(payload.get("algorithm", "NSGA-III")),
+            rooms=list(payload.get("layout", []) or []),
+            walls=list(payload.get("walls", []) or []),
+            doors=list(payload.get("doors", []) or []),
+            windows=list(payload.get("windows", []) or []),
+            env=env_data,
+        )
+        audit_payload = asdict(audit)
+        payload["eco_audit"] = audit_payload
+        payload["eco_score"] = round(float(audit.composite_eco_score) / 100.0, 3)
+        payload["fitness_score"] = round(float(payload["eco_score"]), 3)
+        payload["solar_score"] = round(_criterion_score_from_audit_payload(audit_payload, 1, payload.get("solar_score", 0.0)) / 100.0, 3)
+        payload["ventilation_score"] = round(_criterion_score_from_audit_payload(audit_payload, 2, payload.get("ventilation_score", 0.0)) / 100.0, 3)
+        payload["structural_score"] = round(_criterion_score_from_audit_payload(audit_payload, 3, payload.get("structural_score", 0.0)) / 100.0, 3)
+        payload["flood_score"] = round(_criterion_score_from_audit_payload(audit_payload, 5, payload.get("flood_score", 0.0)) / 100.0, 3)
+        payload["tree_score"] = round(_criterion_score_from_audit_payload(audit_payload, 7, payload.get("tree_score", 0.0)) / 100.0, 3)
+        payload["is_best"] = False
+        algorithm_variants.append(FloorPlanVariant(**payload))
+
+    final_payload = chromosome_to_response(history.final_chromosome, 0, env_data)
+    final_audit_payload = asdict(history.final_audit)
+    final_payload["id"] = 0
+    final_payload["algorithm"] = str(getattr(history.final_chromosome, "algorithm", "NSGA-III"))
+    final_payload["style"] = "Eco-Corrected (Best)"
+    final_payload["is_best"] = True
+    final_payload["eco_audit"] = final_audit_payload
+    final_payload["eco_score"] = round(float(history.final_audit.composite_eco_score) / 100.0, 3)
+    final_payload["fitness_score"] = round(float(final_payload["eco_score"]), 3)
+    final_payload["solar_score"] = round(_criterion_score_from_audit_payload(final_audit_payload, 1, final_payload.get("solar_score", 0.0)) / 100.0, 3)
+    final_payload["ventilation_score"] = round(_criterion_score_from_audit_payload(final_audit_payload, 2, final_payload.get("ventilation_score", 0.0)) / 100.0, 3)
+    final_payload["structural_score"] = round(_criterion_score_from_audit_payload(final_audit_payload, 3, final_payload.get("structural_score", 0.0)) / 100.0, 3)
+    final_payload["flood_score"] = round(_criterion_score_from_audit_payload(final_audit_payload, 5, final_payload.get("flood_score", 0.0)) / 100.0, 3)
+    final_payload["tree_score"] = round(_criterion_score_from_audit_payload(final_audit_payload, 7, final_payload.get("tree_score", 0.0)) / 100.0, 3)
+    final_variant = FloorPlanVariant(**final_payload)
+
+    variants: List[FloorPlanVariant] = []
+    seen_layouts: set[Tuple[Tuple[str, float, float, float, float, int], ...]] = set()
+    for candidate in [final_variant] + algorithm_variants:
+        sig = _layout_signature(list(candidate.layout or []))
+        if sig in seen_layouts:
+            continue
+        seen_layouts.add(sig)
+        variants.append(candidate)
+
+    for idx, variant in enumerate(variants):
+        variant.id = idx + 1
+        variant.is_best = idx == 0
+
+    variant_layout_index = {
+        _layout_signature(list(variant.layout or [])): idx
+        for idx, variant in enumerate(variants)
+    }
+    snapshot_variant_index_map: Dict[int, int] = {}
+    for snap in history.snapshots:
+        snap_sig = _layout_signature(list(getattr(snap.chromosome, "rooms", []) or []))
+        mapped_index = variant_layout_index.get(snap_sig)
+        if mapped_index is not None:
+            snapshot_variant_index_map[int(snap.iteration)] = mapped_index
+
+    iteration_history_schema = _history_to_schema(history, snapshot_variant_index_map)
+    algorithms_used = [str(getattr(chrom, "algorithm", "NSGA-III")) for chrom in chromosomes]
+    algorithm_curves = {
+        variant.algorithm: [float(v) for v in (variant.convergence_curve or [])]
+        for variant in algorithm_variants
+    }
+    convergence_data: Dict[str, Any] = {
+        "eco_score_curve": [float(v) for v in (history.eco_score_curve or [])],
+        "total_iterations": int(history.total_iterations),
+        "converged": bool(history.converged),
+        "convergence_reason": str(history.convergence_reason),
+        "total_improvement": float(history.total_improvement),
+        "corrections_applied": list(history.corrections_applied or []),
+        "algorithm_curves": algorithm_curves,
+    }
+
+    best_variant = variants[0]
+    return FloorPlanResponse(
+        plot_id=req.plot_id,
+        layout=best_variant.layout,
+        walls=best_variant.walls,
+        doors=best_variant.doors,
+        windows=best_variant.windows,
+        total_area=round(sum(room.width * room.height for room in best_variant.layout), 1),
+        fitness_score=float(best_variant.fitness_score),
+        eco_score=float(best_variant.eco_score),
+        solar_score=float(best_variant.solar_score),
+        generation_count=int(history.total_iterations),
+        sunlight_score=float(best_variant.solar_score),
+        ventilation_score=float(best_variant.ventilation_score),
+        structural_score=float(best_variant.structural_score),
+        flood_score=float(best_variant.flood_score),
+        tree_score=float(best_variant.tree_score),
+        tree_preserved_count=max(0, len(site.tree_coordinates)) if req.preserve_trees else 0,
+        orientation_degrees=float(_brg(site.wind)),
+        variants=variants,
+        best_variant_index=0,
+        algorithms_used=algorithms_used,
+        convergence_data=convergence_data,
+        iteration_history=iteration_history_schema,
+        generation_method=method,
+    )
+
+
+async def _persist_floorplan_response(
+    req: GenerateFloorPlanRequest,
+    db: AsyncSession,
+    response: FloorPlanResponse,
+) -> None:
+    try:
+        payload = response.model_dump()
+        db.add(
+            FloorPlanRecord(
+                plot_id=req.plot_id,
+                layout_json=payload,
+                fitness_score=float(response.fitness_score),
+                generation_count=int(response.generation_count),
+            )
+        )
+        await db.commit()
+    except Exception as e:
+        logger.warning("persist: %s", e)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 async def generate_floor_plan(req:GenerateFloorPlanRequest,db:AsyncSession)->FloorPlanResponse:
     site=await _load_site(req,db)
@@ -838,11 +1326,244 @@ async def generate_floor_plan(req:GenerateFloorPlanRequest,db:AsyncSession)->Flo
     types=_prog(total,req.room_preferences,house_type)
     amap=_alloc(types,total,house_type)
     shape=req.plot_shape or "rectangle"
-    method=(req.generation_method or "deterministic").strip().lower()
-    variants:List[FloorPlanVariant]=[]; bidx=0; beco=-1.0
+    method=_normalize_generation_method(req.generation_method)
+    variants:List[FloorPlanVariant]=[]; bidx=0
+    beco=-1.0
+    algorithms_used: List[str] = []
+    convergence_data: Dict[str, Any] = {}
+
+    # Primary GA path: iterative eco-correction loop over the 5-algorithm GA seed.
+    if method == "ga":
+        correction_env = _build_correction_env(req, site, total, shape)
+        try:
+            loop = asyncio.get_running_loop()
+            chromosomes = await loop.run_in_executor(None, run_all_algorithms, correction_env)
+            if chromosomes:
+                history = await loop.run_in_executor(
+                    None,
+                    run_correction_loop,
+                    chromosomes[0],
+                    correction_env,
+                    req.max_iterations or 12,
+                    req.target_eco_score or 92.0,
+                )
+                response = _build_response_from_correction_history(
+                    req=req,
+                    site=site,
+                    method=method,
+                    chromosomes=chromosomes,
+                    history=history,
+                    env_data=correction_env,
+                )
+                await _persist_floorplan_response(req, db, response)
+                return response
+        except Exception as e:
+            logger.warning("correction-loop pipeline fallback: %s", e)
 
     if method == "ga":
-        variants, bidx = _ga_search_variants(req, site, total, floors, shape, types, amap)
+        ga_plot_w, ga_plot_h = _fp(site, total, floors)
+        ga_polygon: List[List[float]] = []
+        if req.layout_mode == "fit_boundary" and site.polygon:
+            boundary_aspect = max(site.w, site.h) / max(min(site.w, site.h), 1e-6)
+            boundary_capacity = max(site.w * site.h, 1.0)
+            target_floor_area = max(total / max(floors, 1), 1.0)
+            boundary_too_tight = boundary_capacity < target_floor_area * 0.70
+            if boundary_aspect <= 3.2 and not boundary_too_tight:
+                ga_plot_w, ga_plot_h = site.w, site.h
+                ga_polygon = site.polygon
+            else:
+                ga_plot_w, ga_plot_h = _ga_regularized_envelope(total, floors, shape)
+                logger.warning(
+                    "ga boundary envelope regularized (aspect %.2f, capacity %.1f for target %.1f)",
+                    boundary_aspect,
+                    boundary_capacity,
+                    target_floor_area,
+                )
+
+        ga_site = Site(
+            ga_plot_w,
+            ga_plot_h,
+            site.lat,
+            site.lon,
+            site.wind,
+            site.slope,
+            site.flood,
+            site.ndvi,
+            site.sun_h,
+            elevation=site.elevation,
+            rainfall_mm=site.rainfall_mm,
+            solar_radiation=site.solar_radiation,
+            clay_pct=site.clay_pct,
+            buildability=site.buildability,
+            tree_coordinates=site.tree_coordinates,
+            polygon=ga_polygon,
+        )
+
+        env_data = {
+            "lat": site.lat,
+            "lon": site.lon,
+            "plot_area_sqm": total,
+            "plot_w": ga_plot_w,
+            "plot_h": ga_plot_h,
+            "plot_polygon": ga_polygon,
+            "flood_probability": site.flood,
+            "buildability_score": site.buildability,
+            "slope": site.slope,
+            "elevation": site.elevation,
+            "rainfall_mm": site.rainfall_mm,
+            "wind_direction": site.wind,
+            "sun_exposure_hours": site.sun_h,
+            "ndvi": site.ndvi,
+            "clay_pct": site.clay_pct,
+            "solar_radiation": site.solar_radiation,
+            "tree_coordinates": site.tree_coordinates,
+            "preserve_trees": req.preserve_trees,
+            "plot_shape": shape,
+            "room_preferences": req.room_preferences or {},
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            raw_variants = await loop.run_in_executor(None, generate_floor_plan_variants, env_data)
+        except Exception as e:
+            logger.warning("ga-engine: %s", e)
+            raw_variants = []
+
+        relaxed_ga_variants: List[FloorPlanVariant] = []
+
+        for raw in raw_variants[:5]:
+            try:
+                algo_name = str(raw.get("algorithm", "NSGA-III"))
+                algo_types = types[:]
+                algo_amap = _alloc(algo_types, total, house_type)
+                algo_variant_index = _ga_variant_index_for_algorithm(algo_name)
+
+                raw_layout = _make_layout(algo_types, algo_amap, ga_site, total, floors, shape, algo_variant_index)
+                layout = _select_low_overlap_layout(raw_layout, ga_site, total, floors)
+                if len(layout) < 3:
+                    logger.warning("ga variant rejected: insufficient room count (%s)", len(layout))
+                    continue
+
+                walls, doors, windows = _explicit_geometry(layout, ga_site)
+                interior_walls = [w for w in walls if w.type == "interior"]
+
+                scores = _score(layout, ga_site, windows)
+                total_area = float(sum(r.width * r.height for r in layout))
+                overlap_ratio = _room_overlap_ratio(layout)
+
+                strict_ok = (
+                    len(interior_walls) >= max(8, len(layout) - 2)
+                    and len(doors) >= max(6, len(layout) // 2)
+                    and len(windows) >= max(3, len(layout) // 3)
+                    and total_area >= max(45.0, total * 0.82)
+                    and overlap_ratio <= 0.01
+                )
+                relaxed_ok = (
+                    len(interior_walls) >= max(5, len(layout) // 2)
+                    and len(doors) >= max(4, len(layout) // 3)
+                    and len(windows) >= max(3, len(layout) // 4)
+                    and total_area >= max(45.0, total * 0.72)
+                    and overlap_ratio <= 0.02
+                )
+                if not strict_ok and not relaxed_ok:
+                    logger.warning(
+                        "ga variant rejected: topology too weak (walls=%s, doors=%s, windows=%s, area=%.1f, overlap=%.4f)",
+                        len(interior_walls),
+                        len(doors),
+                        len(windows),
+                        total_area,
+                        overlap_ratio,
+                    )
+                    continue
+                structural_layout = max(0.0, min(1.0, (1.0 - overlap_ratio) * max(0.15, 1.0 - ga_site.slope / 35.0)))
+                structural_score = max(float(raw.get("structural_score", 0.0)), structural_layout)
+                flood_score = max(float(raw.get("flood_score", 0.0)), max(0.0, min(1.0, 1.0 - ga_site.flood + 0.08)))
+                tree_score = max(float(raw.get("tree_score", 0.0)), max(0.0, min(1.0, ga_site.ndvi + (0.08 if req.preserve_trees else 0.0))))
+                eco_score = min(
+                    0.99,
+                    0.28 * scores["solar"]
+                    + 0.22 * scores["ventilation"]
+                    + 0.20 * structural_score
+                    + 0.15 * flood_score
+                    + 0.10 * tree_score
+                    + 0.05 * max(0.0, min(1.0, ga_site.buildability / 100.0)),
+                )
+
+                candidate = FloorPlanVariant(
+                    id=int(raw.get("id", len(variants) + 1)),
+                    algorithm=algo_name,
+                    style=str(raw.get("style", f"GA Variant {len(variants) + 1}")),
+                    layout=layout,
+                    walls=walls,
+                    doors=doors,
+                    windows=windows,
+                    total_area=round(total_area, 1),
+                    eco_score=round(float(eco_score), 3),
+                    solar_score=round(float(scores["solar"]), 3),
+                    ventilation_score=round(float(scores["ventilation"]), 3),
+                    structural_score=round(float(structural_score), 3),
+                    flood_score=round(float(flood_score), 3),
+                    tree_score=round(float(tree_score), 3),
+                    fitness_score=round(float(eco_score), 3),
+                    is_best=False,
+                    convergence_curve=[float(v) for v in raw.get("convergence_curve", [])],
+                    generations_run=int(raw.get("generations_run", 0)),
+                    converged_early=bool(raw.get("converged_early", False)),
+                    runtime_ms=int(raw.get("runtime_ms", 0)),
+                )
+                if strict_ok:
+                    variants.append(candidate)
+                else:
+                    relaxed_ga_variants.append(candidate)
+            except Exception as e:
+                logger.warning("ga variant map: %s", e)
+
+        if len(variants) < 3 and relaxed_ga_variants:
+            relaxed_ga_variants.sort(key=lambda v: float(v.eco_score), reverse=True)
+            existing_algos = {v.algorithm for v in variants}
+            for cand in relaxed_ga_variants:
+                if cand.algorithm in existing_algos:
+                    continue
+                variants.append(cand)
+                existing_algos.add(cand.algorithm)
+                if len(variants) >= 5:
+                    break
+
+        if variants:
+            variants.sort(key=lambda v: float(v.eco_score), reverse=True)
+            for i, variant in enumerate(variants):
+                variant.id = i + 1
+                if variant.algorithm.lower() == "deterministic":
+                    variant.algorithm = "GA"
+                variant.is_best = i == 0
+            bidx = 0
+            algorithms_used = [variant.algorithm for variant in variants]
+            convergence_data = {
+                variant.algorithm: [float(v) for v in (variant.convergence_curve or [])]
+                for variant in variants
+            }
+
+        # Resilient fallback: if the primary GA engine returns no valid variants,
+        # use the legacy GA search path before dropping to deterministic.
+        if not variants:
+            try:
+                legacy_variants, legacy_best_idx = _ga_search_variants(req, ga_site, total, floors, shape, types, amap)
+            except Exception as e:
+                logger.warning("legacy-ga-engine: %s", e)
+                legacy_variants, legacy_best_idx = [], 0
+
+            if legacy_variants:
+                variants = legacy_variants
+                bidx = max(0, min(legacy_best_idx, len(variants) - 1))
+                for i, variant in enumerate(variants):
+                    variant.id = i + 1
+                    if variant.algorithm.lower() == "deterministic":
+                        variant.algorithm = "Legacy-GA"
+                    variant.is_best = i == bidx
+                algorithms_used = [variant.algorithm for variant in variants]
+                convergence_data = {
+                    variant.algorithm: [float(variant.fitness_score)]
+                    for variant in variants
+                }
 
     # Safe fallback to deterministic if GA returns no valid candidates.
     if not variants:
@@ -853,15 +1574,105 @@ async def generate_floor_plan(req:GenerateFloorPlanRequest,db:AsyncSession)->Flo
             walls,doors,windows=_explicit_geometry(layout,site)
             scores=_score(layout,site,windows)
             va=round(sum(r.width*r.height for r in layout),1)
+            overlap_ratio = _room_overlap_ratio(layout)
+            structural_score = max(0.0, min(1.0, (1.0 - overlap_ratio) * max(0.15, 1.0 - site.slope / 35.0)))
+            flood_score = max(0.0, min(1.0, 1.0 - site.flood + 0.08))
+            tree_score = max(0.0, min(1.0, site.ndvi + (0.08 if req.preserve_trees else 0.0)))
+            eco = min(
+                0.99,
+                0.28 * scores["solar"]
+                + 0.22 * scores["ventilation"]
+                + 0.20 * structural_score
+                + 0.15 * flood_score
+                + 0.10 * tree_score
+                + 0.05 * max(0.0, min(1.0, site.buildability / 100.0)),
+            )
             variants.append(FloorPlanVariant(
-                id=vi+1,style=VNAMES[vi],layout=layout,total_area=va,
+                id=vi+1,algorithm="Deterministic",style=VNAMES[vi],layout=layout,total_area=va,
                 solar_score=scores["solar"],ventilation_score=scores["ventilation"],
-                fitness_score=scores["eco"],eco_score=scores["eco"],
+                structural_score=round(structural_score, 3),
+                flood_score=round(flood_score, 3),
+                tree_score=round(tree_score, 3),
+                fitness_score=round(eco, 3),eco_score=round(eco, 3),
                 walls=walls,doors=doors,windows=windows,is_best=False,
+                convergence_curve=[round(eco, 3)],
+                generations_run=1,
+                converged_early=True,
+                runtime_ms=0,
             ))
-            if scores["eco"]>beco: beco=scores["eco"]; bidx=len(variants)-1
+            if eco>beco: beco=eco; bidx=len(variants)-1
+
+    if variants:
+        variants.sort(key=lambda v: float(v.eco_score), reverse=True)
+        for i, variant in enumerate(variants):
+            variant.id = i + 1
+            variant.is_best = i == 0
+        bidx = 0
+
+    if variants:
+        for variant in variants:
+            try:
+                audit_env_data = {
+                    "lat": site.lat,
+                    "lon": site.lon,
+                    "elevation": site.elevation,
+                    "slope": site.slope,
+                    "flood_probability": site.flood,
+                    "wind_direction": site.wind,
+                    "wind_speed_ms": site.wind_speed_ms,
+                    "sun_exposure_hours": site.sun_h,
+                    "solar_radiation_kwh": site.solar_radiation,
+                    "rainfall_mm": site.rainfall_mm,
+                    "ndvi": site.ndvi,
+                    "clay_pct": site.clay_pct,
+                    "soil_ph": site.soil_ph,
+                    "bulk_density": site.bulk_density,
+                    "distance_to_water_m": site.distance_to_water,
+                    "tree_coordinates": site.tree_coordinates,
+                    "plot_area_sqm": total,
+                    "plot_polygon": site.polygon,
+                }
+                audit = run_eco_audit(
+                    variant_id=int(variant.id),
+                    algorithm=getattr(variant, "algorithm", "GA"),
+                    rooms=list(variant.layout or []),
+                    walls=list(variant.walls or []),
+                    doors=list(variant.doors or []),
+                    windows=list(variant.windows or []),
+                    env=audit_env_data,
+                )
+                audit_payload = asdict(audit)
+                criteria = audit_payload.get("criteria", [])
+                c1 = next((c for c in criteria if int(c.get("criterion_id", -1)) == 1), None)
+                c2 = next((c for c in criteria if int(c.get("criterion_id", -1)) == 2), None)
+
+                variant.eco_audit = EcoAuditReportSchema.model_validate(audit_payload)
+                variant.eco_score = round(float(audit_payload.get("composite_eco_score", 0.0)) / 100.0, 3)
+                variant.fitness_score = round(float(variant.eco_score), 3)
+                if c1 is not None:
+                    variant.solar_score = round(float(c1.get("score", variant.solar_score * 100.0)) / 100.0, 3)
+                if c2 is not None:
+                    variant.ventilation_score = round(float(c2.get("score", variant.ventilation_score * 100.0)) / 100.0, 3)
+            except Exception as e:
+                logger.warning("eco-audit variant %s failed: %s", getattr(variant, "id", "?"), e)
+                variant.eco_audit = None
+
+        variants.sort(key=lambda v: float(v.eco_score), reverse=True)
+        for i, variant in enumerate(variants):
+            variant.id = i + 1
+            variant.is_best = i == 0
+        bidx = 0
+
     if not variants: raise ValueError("No variants generated")
     variants[bidx].is_best=True; best=variants[bidx]
+    if not algorithms_used:
+        algorithms_used = [variant.algorithm for variant in variants]
+    if not convergence_data:
+        convergence_data = {
+            variant.algorithm: [float(v) for v in (variant.convergence_curve or [])]
+            for variant in variants
+        }
+
     try:
         db.add(FloorPlanRecord(
             plot_id=req.plot_id,
@@ -870,6 +1681,8 @@ async def generate_floor_plan(req:GenerateFloorPlanRequest,db:AsyncSession)->Flo
                          "doors":[d.model_dump() for d in best.doors or []],
                          "windows":[w.model_dump() for w in best.windows or []],
                          "generation_method": method,
+                         "algorithms_used": algorithms_used,
+                         "convergence_data": convergence_data,
                          "variants":[v.model_dump() for v in variants]},
             fitness_score=float(best.fitness_score),generation_count=len(variants),
         ))
@@ -882,9 +1695,15 @@ async def generate_floor_plan(req:GenerateFloorPlanRequest,db:AsyncSession)->Flo
         plot_id=req.plot_id,layout=best.layout,walls=best.walls,doors=best.doors,windows=best.windows,
         total_area=round(sum(r.width*r.height for r in best.layout),1),
         fitness_score=float(best.fitness_score),eco_score=float(best.eco_score),
+        solar_score=float(best.solar_score),
         generation_count=len(variants),sunlight_score=float(best.solar_score),
         ventilation_score=float(best.ventilation_score),
-        tree_preserved_count=max(0,int(round(site.ndvi*8))+(2 if req.preserve_trees else 0)),
+        structural_score=float(best.structural_score),
+        flood_score=float(best.flood_score),
+        tree_score=float(best.tree_score),
+        tree_preserved_count=max(0,len(site.tree_coordinates)) if req.preserve_trees else 0,
         orientation_degrees=float(_brg(site.wind)),variants=variants,best_variant_index=bidx,
+        algorithms_used=algorithms_used,
+        convergence_data=convergence_data,
         generation_method=method,
     )

@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useRef, useEffect, useState, useMemo } from "react";
+import { memo, useCallback, useRef, useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
-import { generateFloorPlan } from "@/lib/api";
+import { generateFloorPlan, type CriterionResultSchema, type EcoAuditReportSchema, type FloorPlanVariant, type IterationHistorySchema, type IterationSnapshotSchema } from "@/lib/api";
 import { fetchLiveEnvironment } from "@/lib/liveEnvironment";
 
 interface Room { id?: string; type: string; width: number; height: number; x: number; y: number; floor: number; orientation: string; }
@@ -55,6 +55,14 @@ function computeRoomLimits(area: number) {
   return {bedrooms:6,bathrooms:4,puja_room:true,garage:true,office:2,dining:true,utility:true};
 }
 
+function recommendFloorAreaFromPlot(plotAreaSqm: number, floors: number) {
+  const safePlot = Math.max(0, Number(plotAreaSqm) || 0);
+  const floorCount = Math.max(1, Math.min(3, Number(floors) || 1));
+  const far = floorCount === 1 ? 0.08 : floorCount === 2 ? 0.12 : 0.15;
+  const suggested = Math.round(safePlot * far);
+  return Math.max(120, Math.min(720, suggested));
+}
+
 function EcoScoreRing({ score }: { score: number }) {
   const r = 54; const circ = 2 * Math.PI * r;
   const offset = circ - (score / 100) * circ;
@@ -88,6 +96,796 @@ function EffBar({ label, value, status, color }: { label: string; value: number;
   );
 }
 
+function scoreColor(value: number) {
+  if (value >= 80) return "#22c55e";
+  if (value >= 50) return "#f59e0b";
+  return "#ef4444";
+}
+
+function AnimatedScoreBar({ label, value, active }: { label: string; value: number; active: boolean }) {
+  const [display, setDisplay] = useState(active ? 0 : value);
+
+  useEffect(() => {
+    const target = Math.max(0, Math.min(100, value));
+    let raf = 0;
+    if (!active) {
+      setDisplay(target);
+      return;
+    }
+
+    setDisplay(0);
+    let start: number | null = null;
+    const step = (ts: number) => {
+      if (start === null) start = ts;
+      const p = Math.min(1, (ts - start) / 600);
+      setDisplay(target * p);
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value, active]);
+
+  const color = scoreColor(value);
+  return (
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[9px] uppercase tracking-[0.08em] text-slate-400">{label}</span>
+        <span className="text-[9px] font-bold" style={{ color }}>{Math.round(value)}%</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${display}%`, background: color, boxShadow: `0 0 10px ${color}66` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+const CRITERION_LABELS: Record<number, string> = {
+  1: "Passive Solar Orientation",
+  2: "Natural Ventilation",
+  3: "Compactness & Efficiency",
+  4: "Thermal Zoning",
+  5: "Flood Resilience",
+  6: "Natural Daylighting",
+  7: "Tree Preservation",
+  8: "Soil & Foundation",
+  9: "Renewable Readiness",
+  10: "Indoor Air Quality",
+};
+
+function criterionBarClass(score: number): string {
+  if (score >= 65) return "bg-green-500";
+  if (score >= 40) return "bg-amber-500";
+  return "bg-red-500";
+}
+
+function gradeBadgeClass(grade: string): string {
+  if (grade === "A+" || grade === "A") return "bg-green-500/20 text-green-300 border-green-400/40";
+  if (grade === "B+" || grade === "B") return "bg-teal-500/20 text-teal-300 border-teal-400/40";
+  if (grade === "C+" || grade === "C") return "bg-amber-500/20 text-amber-300 border-amber-400/40";
+  return "bg-red-500/20 text-red-300 border-red-400/40";
+}
+
+function clampPct(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function gradeFromScore(score: number): EcoAuditReportSchema["grade"] {
+  if (score >= 85) return "A+";
+  if (score >= 75) return "A";
+  if (score >= 68) return "B+";
+  if (score >= 60) return "B";
+  if (score >= 52) return "C+";
+  if (score >= 45) return "C";
+  if (score >= 35) return "D";
+  return "F";
+}
+
+function fallbackCriterion(
+  criterionId: number,
+  score: number,
+  weight: number,
+  recommendation: string,
+): CriterionResultSchema {
+  const safeScore = clampPct(score);
+  return {
+    criterion_id: criterionId,
+    criterion_name: CRITERION_LABELS[criterionId] ?? `Criterion ${criterionId}`,
+    score: safeScore,
+    weight,
+    weighted_score: Number((safeScore * weight).toFixed(3)),
+    passed: safeScore >= 50,
+    pass_threshold: 50,
+    sub_scores: {},
+    findings: ["Derived from available variant metrics because detailed eco audit payload is unavailable."],
+    penalties_applied: [],
+    bonuses_applied: [],
+    recommendations: [recommendation],
+    data_sources: ["variant scores"],
+    standard_ref: "Fallback",
+  };
+}
+
+function buildFallbackAuditFromVariant(variant: FloorPlanVariant | null | undefined): EcoAuditReportSchema | null {
+  if (!variant) return null;
+  if (variant.eco_audit) return variant.eco_audit;
+
+  const solar = clampPct((variant.solar_score ?? 0) * 100);
+  const vent = clampPct((variant.ventilation_score ?? 0) * 100);
+  const structural = clampPct((variant.structural_score ?? 0) * 100);
+  const flood = clampPct((variant.flood_score ?? 0) * 100);
+  const tree = clampPct((variant.tree_score ?? 0) * 100);
+  const composite = clampPct((variant.eco_score ?? variant.fitness_score ?? 0) * 100);
+
+  const criteria: CriterionResultSchema[] = [
+    fallbackCriterion(1, solar, 0.18, "Improve solar-facing orientation for living and bedroom spaces."),
+    fallbackCriterion(2, vent, 0.16, "Add cross-vent openings on opposite or perpendicular faces."),
+    fallbackCriterion(3, (structural * 0.7 + solar * 0.3), 0.12, "Reduce footprint articulation and improve compactness."),
+    fallbackCriterion(4, (vent * 0.5 + structural * 0.5), 0.12, "Strengthen thermal zoning between service and habitable spaces."),
+    fallbackCriterion(5, flood, 0.10, "Move key habitable zones away from flood-prone placement."),
+    fallbackCriterion(6, solar, 0.10, "Increase balanced daylight openings in habitable rooms."),
+    fallbackCriterion(7, tree, 0.08, "Shift footprint away from tree influence/protection zones."),
+    fallbackCriterion(8, structural, 0.06, "Adjust foundation strategy for slope and soil resilience."),
+    fallbackCriterion(9, solar, 0.05, "Reserve roof area and orientation for future PV and rainwater systems."),
+    fallbackCriterion(10, vent, 0.03, "Ensure each room has operable openings for indoor air quality."),
+  ];
+
+  const sorted = [...criteria].sort((a, b) => b.score - a.score);
+  const passed = criteria.filter((c) => c.passed).length;
+  const fixes = [...criteria]
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 5)
+    .map((c) => `[${c.criterion_name}] ${c.recommendations[0]}`);
+
+  return {
+    variant_id: variant.id,
+    algorithm: variant.algorithm || "Unknown",
+    timestamp: new Date().toISOString(),
+    criteria,
+    composite_eco_score: Number(composite.toFixed(2)),
+    grade: gradeFromScore(composite),
+    overall_passed: passed >= 7,
+    n_criteria_passed: passed,
+    n_criteria_failed: 10 - passed,
+    critical_failures: criteria.filter((c) => c.score < 40).map((c) => c.criterion_name),
+    top_strengths: sorted.slice(0, 3).map((c) => c.criterion_name),
+    top_weaknesses: sorted.slice(-3).map((c) => c.criterion_name),
+    priority_fixes: fixes,
+    climate_context: "unknown",
+    site_risk_level: flood > 60 ? "high" : flood >= 30 ? "moderate" : "low",
+    compliance_citations: ["Fallback - detailed eco audit unavailable in response"],
+    data_quality: {
+      wind: false,
+      soil: false,
+      ndvi: false,
+      flood: false,
+      elevation: false,
+      is_fully_live: false,
+      live_field_count: 0,
+      fallback_field_count: 5,
+    },
+  };
+}
+
+const EcoReportPanel = memo(function EcoReportPanel({
+  className,
+}: {
+  className?: string
+}): JSX.Element {
+  const activeAudit = useEco3DStore((s) => s.activeAudit);
+  const activeVariant = useEco3DStore((s) => s.floorPlanVariants[s.activeVariantIndex] ?? null);
+  const activeIterationIndex = useEco3DStore((s) => s.activeIterationIndex);
+  const totalIterations = useEco3DStore((s) => s.floorPlan?.iteration_history?.snapshots?.length ?? 1);
+  const audit = useMemo(
+    () => activeAudit ?? buildFallbackAuditFromVariant(activeVariant),
+    [activeAudit, activeVariant],
+  );
+  const isViewingFinal = activeIterationIndex >= Math.max(0, totalIterations - 1);
+  const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
+  const [animatedScores, setAnimatedScores] = useState<Record<number, number>>({});
+  const [animKey, setAnimKey] = useState(0);
+
+  useEffect(() => {
+    setAnimKey((k) => k + 1);
+  }, [audit]);
+
+  const criteria = useMemo(() => {
+    if (!audit) return [] as CriterionResultSchema[];
+    const byId = new Map<number, CriterionResultSchema>();
+    for (const c of audit.criteria ?? []) byId.set(c.criterion_id, c);
+    const filled: CriterionResultSchema[] = [];
+    for (let i = 1; i <= 10; i += 1) {
+      const row = byId.get(i);
+      if (row) {
+        filled.push(row);
+      } else {
+        filled.push({
+          criterion_id: i,
+          criterion_name: CRITERION_LABELS[i] ?? `Criterion ${i}`,
+          score: 0,
+          weight: 0,
+          weighted_score: 0,
+          passed: false,
+          pass_threshold: 50,
+          sub_scores: {},
+          findings: ["No criterion data returned for this variant."],
+          penalties_applied: [],
+          bonuses_applied: [],
+          recommendations: ["Regenerate this variant to compute complete audit criteria."],
+          data_sources: [],
+          standard_ref: "N/A",
+        });
+      }
+    }
+    return filled.sort((a, b) => a.criterion_id - b.criterion_id);
+  }, [audit]);
+
+  useEffect(() => {
+    setExpandedRows({});
+    if (criteria.length === 0) {
+      setAnimatedScores({});
+      return;
+    }
+    const seed: Record<number, number> = {};
+    for (const c of criteria) seed[c.criterion_id] = 0;
+    setAnimatedScores(seed);
+
+    let raf = 0;
+    let start = 0;
+    const step = (ts: number) => {
+      if (!start) start = ts;
+      const p = Math.min(1, (ts - start) / 700);
+      const next: Record<number, number> = {};
+      for (const c of criteria) next[c.criterion_id] = c.score * p;
+      setAnimatedScores(next);
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [criteria]);
+
+  if (!audit) {
+    return (
+      <div className={`h-full rounded-xl border border-cyan-400/10 bg-cyan-950/20 p-4 ${className ?? ""}`}>
+        <div className="text-xs font-bold uppercase tracking-[0.14em] text-cyan-300/80">Eco Audit Report</div>
+        <div className="mt-2 text-xs text-slate-400">Analysis pending - generate a floor plan first.</div>
+        <div className="mt-4 space-y-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-6 animate-pulse rounded bg-white/5" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const liveCount = audit.data_quality?.live_field_count ?? 0;
+  const fallbackCount = audit.data_quality?.fallback_field_count ?? Math.max(0, 5 - liveCount);
+  const liveOk = liveCount >= 5;
+  const criterionByName = new Map(criteria.map((c) => [c.criterion_name.toLowerCase(), c]));
+  const numerals = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
+  const topStrengths = Array.isArray(audit.top_strengths) ? audit.top_strengths : [];
+  const priorityFixes = Array.isArray(audit.priority_fixes) ? audit.priority_fixes : [];
+  const complianceCitations = Array.isArray(audit.compliance_citations) ? audit.compliance_citations : [];
+  const auditAlgorithm = audit.algorithm || "Unknown";
+  const climateContext = audit.climate_context || "unknown";
+  const siteRisk = audit.site_risk_level || "unknown";
+  const passedCount = Number.isFinite(audit.n_criteria_passed)
+    ? audit.n_criteria_passed
+    : criteria.filter((c) => c.passed).length;
+  const ecoScore = Number.isFinite(audit.composite_eco_score)
+    ? audit.composite_eco_score
+    : 0;
+
+  return (
+    <div className={`h-full rounded-xl border border-cyan-400/10 bg-cyan-950/20 p-4 text-slate-100 ${className ?? ""}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-bold uppercase tracking-[0.14em] text-cyan-300/80">Eco Audit Report</div>
+          <div className="mt-1 text-xs text-slate-400">
+            {auditAlgorithm} · Climate: {climateContext} · Risk: {siteRisk}
+          </div>
+          <div className="mt-1 text-xs text-slate-300">
+            {passedCount} of 10 criteria passed
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="text-right text-sm font-black text-cyan-200">{Math.round(ecoScore)}/100</div>
+          <div className={`h-16 w-16 rounded-full border text-center text-2xl font-black leading-[3.8rem] ${gradeBadgeClass(audit.grade)}`}>
+            {audit.grade}
+          </div>
+        </div>
+      </div>
+
+      {totalIterations > 1 && !isViewingFinal ? (
+        <div className="mt-3 rounded-md border border-amber-500/35 bg-amber-500/12 px-3 py-2 text-xs text-amber-300">
+          ⚠ Viewing Iteration {activeIterationIndex} of {Math.max(0, totalIterations - 1)} - Click the final iteration to see the corrected plan
+        </div>
+      ) : (
+        <div className="mt-3 rounded-md border border-green-500/35 bg-green-500/12 px-3 py-2 text-xs text-green-300">
+          ✓ Showing Final Corrected Plan ({passedCount}/10 criteria passing)
+        </div>
+      )}
+
+      <div className={`mt-3 rounded-md border px-3 py-2 text-xs ${liveOk ? "border-green-500/30 bg-green-500/10 text-green-300" : "border-amber-500/30 bg-amber-500/10 text-amber-300"}`}>
+        {liveOk
+          ? `📡 Live Data: ${liveCount}/5 fields confirmed`
+          : `⚠️ Live Data: ${liveCount}/5 fields (${fallbackCount} using fallback values)`}
+      </div>
+
+      <div className="mt-4">
+        <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-300/70">Criterion Scores</div>
+        <div key={animKey} className="space-y-2">
+          {criteria.map((c, index) => {
+            const animated = Math.max(0, Math.min(100, animatedScores[c.criterion_id] ?? c.score));
+            const expanded = !!expandedRows[c.criterion_id];
+            return (
+              <div key={c.criterion_id} className="rounded-md border border-white/10 bg-black/20">
+                <button
+                  onClick={() => setExpandedRows((prev) => ({ ...prev, [c.criterion_id]: !prev[c.criterion_id] }))}
+                  className="w-full px-2 py-2 text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="w-4 text-[12px] text-slate-400">{numerals[index] ?? `${c.criterion_id}.`}</span>
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-slate-200">{c.criterion_name || CRITERION_LABELS[c.criterion_id]}</span>
+                    <div className="w-28 rounded-full bg-white/10">
+                      <div className={`h-1.5 rounded-full ${criterionBarClass(c.score)}`} style={{ width: `${animated}%` }} />
+                    </div>
+                    <span className="w-8 text-right text-[11px] font-bold text-slate-100">{Math.round(c.score)}</span>
+                    <span className={`w-10 text-right text-[10px] font-bold ${c.passed ? "text-green-400" : "text-red-400"}`}>
+                      {c.passed ? "PASS" : "FAIL"}
+                    </span>
+                  </div>
+                </button>
+                {expanded && (
+                  <div className="border-t border-white/10 px-2 pb-2 pt-1 text-[10px] text-slate-300">
+                    {c.findings.length > 0 && (
+                      <div className="mb-1">
+                        <div className="text-cyan-300/80">Findings</div>
+                        <div>{c.findings.join(" | ")}</div>
+                      </div>
+                    )}
+                    {c.penalties_applied.length > 0 && (
+                      <div className="mb-1">
+                        <div className="text-red-300/80">Penalties</div>
+                        <div>{c.penalties_applied.join(" | ")}</div>
+                      </div>
+                    )}
+                    {c.recommendations.length > 0 && (
+                      <div>
+                        <div className="text-amber-300/80">Recommendations</div>
+                        <div>{c.recommendations.join(" | ")}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-md border border-white/10 bg-black/20 p-2 text-[11px]">
+        <div className="mb-1 font-bold uppercase tracking-[0.12em] text-cyan-300/70">Top Strengths</div>
+        <div className="text-slate-200">
+          {topStrengths.length === 0 && "No ranked strengths returned for this variant."}
+          {topStrengths.map((name) => {
+            const score = criterionByName.get(name.toLowerCase())?.score;
+            return `★ ${name}${typeof score === "number" ? ` (${Math.round(score)})` : ""}`;
+          }).join("  ")}
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-md border border-white/10 bg-black/20 p-2 text-[11px]">
+        <div className="mb-1 font-bold uppercase tracking-[0.12em] text-cyan-300/70">Priority Fixes</div>
+        <div className="space-y-1 text-slate-200">
+          {priorityFixes.length === 0 && <div>No priority fixes were returned for this variant.</div>}
+          {priorityFixes.slice(0, 5).map((fix, i) => {
+            const nameMatch = fix.match(/^\[(.*?)\]/);
+            const linked = nameMatch ? criterionByName.get((nameMatch[1] || "").toLowerCase()) : undefined;
+            const dot = linked && linked.score < 40 ? "🔴" : "🟡";
+            return <div key={`${fix}-${i}`}>{dot} {fix}</div>;
+          })}
+        </div>
+      </div>
+
+      <div className="mt-3 text-[10px] text-slate-400">
+        COMPLIANCE: {complianceCitations.length ? complianceCitations.join(" · ") : "No compliance citations available"}
+      </div>
+    </div>
+  );
+});
+
+EcoReportPanel.displayName = "EcoReportPanel";
+
+const CRITERION_SHORT_LABELS: Record<number, string> = {
+  1: "Solar",
+  2: "Ventilation",
+  3: "Compactness",
+  4: "Thermal Zoning",
+  5: "Flood",
+  6: "Daylighting",
+  7: "Trees",
+  8: "Soil",
+  9: "Renewables",
+  10: "IAQ",
+};
+
+function criteriaSummary(ids: number[] | undefined): string {
+  if (!ids || ids.length === 0) return "None";
+  return ids.map((id) => CRITERION_SHORT_LABELS[id] ?? `C${id}`).join(", ");
+}
+
+function extractFailedRooms(findings: string[], rooms: Room[]): Room[] {
+  const lines = (findings ?? []).map((item) => String(item).toLowerCase());
+  const matched = rooms.filter((room) => {
+    const roomId = String(room.id ?? "").toLowerCase();
+    const roomType = String(room.type ?? "").toLowerCase();
+    const roomTypeSpaced = roomType.replace(/_/g, " ");
+    return lines.some((line) => {
+      if (roomId && line.includes(roomId)) return true;
+      return line.includes(roomType) || line.includes(roomTypeSpaced);
+    });
+  });
+
+  if (matched.length > 0) return matched;
+  return rooms;
+}
+
+function doesRoomPassAllApplicableCriteria(room: Room, audit: EcoAuditReportSchema | null): boolean {
+  if (!audit) return true;
+  const roomType = String(room.type ?? "").toLowerCase();
+  const habitable = ["living", "dining", "bedroom", "office"].includes(roomType);
+  const relevantIds = habitable ? [1, 2, 5, 6, 10] : [2, 4, 10];
+  return relevantIds.every((criterionId) => {
+    const criterion = (audit.criteria ?? []).find((item) => item.criterion_id === criterionId);
+    return !criterion || criterion.passed;
+  });
+}
+
+function getIterationDiff(
+  prev: IterationSnapshotSchema | null,
+  curr: IterationSnapshotSchema,
+): { fixed: string[]; broken: string[] } {
+  if (!prev) return { fixed: [], broken: [] };
+
+  const fixed = (curr.audit?.criteria ?? [])
+    .filter((c) => {
+      const prevC = (prev.audit?.criteria ?? []).find((p) => p.criterion_id === c.criterion_id);
+      return !!prevC && !prevC.passed && c.passed;
+    })
+    .map((c) => c.criterion_name);
+
+  const broken = (curr.audit?.criteria ?? [])
+    .filter((c) => {
+      const prevC = (prev.audit?.criteria ?? []).find((p) => p.criterion_id === c.criterion_id);
+      return !!prevC && prevC.passed && !c.passed;
+    })
+    .map((c) => c.criterion_name);
+
+  return { fixed, broken };
+}
+
+const IterationTimeline = memo(function IterationTimeline({
+  history,
+  isLoading,
+  onSelectIteration,
+  activeIterationIndex,
+}: {
+  history: IterationHistorySchema | null | undefined;
+  isLoading: boolean;
+  onSelectIteration: (iterationIndex: number) => void;
+  activeIterationIndex: number;
+}): JSX.Element {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [expandedCorrections, setExpandedCorrections] = useState(false);
+  const [expandedCorrectionIndex, setExpandedCorrectionIndex] = useState<number | null>(null);
+
+  const scoreCurve = history?.eco_score_curve ?? [];
+  const snapshots = history?.snapshots ?? [];
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const width = Math.max(320, canvas.clientWidth || 320);
+    const height = 170;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const left = 34;
+    const right = width - 14;
+    const top = 14;
+    const bottom = height - 28;
+
+    const minScore = 40;
+    const maxScore = 100;
+    const points = scoreCurve.map((value, idx) => {
+      const x = scoreCurve.length <= 1
+        ? left
+        : left + (idx / (scoreCurve.length - 1)) * (right - left);
+      const y = bottom - ((Math.max(minScore, Math.min(maxScore, value)) - minScore) / (maxScore - minScore)) * (bottom - top);
+      return { x, y, score: value };
+    });
+
+    let raf = 0;
+    let start = 0;
+
+    const drawBase = () => {
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#0b1416";
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.strokeStyle = "rgba(13,242,242,0.14)";
+      ctx.lineWidth = 1;
+      [40, 60, 80, 100].forEach((tick) => {
+        const y = bottom - ((tick - minScore) / (maxScore - minScore)) * (bottom - top);
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+        ctx.stroke();
+
+        ctx.fillStyle = "rgba(148,163,184,0.8)";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(tick), left - 6, y);
+      });
+
+      ctx.fillStyle = "rgba(148,163,184,0.8)";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (let i = 0; i < points.length; i += 1) {
+        const x = points.length <= 1
+          ? left
+          : left + (i / Math.max(points.length - 1, 1)) * (right - left);
+        ctx.fillText(String(i), x, bottom + 8);
+      }
+    };
+
+    const draw = (progress: number) => {
+      drawBase();
+      if (points.length === 0) {
+        ctx.fillStyle = "rgba(148,163,184,0.9)";
+        ctx.font = "12px monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("No score curve yet", width * 0.5, height * 0.5);
+        return;
+      }
+
+      const maxX = left + (right - left) * progress;
+
+      ctx.strokeStyle = "#0df2f2";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i += 1) {
+        const prev = points[i - 1];
+        const point = points[i];
+        if (point.x <= maxX) {
+          ctx.lineTo(point.x, point.y);
+        } else {
+          const span = Math.max(1e-6, point.x - prev.x);
+          const t = Math.max(0, Math.min(1, (maxX - prev.x) / span));
+          const y = prev.y + (point.y - prev.y) * t;
+          ctx.lineTo(maxX, y);
+          break;
+        }
+      }
+      ctx.stroke();
+
+      for (let i = 0; i < points.length; i += 1) {
+        const point = points[i];
+        if (point.x > maxX + 0.5) break;
+        const prevScore = i > 0 ? points[i - 1].score : point.score;
+        const improved = i === 0 ? true : point.score > prevScore + 0.05;
+
+        ctx.fillStyle = "#f59e0b";
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 3.6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = improved ? "#22c55e" : "#ef4444";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 5.0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    };
+
+    const step = (timestamp: number) => {
+      if (!start) start = timestamp;
+      const progress = Math.min(1, (timestamp - start) / 800);
+      draw(progress);
+      if (progress < 1) raf = requestAnimationFrame(step);
+    };
+
+    draw(0);
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [scoreCurve]);
+
+  if (isLoading) {
+    return (
+      <div className="rounded-xl border border-cyan-400/10 bg-cyan-950/20 p-4">
+        <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-300/80">Correction Loop History</div>
+        <div className="mt-3 space-y-2">
+          {Array.from({ length: 5 }).map((_, idx) => (
+            <div key={idx} className="h-7 animate-pulse rounded bg-white/10" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!history) {
+    return (
+      <div className="rounded-xl border border-cyan-400/10 bg-cyan-950/20 p-4 text-[11px] text-slate-300">
+        <div className="font-bold uppercase tracking-[0.14em] text-cyan-300/80">Correction Loop History</div>
+        <div className="mt-2 text-slate-400">No history yet.</div>
+      </div>
+    );
+  }
+
+  const totalImprovement = Number(history.total_improvement ?? 0);
+  const improvementPillClass = totalImprovement > 20
+    ? "border-green-500/40 bg-green-500/15 text-green-300"
+    : totalImprovement >= 10
+    ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
+    : "border-red-500/40 bg-red-500/15 text-red-300";
+
+  const initialScore = Number(history.initial_eco_score ?? 0);
+  const finalScore = Number(history.final_eco_score ?? 0);
+
+  return (
+    <div className="rounded-xl border border-cyan-400/10 bg-cyan-950/20 p-4 text-slate-100">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-300/85">Correction Loop History</div>
+          <div className="mt-1 text-[10px] text-slate-400">
+            Initial: {initialScore.toFixed(1)} to Final: {finalScore.toFixed(1)}
+          </div>
+          <div className="text-[10px] text-slate-400">
+            {history.converged
+              ? `Converged in ${history.total_iterations} iteration(s)`
+              : `Stopped after ${history.total_iterations} iteration(s) - ${history.convergence_reason}`}
+          </div>
+        </div>
+        <div className={`rounded-full border px-2 py-1 text-[10px] font-bold ${improvementPillClass}`}>
+          {totalImprovement >= 0 ? "+" : ""}{totalImprovement.toFixed(1)} pts
+        </div>
+      </div>
+
+      <div className="mt-3 overflow-hidden rounded-lg border border-white/10 bg-[#0b1416]">
+        <canvas ref={canvasRef} className="block h-[170px] w-full" />
+      </div>
+
+      <div className="mt-4">
+        <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-300/75">Iteration Log</div>
+        {snapshots.length === 0 ? (
+          <div className="rounded-md border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-slate-400">No iterations yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {snapshots.map((snap, idx) => {
+              const prevScore = idx === 0 ? snap.eco_score : snapshots[idx - 1].eco_score;
+              const delta = snap.eco_score - prevScore;
+              const correction = snap.correction;
+              const fixedSummary = criteriaSummary(correction?.criteria_targeted);
+              const isConvergedRow = !!history.converged && idx === snapshots.length - 1;
+              const isSelected = activeIterationIndex === snap.iteration;
+              const diff = getIterationDiff(idx > 0 ? snapshots[idx - 1] : null, snap);
+
+              return (
+                <button
+                  key={`iter-${snap.iteration}`}
+                  className={`w-full rounded-md border px-2 py-2 text-left transition-colors ${
+                    isConvergedRow
+                      ? "border-amber-400/40 bg-amber-500/10"
+                      : isSelected
+                      ? "border-cyan-300/45 bg-cyan-400/10"
+                      : "border-white/10 bg-black/20 hover:border-cyan-300/30"
+                  }`}
+                  onClick={() => onSelectIteration(snap.iteration)}
+                >
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="font-bold text-slate-100">
+                      {isConvergedRow ? "*" : delta > 0.05 ? "+" : "-"} Iter {snap.iteration}
+                    </span>
+                    <span className="font-mono text-cyan-200">{Number(snap.eco_score).toFixed(1)}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[10px]">
+                    <span className="text-slate-400">Fixed: {fixedSummary}</span>
+                    <span className={delta > 0.05 ? "text-green-300" : "text-red-300"}>
+                      {delta >= 0 ? "+" : ""}{delta.toFixed(1)}
+                    </span>
+                  </div>
+                  {(diff.fixed.length > 0 || diff.broken.length > 0) && (
+                    <div className="mt-1 flex flex-wrap gap-1 text-[9px]">
+                      {diff.fixed.map((name) => (
+                        <span key={`fixed-${snap.iteration}-${name}`} className="text-green-400">+{name}</span>
+                      ))}
+                      {diff.broken.map((name) => (
+                        <span key={`broken-${snap.iteration}-${name}`} className="text-red-400">-{name}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-1 flex items-center">
+                    {(snap.audit?.criteria ?? []).map((criterion) => (
+                      <span
+                        key={`dot-${snap.iteration}-${criterion.criterion_id}`}
+                        title={criterion.criterion_name}
+                        style={{
+                          display: "inline-block",
+                          width: 6,
+                          height: 6,
+                          borderRadius: "50%",
+                          margin: "0 1px",
+                          backgroundColor: criterion.passed ? "#22c55e" : "#ef4444",
+                          opacity: 0.85,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 rounded-md border border-white/10 bg-black/20">
+        <button
+          onClick={() => setExpandedCorrections((prev) => !prev)}
+          className="flex w-full items-center justify-between px-3 py-2 text-left"
+        >
+          <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-300/75">Corrections Applied</span>
+          <span className="text-[11px] text-slate-400">{expandedCorrections ? "Hide" : "Show"}</span>
+        </button>
+        {expandedCorrections && (
+          <div className="border-t border-white/10 px-2 pb-2 pt-1">
+            {(history.corrections_applied ?? []).length === 0 ? (
+              <div className="px-1 py-2 text-[10px] text-slate-400">No corrections recorded.</div>
+            ) : (
+              <div className="space-y-1">
+                {(history.corrections_applied ?? []).map((item, idx) => {
+                  const expanded = expandedCorrectionIndex === idx;
+                  return (
+                    <div key={`fix-${idx}`} className="rounded border border-white/10 bg-white/5">
+                      <button
+                        onClick={() => setExpandedCorrectionIndex((prev) => (prev === idx ? null : idx))}
+                        className="w-full px-2 py-1.5 text-left text-[10px] text-slate-200"
+                      >
+                        {expanded ? "v" : ">"} {item}
+                      </button>
+                      {expanded && (
+                        <div className="border-t border-white/10 px-2 py-1.5 text-[10px] text-slate-400">
+                          {item}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+IterationTimeline.displayName = "IterationTimeline";
+
 function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
   return (
     <button onClick={onChange} className="relative w-11 h-6 rounded-full transition-all duration-300" style={{ background: on ? "#0df2f2" : "rgba(255,255,255,0.1)" }}>
@@ -100,6 +898,28 @@ const WIND_VECTOR_MAP: Record<string, [number, number]> = {
   N: [0, -1], NE: [1, -1], E: [1, 0], SE: [1, 1], S: [0, 1], SW: [-1, 1], W: [-1, 0], NW: [-1, -1],
   NNE: [0.5, -1], ENE: [1, -0.5], ESE: [1, 0.5], SSE: [0.5, 1],
   SSW: [-0.5, 1], WSW: [-1, 0.5], WNW: [-1, -0.5], NNW: [-0.5, -1],
+};
+
+const BLUEPRINT_ROOM_HATCH_MAP: Record<string, boolean> = {
+  bathroom: true, utility: true, garage: true,
+};
+
+const BLUEPRINT_ROOM_LABEL_MAP: Record<string, string> = {
+  living: "LIVING ROOM", bedroom: "BEDROOM", kitchen: "KITCHEN",
+  bathroom: "BATHROOM", office: "STUDY/OFFICE", garage: "GARAGE",
+  utility: "UTILITY", dining: "DINING ROOM", puja_room: "PUJA ROOM",
+};
+
+const BLUEPRINT_ROOM_STYLE_MAP: Record<string,{bg:string;border:string}> = {
+  living:    {bg:"rgba(13,200,200,0.10)",  border:"#0bc8c8"},
+  bedroom:   {bg:"rgba(74,157,232,0.11)",  border:"#4a9de8"},
+  kitchen:   {bg:"rgba(44,180,110,0.10)",  border:"#2cb46e"},
+  bathroom:  {bg:"rgba(155,114,212,0.11)", border:"#9b72d4"},
+  office:    {bg:"rgba(232,195,58,0.11)",  border:"#e8c33a"},
+  garage:    {bg:"rgba(143,160,160,0.10)", border:"#8fa0a0"},
+  utility:   {bg:"rgba(224,128,80,0.10)",  border:"#e08050"},
+  dining:    {bg:"rgba(232,122,58,0.10)",  border:"#e87a3a"},
+  puja_room: {bg:"rgba(200,160,32,0.10)",  border:"#c8a020"},
 };
 
 function getWindProfile(direction: string, speed?: number, directionDegrees?: number) {
@@ -527,7 +1347,7 @@ function LegacyBlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, 
       ctx.fillText(`T${i+1}`,ttx,tty);
     });
 
-  }, [rooms, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, windParticles]);
+  }, [rooms, trees, lat, lon, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windParticles]);
 
   useEffect(() => {
     let running = true;
@@ -544,63 +1364,42 @@ function LegacyBlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, 
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, floorPlan, plotShape, plotArea, windDir, windSpeed, windDirectionDeg, sunAzimuthDeg, sunElevationDeg }:
-  { rooms: Room[]; walls: Wall[]; doors: Door[]; windows: WindowEl[]; trees: Tree[]; lat: number; lon: number; zoom: number; showSolarPath: boolean; showWindFlow: boolean; floorPlan: any; plotShape: string; plotArea: number; windDir: string; windSpeed: number; windDirectionDeg?: number; sunAzimuthDeg?: number; sunElevationDeg?: number }) {
+function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, showEcoOverlay, ecoAudit, floodProbability, floorPlan, plotShape, plotArea, windDir, windSpeed, windDirectionDeg, sunAzimuthDeg, sunElevationDeg, variantKey, algorithmName, convergenceCurve }:
+  { rooms: Room[]; walls: Wall[]; doors: Door[]; windows: WindowEl[]; trees: Tree[]; lat: number; lon: number; zoom: number; showSolarPath: boolean; showWindFlow: boolean; showEcoOverlay: boolean; ecoAudit: EcoAuditReportSchema | null; floodProbability: number; floorPlan: any; plotShape: string; plotArea: number; windDir: string; windSpeed: number; windDirectionDeg?: number; sunAzimuthDeg?: number; sunElevationDeg?: number; variantKey: number; algorithmName?: string; convergenceCurve?: number[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const windParticles = useRef<Array<{x:number;y:number;life:number;speed:number;alpha:number}>>([]);
   const windPulseRef = useRef({ burstUntil: 0, nextBurstAt: 0 });
+  const transitionStartRef = useRef<number>(performance.now());
+  const activeAudit = useEco3DStore((s) => s.activeAudit) ?? ecoAudit;
+  const activeRooms = useEco3DStore((s) => s.activeRooms) as unknown as Room[];
+  const activeWalls = useEco3DStore((s) => s.activeWalls) as unknown as Wall[];
+  const activeWindows = useEco3DStore((s) => s.activeWindows) as unknown as WindowEl[];
 
-  // Professional CAD colour palette — white paper background
-  const ROOM_FILL: Record<string, string> = {
-    living:    "rgba(13,200,200,0.10)", bedroom:   "rgba(74,157,232,0.11)", kitchen:   "rgba(44,180,110,0.10)",
-    bathroom:  "rgba(155,114,212,0.11)", office:    "rgba(232,195,58,0.11)", garage:    "rgba(143,160,160,0.10)",
-    utility:   "rgba(224,128,80,0.10)", dining:    "rgba(232,122,58,0.10)", puja_room: "rgba(200,160,32,0.10)",
-  };
-  const ROOM_HATCH: Record<string, boolean> = {
-    bathroom: true, utility: true, garage: true,
-  };
-  const ROOM_LABEL: Record<string, string> = {
-    living:"LIVING ROOM", bedroom:"BEDROOM", kitchen:"KITCHEN",
-    bathroom:"BATHROOM", office:"STUDY/OFFICE", garage:"GARAGE",
-    utility:"UTILITY", dining:"DINING ROOM", puja_room:"PUJA ROOM",
-  };
-
-  const ROOM_STYLE_MAP: Record<string,{bg:string;border:string}> = {
-    living:    {bg:"rgba(13,200,200,0.10)",  border:"#0bc8c8"},
-    bedroom:   {bg:"rgba(74,157,232,0.11)",  border:"#4a9de8"},
-    kitchen:   {bg:"rgba(44,180,110,0.10)",  border:"#2cb46e"},
-    bathroom:  {bg:"rgba(155,114,212,0.11)", border:"#9b72d4"},
-    office:    {bg:"rgba(232,195,58,0.11)",  border:"#e8c33a"},
-    garage:    {bg:"rgba(143,160,160,0.10)", border:"#8fa0a0"},
-    utility:   {bg:"rgba(224,128,80,0.10)",  border:"#e08050"},
-    dining:    {bg:"rgba(232,122,58,0.10)",  border:"#e87a3a"},
-    puja_room: {bg:"rgba(200,160,32,0.10)",  border:"#c8a020"},
-  };
-  const getRoomStyle = (type: string) => {
-    const k = Object.keys(ROOM_STYLE_MAP).find(k =>
+  const getRoomStyle = useCallback((type: string) => {
+    const k = Object.keys(BLUEPRINT_ROOM_STYLE_MAP).find(k =>
       type.toLowerCase().replace("_","").includes(k.replace("_",""))
     );
-    return k ? ROOM_STYLE_MAP[k] : {bg:"rgba(13,242,242,0.06)", border:"#0df2f2"};
-  };
-  const getRoomFill = (type: string) => getRoomStyle(type).bg;
-  const getRoomHatch = (type: string) => {
-    const k = Object.keys(ROOM_HATCH).find(k => type.toLowerCase().replace("_","").includes(k.replace("_","")));
-    return k ? ROOM_HATCH[k] : false;
-  };
-  const getRoomLabel = (type: string) => {
-    const k = Object.keys(ROOM_LABEL).find(k => type.toLowerCase().replace("_","").includes(k.replace("_","")));
-    return k ? ROOM_LABEL[k] : type.replace(/_/g," ").toUpperCase();
-  };
-  const getDisplayLabel = (room: Room) => {
+    return k ? BLUEPRINT_ROOM_STYLE_MAP[k] : {bg:"rgba(13,242,242,0.06)", border:"#0df2f2"};
+  }, []);
+  const getRoomFill = useCallback((type: string) => getRoomStyle(type).bg, [getRoomStyle]);
+  const getRoomHatch = useCallback((type: string) => {
+    const k = Object.keys(BLUEPRINT_ROOM_HATCH_MAP).find(k => type.toLowerCase().replace("_","").includes(k.replace("_","")));
+    return k ? BLUEPRINT_ROOM_HATCH_MAP[k] : false;
+  }, []);
+  const getRoomLabel = useCallback((type: string) => {
+    const k = Object.keys(BLUEPRINT_ROOM_LABEL_MAP).find(k => type.toLowerCase().replace("_","").includes(k.replace("_","")));
+    return k ? BLUEPRINT_ROOM_LABEL_MAP[k] : type.replace(/_/g," ").toUpperCase();
+  }, []);
+  const getDisplayLabel = useCallback((room: Room) => {
     const match = room.id?.match(/_(\d+)$/);
     const base = getRoomLabel(room.type);
     if (match && (room.type.includes("bedroom") || room.type.includes("bathroom"))) {
       return `${base} ${match[1]}`;
     }
     return base;
-  };
-  const getShortLabel = (room: Room) => {
+  }, [getRoomLabel]);
+  const getShortLabel = useCallback((room: Room) => {
     const label = getDisplayLabel(room);
     if (label.includes("LIVING")) return "LIVING";
     if (label.includes("DINING")) return "DINING";
@@ -612,15 +1411,15 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
     if (label.includes("GARAGE")) return "GARAGE";
     if (label.includes("PUJA")) return "PUJA";
     return label;
-  };
-  const parseWindowWall = (wallId: string) => {
+  }, [getDisplayLabel]);
+  const parseWindowWall = useCallback((wallId: string) => {
     const parts = wallId.split("_");
     if (parts[parts.length - 1] === "vent") {
       return { roomId: parts.slice(0, -2).join("_"), edge: parts[parts.length - 2], isVent: true };
     }
     return { roomId: parts.slice(0, -1).join("_"), edge: parts[parts.length - 1], isVent: false };
-  };
-  const drawFurniture = (ctx: CanvasRenderingContext2D, room: Room, rx: number, ry: number, rw: number, rh: number, color: string) => {
+  }, []);
+  const drawFurniture = useCallback((ctx: CanvasRenderingContext2D, room: Room, rx: number, ry: number, rw: number, rh: number, color: string) => {
     if (rw < 34 || rh < 24) return;
     const cx = rx + rw / 2;
     const cy = ry + rh / 2;
@@ -676,9 +1475,13 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
       ctx.beginPath(); ctx.moveTo(cx - 15, cy - 10); ctx.lineTo(cx, cy - 18); ctx.lineTo(cx + 15, cy - 10); ctx.stroke();
     }
     ctx.restore();
-  };
+  }, []);
 
   const windVec = useMemo(() => getWindProfile(windDir, windSpeed, windDirectionDeg), [windDir, windSpeed, windDirectionDeg]);
+
+  useEffect(() => {
+    transitionStartRef.current = performance.now();
+  }, [variantKey]);
 
   useEffect(() => {
     windParticles.current = [];
@@ -707,10 +1510,14 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
     for (let gx=0; gx<W; gx+=GRID*5) { ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke(); }
     for (let gy=0; gy<H; gy+=GRID*5) { ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke(); }
 
-    const floor1 = rooms.filter(r => (r.floor??1)===1);
-    const floorWalls = walls.filter(w => (w.floor??1)===1);
+    const renderedRooms = activeRooms.length > 0 ? activeRooms : rooms;
+    const renderedWalls = activeWalls.length > 0 ? activeWalls : walls;
+    const renderedWindows = activeWindows.length > 0 ? activeWindows : windows;
+
+    const floor1 = renderedRooms.filter(r => (r.floor??1)===1);
+    const floorWalls = renderedWalls.filter(w => (w.floor??1)===1);
     const floorDoors = doors.filter(d => (d.floor??1)===1);
-    const floorWindows = windows.filter(w => (w.floor??1)===1);
+    const floorWindows = renderedWindows.filter(w => (w.floor??1)===1);
 
     if (floor1.length === 0) {
       ctx.fillStyle = "#0df2f2"; ctx.font = "bold 15px 'Space Grotesk', sans-serif";
@@ -776,7 +1583,21 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
       ctx.restore();
     }
 
+    const fadeAlpha = Math.max(0, Math.min(1, (performance.now() - transitionStartRef.current) / 400));
+
+    if (algorithmName) {
+      ctx.save();
+      ctx.textAlign = "right";
+      ctx.textBaseline = "top";
+      ctx.font = "bold 12px monospace";
+      ctx.fillStyle = "rgba(0,220,255,0.4)";
+      ctx.fillText(algorithmName.toUpperCase(), W - 14, 12);
+      ctx.restore();
+    }
+
     // ── PASS 1: Room fills ──
+    ctx.save();
+    ctx.globalAlpha = fadeAlpha;
     floor1.forEach(room => {
       const rx=px(room.x), ry=py(room.y), rw=ps(room.width), rh=ps(room.height);
       ctx.fillStyle = getRoomFill(room.type);
@@ -793,6 +1614,7 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
         ctx.restore();
       }
     });
+    ctx.restore();
 
     // ── PASS 2: Walls (thick architectural style) ──
     const EXT_WALL = Math.max(8, ps(0.23));
@@ -1114,6 +1936,228 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
       ctx.fillText(`WIND ${windVec.label} · ${windVec.speed.toFixed(1)} M/S`, offX+4, offY-8);
     }
 
+    // ── ECO Overlay (additive layer) ──
+    if (showEcoOverlay) {
+      const audit = activeAudit;
+      if (audit) {
+        const criterion = (id: number) => (audit.criteria ?? []).find((item) => item.criterion_id === id);
+        const HABITABLE = ["living", "dining", "bedroom", "office"];
+
+        const drawVentilationPaths = () => {
+          floor1
+            .filter((room) => HABITABLE.includes(room.type))
+            .forEach((room) => {
+              const cx = px(room.x + room.width / 2);
+              const cy = py(room.y + room.height / 2);
+              const len = Math.min(room.width, room.height) * 0.8;
+              ctx.save();
+              ctx.strokeStyle = "rgba(0,200,255,0.55)";
+              ctx.lineWidth = 1.5;
+              ctx.setLineDash([8, 4]);
+              ctx.beginPath();
+              ctx.moveTo((cx - windVec.x * len * 0.5), (cy - windVec.y * len * 0.5));
+              ctx.lineTo((cx + windVec.x * len * 0.5), (cy + windVec.y * len * 0.5));
+              ctx.stroke();
+              ctx.restore();
+            });
+        };
+
+        const solar = criterion(1);
+        if (solar) {
+          const solarPassed = !!solar.passed;
+          const bearing = lat >= 0 ? 180 : 0;
+          const rad = (bearing - 90) * Math.PI / 180;
+          floor1
+            .filter((room) => HABITABLE.includes(room.type))
+            .forEach((room) => {
+              const cx = px(room.x + room.width / 2);
+              const cy = py(room.y + room.height / 2);
+              const scaleArrow = Math.min(ps(room.width), ps(room.height)) * 0.3;
+              if (solarPassed) {
+                const tx = cx + Math.cos(rad) * scaleArrow;
+                const ty = cy + Math.sin(rad) * scaleArrow;
+                ctx.strokeStyle = "rgba(255,200,0,0.80)";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(tx, ty);
+                ctx.stroke();
+                const ah = 6;
+                ctx.fillStyle = "rgba(255,200,0,0.80)";
+                ctx.beginPath();
+                ctx.moveTo(tx, ty);
+                ctx.lineTo(tx - ah * Math.cos(rad - 0.4), ty - ah * Math.sin(rad - 0.4));
+                ctx.lineTo(tx - ah * Math.cos(rad + 0.4), ty - ah * Math.sin(rad + 0.4));
+                ctx.closePath();
+                ctx.fill();
+              } else {
+                const s = scaleArrow * 0.5;
+                ctx.strokeStyle = "rgba(255,60,60,0.80)";
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.moveTo(cx - s, cy - s);
+                ctx.lineTo(cx + s, cy + s);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx + s, cy - s);
+                ctx.lineTo(cx - s, cy + s);
+                ctx.stroke();
+              }
+            });
+        }
+
+        const vent = criterion(2);
+        if (vent && vent.passed) {
+          drawVentilationPaths();
+        } else if (vent && !vent.passed) {
+          const failRooms = extractFailedRooms(vent.findings ?? [], floor1.filter((room) => HABITABLE.includes(room.type)));
+          failRooms.forEach((room) => {
+            const cx = px(room.x + room.width / 2);
+            const cy = py(room.y + room.height / 2);
+            ctx.strokeStyle = "rgba(255,165,0,0.75)";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = "rgba(255,165,0,0.90)";
+            ctx.font = "bold 12px monospace";
+            ctx.textAlign = "center";
+            ctx.fillText("!", cx, cy + 4);
+          });
+        }
+
+        const flood = criterion(5);
+        if (flood && !flood.passed) {
+          floor1
+            .filter((room) => room.floor === 1 && HABITABLE.includes(room.type))
+            .forEach((room) => {
+              const rx = px(room.x);
+              const ry = py(room.y);
+              const rw = ps(room.width);
+              const rh = ps(room.height);
+              ctx.save();
+              ctx.beginPath();
+              ctx.rect(rx, ry, rw, rh);
+              ctx.clip();
+              ctx.strokeStyle = "rgba(255,100,0,0.10)";
+              ctx.lineWidth = 1;
+              const spacing = Math.max(4, ps(1.5));
+              for (let d = -rh; d < rw + rh; d += spacing) {
+                ctx.beginPath();
+                ctx.moveTo(rx + d, ry + rh);
+                ctx.lineTo(rx + d + rh, ry);
+                ctx.stroke();
+              }
+              ctx.restore();
+              ctx.fillStyle = "rgba(255,100,0,0.65)";
+              ctx.font = `bold ${Math.max(8, ps(0.25))}px monospace`;
+              ctx.textAlign = "center";
+              ctx.fillText("FLOOD RISK", rx + rw / 2, ry + rh / 2);
+            });
+        }
+
+        const treesCriterion = criterion(7);
+        if (treesCriterion && trees.length > 0) {
+          const lats = trees.map((t) => t.lat);
+          const lons = trees.map((t) => t.lon);
+          const latMin = Math.min(...lats);
+          const latMax = Math.max(...lats);
+          const lonMin = Math.min(...lons);
+          const lonMax = Math.max(...lons);
+          const latSpan = Math.max(1e-6, latMax - latMin);
+          const lonSpan = Math.max(1e-6, lonMax - lonMin);
+
+          trees.forEach((tree) => {
+            const nx = (tree.lon - lonMin) / lonSpan;
+            const ny = (tree.lat - latMin) / latSpan;
+            const tx = offX + nx * bw;
+            const ty = offY + (1 - ny) * bh;
+            const lx = minX + nx * (maxX - minX);
+            const ly = minY + (1 - ny) * (maxY - minY);
+            const radiusPx = Math.max(6, ps((tree as any).radius_m ?? 1.8));
+
+            const conflict = floor1.some((room) => {
+              const rx0 = room.x;
+              const rx1 = room.x + room.width;
+              const ry0 = room.y;
+              const ry1 = room.y + room.height;
+              const cx = Math.max(rx0, Math.min(lx, rx1));
+              const cy = Math.max(ry0, Math.min(ly, ry1));
+              return ((lx - cx) ** 2 + (ly - cy) ** 2) <= (((tree as any).radius_m ?? 1.8) ** 2);
+            });
+
+            if (conflict) {
+              ctx.strokeStyle = "rgba(255,60,60,0.85)";
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(tx, ty, radiusPx, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.fillStyle = "rgba(255,60,60,0.2)";
+              ctx.fill();
+            } else {
+              ctx.strokeStyle = "rgba(40,220,100,0.55)";
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.arc(tx, ty, radiusPx, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+          });
+        }
+
+        floor1.forEach((room) => {
+          const bx = px(room.x + room.width - 0.3);
+          const by = py(room.y + 0.1);
+          const roomPasses = doesRoomPassAllApplicableCriteria(room, audit);
+          ctx.fillStyle = roomPasses ? "rgba(34,197,94,0.9)" : "rgba(239,68,68,0.9)";
+          ctx.font = "bold 10px monospace";
+          ctx.textAlign = "right";
+          ctx.fillText(roomPasses ? "✓" : "✗", bx, by + 10);
+        });
+      }
+    }
+
+    // ── Convergence sparkline (active algorithm) ──
+    const curve = (convergenceCurve ?? []).slice();
+    const sparkX = 14;
+    const sparkY = H - 72;
+    const sparkW = 60;
+    const sparkH = 20;
+    ctx.fillStyle = "rgba(10,24,28,0.85)";
+    ctx.strokeStyle = "rgba(0,220,255,0.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(sparkX - 4, sparkY - 12, sparkW + 8, sparkH + 20, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "rgba(0,220,255,0.7)";
+    ctx.font = "bold 7px monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("CONV", sparkX - 2, sparkY - 4);
+
+    if (curve.length > 1) {
+      const minV = Math.min(...curve);
+      const maxV = Math.max(...curve);
+      const span = Math.max(1e-6, maxV - minV);
+      ctx.strokeStyle = "rgba(0,220,255,0.95)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      curve.forEach((value, idx) => {
+        const x = sparkX + (idx / (curve.length - 1)) * sparkW;
+        const y = sparkY + sparkH - ((value - minV) / span) * sparkH;
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = "rgba(0,220,255,0.35)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(sparkX, sparkY + sparkH * 0.6);
+      ctx.lineTo(sparkX + sparkW, sparkY + sparkH * 0.6);
+      ctx.stroke();
+    }
+
     // ── PASS 8: Professional title block ──
     const TB_H = 38; const TB_Y = H-TB_H;
     ctx.fillStyle="rgba(8,14,14,0.96)"; ctx.fillRect(0,TB_Y,W,TB_H);
@@ -1163,14 +2207,21 @@ function BlueprintCanvas({ rooms, walls, doors, windows, trees, lat, lon, zoom, 
     ctx.fillRect(sbX+sbPx/2-1,sbY-2,2,7);
     ctx.fillText(`${scaleBarM/2}m`,sbX+sbPx/2-6,sbY-4);
 
-  }, [rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, plotShape, plotArea, windDir, windVec, getRoomStyle, getRoomFill, getRoomHatch, getRoomLabel, getDisplayLabel, getShortLabel, parseWindowWall, drawFurniture, sunAzimuthDeg, sunElevationDeg]);
+  }, [rooms, walls, doors, windows, trees, lat, lon, zoom, showSolarPath, showWindFlow, showEcoOverlay, ecoAudit, activeAudit, activeRooms, activeWalls, activeWindows, floodProbability, plotShape, plotArea, windVec, windDir, windDirectionDeg, getRoomStyle, getRoomFill, getRoomHatch, getDisplayLabel, getShortLabel, parseWindowWall, drawFurniture, sunAzimuthDeg, sunElevationDeg, algorithmName, convergenceCurve]);
 
   useEffect(() => {
     let running = true;
-    const loop = () => { if(!running) return; draw(); animRef.current = requestAnimationFrame(loop); };
+    const loop = () => {
+      if (!running) return;
+      draw();
+      const inFade = performance.now() - transitionStartRef.current < 420;
+      if (showWindFlow || showSolarPath || inFade) {
+        animRef.current = requestAnimationFrame(loop);
+      }
+    };
     animRef.current = requestAnimationFrame(loop);
     return () => { running = false; cancelAnimationFrame(animRef.current); };
-  }, [draw]);
+  }, [draw, showWindFlow, showSolarPath, variantKey, activeAudit, activeRooms, activeWalls, activeWindows]);
 
   return <canvas ref={canvasRef} className="w-full h-full" style={{ display: "block" }} />;
 }
@@ -1179,6 +2230,7 @@ export default function AnalysisPage() {
   const params = useParams(); const router = useRouter();
   const plotId = params.id as string;
   const floorPlanRequestRef = useRef(0);
+  const areaEditedRef = useRef(false);
 
   const [houseType, setHouseType] = useState("Eco-Villa (Single Story)");
   const [generationMethod, setGenerationMethod] = useState<"deterministic" | "ga">("deterministic");
@@ -1192,9 +2244,12 @@ export default function AnalysisPage() {
   const [sustPrio, setSustPrio] = useState(true);
   const [showSolar, setShowSolar] = useState(true);
   const [showWind, setShowWind] = useState(true);
+  const [showEcoOverlay, setShowEcoOverlay] = useState(true);
+  const [rightPanelTab, setRightPanelTab] = useState<"eco" | "insights">("eco");
   const [zoom, setZoom] = useState(14);
   const [generating, setGenerating] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [expandedVariantIndex, setExpandedVariantIndex] = useState<number | null>(null);
 
   // Room preference state
   const [numBedrooms, setNumBedrooms] = useState(2);
@@ -1213,8 +2268,10 @@ export default function AnalysisPage() {
 
   const {
     analysis, floorPlan, selectedLat, selectedLon,
-    setFloorPlan, setFloorPlanVariants, setActiveVariantIndex,
-    floorPlanVariants, activeVariantIndex, setGeneratingFloorPlan, selectedPlotArea,
+    setFloorPlan, setFloorPlanVariants, setActiveVariantIndex, setActiveIterationIndex,
+    floorPlanVariants, activeVariantIndex, selectedAlgorithm,
+    activeIterationIndex, activeAudit, activeRooms, activeWalls, activeWindows,
+    setGeneratingFloorPlan, selectedPlotArea,
   } = useEco3DStore();
   const lat = selectedLat ?? 34.0522;
   const lon = selectedLon ?? -118.2437;
@@ -1252,13 +2309,22 @@ export default function AnalysisPage() {
 
   // Active variant rooms (carousel drives what's displayed)
   const activeVariant = floorPlanVariants[activeVariantIndex] ?? null;
-  const rooms = activeVariant?.layout ?? floorPlan?.layout ?? [];
-  const walls = activeVariant?.walls ?? floorPlan?.walls ?? [];
+  const iterationHistory = floorPlan?.iteration_history ?? null;
+  const rooms = (activeRooms as unknown as Room[]).length > 0
+    ? (activeRooms as unknown as Room[])
+    : (activeVariant?.layout ?? floorPlan?.layout ?? []);
+  const walls = (activeWalls as unknown as Wall[]).length > 0
+    ? (activeWalls as unknown as Wall[])
+    : (activeVariant?.walls ?? floorPlan?.walls ?? []);
   const doors = activeVariant?.doors ?? floorPlan?.doors ?? [];
-  const windows = activeVariant?.windows ?? floorPlan?.windows ?? [];
+  const windows = (activeWindows as unknown as WindowEl[]).length > 0
+    ? (activeWindows as unknown as WindowEl[])
+    : (activeVariant?.windows ?? floorPlan?.windows ?? []);
   const trees = analysis?.tree_coordinates?.slice(0,4) ?? [];
-  const ecoScore = activeVariant
-    ? Math.round(activeVariant.fitness_score * 100)
+  const ecoScore = activeAudit
+    ? Math.round(activeAudit.composite_eco_score)
+    : activeVariant
+    ? Math.round((activeVariant.eco_score ?? activeVariant.fitness_score) * 100)
     : floorPlan ? Math.round(floorPlan.fitness_score * 100)
     : (analysis ? Math.round(analysis.buildability_score) : 71);
   const solarPct = activeVariant
@@ -1267,7 +2333,20 @@ export default function AnalysisPage() {
   const ventPct = activeVariant
     ? Math.round(activeVariant.ventilation_score * 100)
     : floorPlan ? Math.round(floorPlan.ventilation_score * 100) : 95;
+  const structPct = activeVariant
+    ? Math.round((activeVariant.structural_score ?? 0) * 100)
+    : floorPlan ? Math.round((floorPlan.structural_score ?? 0) * 100) : 80;
+  const floodPct = activeVariant
+    ? Math.round((activeVariant.flood_score ?? 0) * 100)
+    : floorPlan ? Math.round((floorPlan.flood_score ?? 0) * 100) : 78;
+  const treePct = activeVariant
+    ? Math.round((activeVariant.tree_score ?? 0) * 100)
+    : floorPlan ? Math.round((floorPlan.tree_score ?? 0) * 100) : 74;
   const treeDist = floorPlan?.tree_preserved_count ?? 0;
+  const activeAlgorithm = activeVariant?.algorithm ?? selectedAlgorithm ?? "Deterministic";
+  const activeConvergence = activeVariant?.convergence_curve ?? [];
+  const expandedVariant = expandedVariantIndex !== null ? floorPlanVariants[expandedVariantIndex] ?? null : null;
+  const floodProbability = analysis?.flood_probability ?? 0;
   const isLiveEnvReady = liveEnv !== null;
   const windDir = liveEnv?.windDirectionCardinal ?? "—";
   const windSpeed = liveEnv?.windSpeedMs ?? 0;
@@ -1289,10 +2368,22 @@ export default function AnalysisPage() {
   const area = areaInSqm;
 
   useEffect(() => {
-    if (!selectedPlotArea || selectedPlotArea <= 0) return;
+    areaEditedRef.current = false;
+  }, [plotId]);
+
+  useEffect(() => {
+    if (!selectedPlotArea || selectedPlotArea <= 0 || areaEditedRef.current) return;
+    const suggested = recommendFloorAreaFromPlot(selectedPlotArea, numFloors);
     setAreaUnit("sqm");
-    setTargetArea(String(Math.round(selectedPlotArea)));
-  }, [selectedPlotArea, plotId]);
+    setTargetArea(String(suggested));
+  }, [selectedPlotArea, plotId, numFloors]);
+
+  useEffect(() => {
+    if (expandedVariantIndex === null) return;
+    if (expandedVariantIndex >= floorPlanVariants.length) {
+      setExpandedVariantIndex(null);
+    }
+  }, [expandedVariantIndex, floorPlanVariants.length]);
 
   const limits = useMemo(() => computeRoomLimits(area), [area]);
 
@@ -1301,6 +2392,10 @@ export default function AnalysisPage() {
     const t = `${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")}:${String(n.getSeconds()).padStart(2,"0")}`;
     setLogs(prev => [{ time: t, msg }, ...prev].slice(0, 8));
   };
+
+  const selectIterationSnapshot = useCallback((iterationIndex: number) => {
+    setActiveIterationIndex(iterationIndex);
+  }, [setActiveIterationIndex]);
 
   const handleRegenerate = async (shapeOverride?: string) => {
     const requestedShape = shapeOverride ?? plotShape;
@@ -1334,9 +2429,11 @@ export default function AnalysisPage() {
       const bestIdx  = fp.best_variant_index ?? 0;
       if (variants.length > 0) {
         setFloorPlanVariants(variants, bestIdx);
+        setExpandedVariantIndex(null);
         addLog(`✓ ${variants.length} variants generated — best: "${variants[bestIdx]?.style}"`);
         addLog(`Solar: ${Math.round((variants[bestIdx]?.solar_score??0)*100)}% · Vent: ${Math.round((variants[bestIdx]?.ventilation_score??0)*100)}% · Area: ${variants[bestIdx]?.total_area?.toFixed(0)} m²`);
       } else {
+        setFloorPlanVariants([], 0);
         addLog(`✓ ${fp.layout.length} rooms — fitness ${(fp.fitness_score*100).toFixed(0)}%`);
       }
       setGeneratingFloorPlan(false);
@@ -1351,6 +2448,7 @@ export default function AnalysisPage() {
   useEffect(() => {
     if (!plotId || !analysis) return;
     setActiveVariantIndex(0);
+    setExpandedVariantIndex(null);
     handleRegenerate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plotId, analysis, plotShape, houseType, generationMethod, layoutMode]);
@@ -1517,7 +2615,7 @@ export default function AnalysisPage() {
                         ))}
                       </div>
                     </div>
-                    <input type="number" value={targetArea} onChange={e => setTargetArea(e.target.value)}
+                    <input type="number" value={targetArea} onChange={e => { areaEditedRef.current = true; setTargetArea(e.target.value); }}
                       className="w-full glm rounded-lg px-3 py-2.5 text-[12px] text-white focus:outline-none"
                       style={{ background: "rgba(13,242,242,0.04)" }} />
                     <div className="text-[9px] text-slate-500 mt-1">
@@ -1662,46 +2760,95 @@ export default function AnalysisPage() {
 
             {/* ── Variant carousel ── */}
             {floorPlanVariants.length > 0 && (
-              <div style={{ flexShrink:0, background:"rgba(8,14,14,0.98)", borderBottom:"1px solid rgba(255,255,255,0.05)", padding:"10px 16px", display:"flex", alignItems:"center", gap:12 }}>
-                <button
-                  onClick={() => setActiveVariantIndex(Math.max(0, activeVariantIndex - 1))}
-                  disabled={activeVariantIndex === 0}
-                  style={{ width:30, height:30, borderRadius:8, border:"1px solid rgba(13,242,242,0.2)", background:"transparent", color: activeVariantIndex===0?"#334155":"#0df2f2", cursor: activeVariantIndex===0?"not-allowed":"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}
-                >
-                  <span className="material-symbols-outlined" style={{fontSize:18}}>chevron_left</span>
-                </button>
+              <div style={{ flexShrink:0, background:"rgba(8,14,14,0.98)", borderBottom:"1px solid rgba(255,255,255,0.05)", padding:"8px 14px" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                  <button
+                    onClick={() => {
+                      const nextIdx = Math.max(0, activeVariantIndex - 1);
+                      setActiveVariantIndex(nextIdx);
+                      if (expandedVariantIndex !== null) setExpandedVariantIndex(nextIdx);
+                    }}
+                    disabled={activeVariantIndex === 0}
+                    style={{ width:28, height:28, borderRadius:8, border:"1px solid rgba(13,242,242,0.2)", background:"transparent", color: activeVariantIndex===0?"#334155":"#0df2f2", cursor: activeVariantIndex===0?"not-allowed":"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}
+                  >
+                    <span className="material-symbols-outlined" style={{fontSize:18}}>chevron_left</span>
+                  </button>
 
-                <div style={{ flex:1, display:"flex", gap:8, overflowX:"auto" }}>
-                  {floorPlanVariants.map((v, i) => (
-                    <button key={v.id} onClick={() => setActiveVariantIndex(i)}
-                      style={{
-                        flexShrink:0, padding:"6px 14px", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer",
-                        border:`1px solid ${i===activeVariantIndex ? "#0df2f2" : "rgba(255,255,255,0.08)"}`,
-                        background: i===activeVariantIndex ? "rgba(13,242,242,0.12)" : "transparent",
-                        color: i===activeVariantIndex ? "#0df2f2" : "#64748b",
-                        display:"flex", flexDirection:"column", alignItems:"center", gap:2, minWidth:100,
-                      }}
-                    >
-                      <span style={{textTransform:"uppercase",letterSpacing:"0.08em"}}>{v.style}</span>
-                      <span style={{fontFamily:"monospace", fontSize:9, color: i===activeVariantIndex?"rgba(13,242,242,0.7)":"#334155"}}>
-                        ECO {Math.round((v.eco_score ?? v.fitness_score)*100)}% · {v.total_area.toFixed(0)}m²
+                  <div style={{ flex:1, display:"flex", gap:8, overflowX:"auto", paddingBottom:1 }}>
+                    {floorPlanVariants.map((v, i) => {
+                      const eco = Math.round((v.eco_score ?? v.fitness_score) * 100);
+                      const isExpanded = expandedVariantIndex === i;
+                      return (
+                        <button
+                          key={v.id}
+                          onClick={() => {
+                            setActiveVariantIndex(i);
+                            setExpandedVariantIndex(prev => prev === i ? null : i);
+                          }}
+                          style={{
+                            flexShrink:0,
+                            padding:"7px 10px",
+                            borderRadius:8,
+                            fontSize:10,
+                            cursor:"pointer",
+                            border:`1px solid ${i===activeVariantIndex ? "#0df2f2" : "rgba(255,255,255,0.08)"}`,
+                            background: i===activeVariantIndex ? "rgba(13,242,242,0.10)" : "rgba(255,255,255,0.02)",
+                            color: i===activeVariantIndex ? "#d8feff" : "#64748b",
+                            textAlign:"left",
+                            minWidth:140,
+                          }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-[8px] uppercase tracking-[0.08em] text-cyan-300">{v.algorithm}</span>
+                            {v.is_best && <span className="text-[9px] text-amber-300">★</span>}
+                          </div>
+                          <div className="mt-1 text-[11px] font-bold text-white">ECO {eco}%</div>
+                          <div className="mt-0.5 text-[9px] text-slate-400">
+                            {v.total_area.toFixed(0)} m² · S {Math.round((v.solar_score ?? 0) * 100)}% · V {Math.round((v.ventilation_score ?? 0) * 100)}%
+                          </div>
+                          <div className="mt-1 text-[8px] uppercase tracking-[0.14em]" style={{ color: isExpanded ? "#22c55e" : "#64748b" }}>
+                            {isExpanded ? "Collapse" : "Expand"}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      const nextIdx = Math.min(floorPlanVariants.length-1, activeVariantIndex+1);
+                      setActiveVariantIndex(nextIdx);
+                      if (expandedVariantIndex !== null) setExpandedVariantIndex(nextIdx);
+                    }}
+                    disabled={activeVariantIndex === floorPlanVariants.length-1}
+                    style={{ width:28, height:28, borderRadius:8, border:"1px solid rgba(13,242,242,0.2)", background:"transparent", color: activeVariantIndex===floorPlanVariants.length-1?"#334155":"#0df2f2", cursor: activeVariantIndex===floorPlanVariants.length-1?"not-allowed":"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}
+                  >
+                    <span className="material-symbols-outlined" style={{fontSize:18}}>chevron_right</span>
+                  </button>
+
+                  <div style={{flexShrink:0, borderLeft:"1px solid rgba(255,255,255,0.06)", paddingLeft:10, fontSize:10, color:"#475569", fontFamily:"monospace"}}>
+                    {activeVariantIndex+1} / {floorPlanVariants.length}
+                  </div>
+                </div>
+
+                {expandedVariant && (
+                  <div className="mt-2 gl rounded-lg px-3 py-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-cyan-300">
+                        [{expandedVariant.algorithm}] {expandedVariant.style}
                       </span>
-                      {v.is_best && <span style={{fontSize:8, color:"#fbbf24", textTransform:"uppercase", letterSpacing:"0.1em"}}>★ Best</span>}
-                    </button>
-                  ))}
-                </div>
-
-                <button
-                  onClick={() => setActiveVariantIndex(Math.min(floorPlanVariants.length-1, activeVariantIndex+1))}
-                  disabled={activeVariantIndex === floorPlanVariants.length-1}
-                  style={{ width:30, height:30, borderRadius:8, border:"1px solid rgba(13,242,242,0.2)", background:"transparent", color: activeVariantIndex===floorPlanVariants.length-1?"#334155":"#0df2f2", cursor: activeVariantIndex===floorPlanVariants.length-1?"not-allowed":"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}
-                >
-                  <span className="material-symbols-outlined" style={{fontSize:18}}>chevron_right</span>
-                </button>
-
-                <div style={{flexShrink:0, borderLeft:"1px solid rgba(255,255,255,0.06)", paddingLeft:12, fontSize:10, color:"#475569", fontFamily:"monospace"}}>
-                  {activeVariantIndex+1} / {floorPlanVariants.length}
-                </div>
+                      <span className="text-[10px] text-slate-400">{expandedVariant.total_area.toFixed(0)} m²</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <AnimatedScoreBar label="Solar" value={Math.round((expandedVariant.solar_score ?? 0) * 100)} active />
+                      <AnimatedScoreBar label="Vent" value={Math.round((expandedVariant.ventilation_score ?? 0) * 100)} active />
+                      <AnimatedScoreBar label="Struct" value={Math.round((expandedVariant.structural_score ?? 0) * 100)} active />
+                      <AnimatedScoreBar label="Flood" value={Math.round((expandedVariant.flood_score ?? 0) * 100)} active />
+                      <AnimatedScoreBar label="Tree" value={Math.round((expandedVariant.tree_score ?? 0) * 100)} active />
+                      <AnimatedScoreBar label="Eco" value={Math.round((expandedVariant.eco_score ?? expandedVariant.fitness_score ?? 0) * 100)} active />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1735,9 +2882,18 @@ export default function AnalysisPage() {
             </div>
             <div className="flex-1 relative overflow-hidden">
               <BlueprintCanvas rooms={rooms} walls={walls} doors={doors} windows={windows} trees={trees} lat={lat} lon={lon} zoom={zoom}
-                showSolarPath={showSolar && isLiveEnvReady} showWindFlow={showWind && isLiveEnvReady} floorPlan={floorPlan}
+                showSolarPath={showSolar && isLiveEnvReady}
+                showWindFlow={showWind && isLiveEnvReady}
+                showEcoOverlay={showEcoOverlay && rightPanelTab === "eco"}
+                ecoAudit={activeAudit}
+                floodProbability={floodProbability}
+                floorPlan={floorPlan}
                 plotShape={plotShape} plotArea={area} windDir={windDir} windSpeed={windSpeed} windDirectionDeg={windDirectionDeg}
-                sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg} />
+                sunAzimuthDeg={sunAzimuthDeg} sunElevationDeg={sunElevationDeg}
+                variantKey={activeVariantIndex}
+                algorithmName={activeAlgorithm}
+                convergenceCurve={activeConvergence}
+              />
               <div className="absolute top-3 right-3 flex flex-col gap-1">
                 {[{i:"add",a:()=>setZoom(z=>Math.min(z+2,32))},{i:"remove",a:()=>setZoom(z=>Math.max(z-2,6))},{i:"center_focus_strong",a:()=>setZoom(14)}].map(({i,a}) => (
                   <button key={i} onClick={a} className="w-9 h-9 rounded-lg flex items-center justify-center hover:text-primary transition-all text-slate-600 border border-slate-300/20 bg-white/5">
@@ -1762,7 +2918,11 @@ export default function AnalysisPage() {
                 >
                   SUN POSITION: {sunPositionLabel}
                 </div>
-                {[{l:"Solar",on:showSolar,s:setShowSolar,c:"#e88c00"},{l:"Wind",on:showWind,s:setShowWind,c:"#3b82f6"}].map(({l,on,s,c}) => (
+                {[
+                  {l:"Solar",on:showSolar,s:setShowSolar,c:"#e88c00"},
+                  {l:"Wind",on:showWind,s:setShowWind,c:"#3b82f6"},
+                  {l:"ECO OVERLAY",on:showEcoOverlay,s:setShowEcoOverlay,c:"#22c55e"},
+                ].map(({l,on,s,c}) => (
                   <button key={l} onClick={() => s(!on)} className="px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wide transition-all"
                     style={{background:on?`${c}22`:"rgba(8,14,14,0.85)",border:`1px solid ${on?c:"rgba(13,242,242,0.15)"}`,color:on?c:"rgba(13,242,242,0.5)",fontSize:9,padding:"3px 8px"}}>{ l}</button>
                 ))}
@@ -1797,117 +2957,99 @@ export default function AnalysisPage() {
 
           {/* ── RIGHT PANEL ── */}
           <aside className="w-80 flex-shrink-0 flex flex-col overflow-y-auto" style={{ background: "rgba(6,12,12,0.98)" }}>
-            <div className="p-4 flex flex-col gap-5 flex-1">
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary mb-4">Efficiency HUD</div>
-                <div className="flex justify-center mb-4"><EcoScoreRing score={ecoScore} /></div>
-                <EffBar label="Solar Gain" value={solarPct} status={solarPct > 80 ? "High" : "Medium"} color="#f59e0b" />
-                <EffBar label="Wind Ventilation" value={ventPct} status={ventPct > 80 ? "Optimized" : "Moderate"} color="#0df2f2" />
-                <EffBar label="Tree Preservation" value={treeDist === 0 ? 100 : 100 - treeDist * 5} status={treeDist === 0 ? "Full" : `${treeDist} trees`} color="#2ecc71" />
+            <div className="p-4 flex h-full flex-col gap-4">
+              <div className="rounded-lg border border-white/10 bg-black/20 p-1">
+                <div className="grid grid-cols-2 gap-1">
+                  {[
+                    { key: "eco", label: "Eco Audit" },
+                    { key: "insights", label: "Insights" },
+                  ].map((tab) => (
+                    <button
+                      key={tab.key}
+                      onClick={() => setRightPanelTab(tab.key as "eco" | "insights")}
+                      className={`rounded-md px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] transition-all ${
+                        rightPanelTab === tab.key
+                          ? "bg-cyan-400/20 text-cyan-200 border border-cyan-300/40"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="h-px bg-white/5" />
-              <div className="flex-1">
-                <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary mb-3">Technical Logs</div>
-                {logs.map((log, i) => (
-                  <div key={i} className="flex gap-3 py-2 border-b border-white/5">
-                    <span className="text-[10px] font-mono text-primary/50 flex-shrink-0">{log.time}</span>
-                    <span className="text-[11px] text-slate-300 leading-relaxed">{log.msg}</span>
-                  </div>
-                ))}
-              </div>
-              {analysis && (
-                <div className="glm p-3 rounded-lg space-y-3">
-                  {/* ── Core scores ── */}
-                  <div>
-                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Plot Scores</div>
-                    {[
-                      { k: "Buildability",  v: `${analysis.buildability_score.toFixed(0)} / 100` },
-                      { k: "Flood Risk",    v: `${(analysis.flood_probability * 100).toFixed(0)}%` },
-                    ].map(({ k, v }) => (
-                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
-                        <span className="text-[10px] text-slate-500">{k}</span>
-                        <span className="text-[10px] font-mono text-slate-200">{v}</span>
-                      </div>
-                    ))}
-                  </div>
 
-                  {/* ── Topography ── */}
+              {rightPanelTab === "eco" ? (
+                <>
+                  <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+                    <EcoReportPanel />
+                    <IterationTimeline
+                      history={iterationHistory}
+                      isLoading={generating}
+                      onSelectIteration={selectIterationSnapshot}
+                      activeIterationIndex={activeIterationIndex}
+                    />
+                  </div>
+                  <button onClick={() => router.push(`/report/${plotId}`)} className="w-full py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-primary/10 transition-all" style={{border:"1px solid #0df2f2",color:"#0df2f2"}}>
+                    <span className="material-symbols-outlined text-sm">assessment</span>View Detailed Report
+                  </button>
+                </>
+              ) : (
+                <div className="flex flex-1 flex-col gap-5 overflow-y-auto pr-1">
                   <div>
-                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Topography</div>
-                    {[
-                      { k: "Elevation",    v: `${analysis.environmental.elevation.toFixed(0)} m` },
-                      { k: "Slope",        v: `${analysis.environmental.slope?.toFixed(1) ?? "—"}°` },
-                      { k: "Dist. Water",  v: analysis.environmental.distance_to_water_m ? `${(analysis.environmental.distance_to_water_m as number).toFixed(0)} m` : "—" },
-                    ].map(({ k, v }) => (
-                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
-                        <span className="text-[10px] text-slate-500">{k}</span>
-                        <span className="text-[10px] font-mono text-slate-200">{v}</span>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary mb-4">Efficiency HUD</div>
+                    <div className="flex justify-center mb-4"><EcoScoreRing score={ecoScore} /></div>
+                    <EffBar label="Solar Gain" value={solarPct} status={solarPct > 80 ? "High" : "Medium"} color="#f59e0b" />
+                    <EffBar label="Wind Ventilation" value={ventPct} status={ventPct > 80 ? "Optimized" : "Moderate"} color="#0df2f2" />
+                    <EffBar label="Structural Integrity" value={structPct} status={structPct > 80 ? "Stable" : "Check"} color="#22c55e" />
+                    <EffBar label="Flood Safety" value={floodPct} status={floodPct > 80 ? "Low Risk" : "Elevate"} color="#38bdf8" />
+                    <EffBar label="Tree Preservation" value={treePct} status={treeDist === 0 ? "Full" : `${treeDist} trees`} color="#2ecc71" />
+                  </div>
+                  <div className="h-px bg-white/5" />
+                  <div className="flex-1">
+                    <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary mb-3">Technical Logs</div>
+                    {logs.map((log, i) => (
+                      <div key={i} className="flex gap-3 py-2 border-b border-white/5">
+                        <span className="text-[10px] font-mono text-primary/50 flex-shrink-0">{log.time}</span>
+                        <span className="text-[11px] text-slate-300 leading-relaxed">{log.msg}</span>
                       </div>
                     ))}
                   </div>
+                  {analysis && (
+                    <div className="glm p-3 rounded-lg space-y-3">
+                      <div>
+                        <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Plot Scores</div>
+                        {[
+                          { k: "Buildability",  v: `${analysis.buildability_score.toFixed(0)} / 100` },
+                          { k: "Flood Risk",    v: `${(analysis.flood_probability * 100).toFixed(0)}%` },
+                        ].map(({ k, v }) => (
+                          <div key={k} className="flex justify-between py-1 border-b border-white/5">
+                            <span className="text-[10px] text-slate-500">{k}</span>
+                            <span className="text-[10px] font-mono text-slate-200">{v}</span>
+                          </div>
+                        ))}
+                      </div>
 
-                  {/* ── Climate ── */}
-                  <div>
-                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Climate (Real-Time)</div>
-                    {[
-                      { k: "Rainfall",     v: `${analysis.environmental.rainfall_mm.toFixed(0)} mm/yr` },
-                      { k: "Wind",         v: `${analysis.environmental.wind_ms?.toFixed(1) ?? "—"} m/s ${analysis.environmental.wind_direction}` },
-                      { k: "Sun Hours",    v: `${analysis.environmental.sun_exposure_hours.toFixed(1)} h/day` },
-                      { k: "Solar Rad.",   v: analysis.environmental.solar_radiation_kwh ? `${(analysis.environmental.solar_radiation_kwh as number).toFixed(1)} kWh/m²/d` : "—" },
-                      { k: "NDVI",         v: analysis.environmental.ndvi.toFixed(3) },
-                    ].map(({ k, v }) => (
-                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
-                        <span className="text-[10px] text-slate-500">{k}</span>
-                        <span className="text-[10px] font-mono text-slate-200">{v}</span>
+                      <div>
+                        <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Topography</div>
+                        {[
+                          { k: "Elevation",    v: `${analysis.environmental.elevation.toFixed(0)} m` },
+                          { k: "Slope",        v: `${analysis.environmental.slope?.toFixed(1) ?? "—"}°` },
+                          { k: "Dist. Water",  v: analysis.environmental.distance_to_water_m ? `${(analysis.environmental.distance_to_water_m as number).toFixed(0)} m` : "—" },
+                        ].map(({ k, v }) => (
+                          <div key={k} className="flex justify-between py-1 border-b border-white/5">
+                            <span className="text-[10px] text-slate-500">{k}</span>
+                            <span className="text-[10px] font-mono text-slate-200">{v}</span>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-
-                  {/* ── Soil Profile (SoilGrids v2) ── */}
-                  <div>
-                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">Soil Profile — SoilGrids v2</div>
-                    {[
-                      { k: "Type",         v: analysis.environmental.soil_type },
-                      { k: "Clay",         v: analysis.environmental.clay_pct != null ? `${(analysis.environmental.clay_pct as number).toFixed(1)}%` : "—" },
-                      { k: "Sand",         v: analysis.environmental.sand_pct != null ? `${(analysis.environmental.sand_pct as number).toFixed(1)}%` : "—" },
-                      { k: "Silt",         v: analysis.environmental.silt_pct != null ? `${(analysis.environmental.silt_pct as number).toFixed(1)}%` : "—" },
-                      { k: "pH",           v: analysis.environmental.soil_ph != null ? `${(analysis.environmental.soil_ph as number).toFixed(1)}` : "—" },
-                      { k: "Organic C",    v: analysis.environmental.organic_carbon != null ? `${(analysis.environmental.organic_carbon as number).toFixed(1)} g/kg` : "—" },
-                      { k: "Bulk Density", v: analysis.environmental.bulk_density != null ? `${(analysis.environmental.bulk_density as number).toFixed(2)} g/cm³` : "—" },
-                      { k: "Buildable",    v: analysis.environmental.soil_buildable === false ? "No" : "Yes" },
-                    ].map(({ k, v }) => (
-                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
-                        <span className="text-[10px] text-slate-500">{k}</span>
-                        <span className={`text-[10px] font-mono ${k === "Buildable" && v === "No" ? "text-amber-400" : "text-slate-200"}`}>{v}</span>
-                      </div>
-                    ))}
-                    {analysis.environmental.soil_source && (
-                      <div className="mt-1 text-[8px] text-slate-600 leading-tight">{analysis.environmental.soil_source as string}</div>
-                    )}
-                  </div>
-
-                  {/* ── River Flood — GloFAS ── */}
-                  <div>
-                    <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1.5">River Flood — GloFAS</div>
-                    {[
-                      { k: "Discharge Peak", v: analysis.environmental.river_discharge_peak_m3s != null ? `${(analysis.environmental.river_discharge_peak_m3s as number).toFixed(1)} m³/s` : "No river nearby" },
-                      { k: "Discharge Mean", v: analysis.environmental.river_discharge_mean_m3s != null ? `${(analysis.environmental.river_discharge_mean_m3s as number).toFixed(1)} m³/s` : "—" },
-                      { k: "Flood Index",    v: analysis.environmental.glofas_flood_index != null ? `${((analysis.environmental.glofas_flood_index as number) * 100).toFixed(0)}%` : "—" },
-                    ].map(({ k, v }) => (
-                      <div key={k} className="flex justify-between py-1 border-b border-white/5">
-                        <span className="text-[10px] text-slate-500">{k}</span>
-                        <span className="text-[10px] font-mono text-slate-200">{v}</span>
-                      </div>
-                    ))}
-                    {analysis.environmental.flood_source && (
-                      <div className="mt-1 text-[8px] text-slate-600 leading-tight">{analysis.environmental.flood_source as string}</div>
-                    )}
-                  </div>
+                    </div>
+                  )}
+                  <button onClick={() => router.push(`/report/${plotId}`)} className="w-full py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-primary/10 transition-all" style={{border:"1px solid #0df2f2",color:"#0df2f2"}}>
+                    <span className="material-symbols-outlined text-sm">assessment</span>View Detailed Report
+                  </button>
                 </div>
               )}
-              <button onClick={() => router.push(`/report/${plotId}`)} className="w-full py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-primary/10 transition-all" style={{border:"1px solid #0df2f2",color:"#0df2f2"}}>
-                <span className="material-symbols-outlined text-sm">assessment</span>View Detailed Report
-              </button>
             </div>
           </aside>
         </div>

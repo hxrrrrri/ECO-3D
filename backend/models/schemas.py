@@ -4,6 +4,23 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
 
+def _normalize_generation_method(value: Optional[str]) -> str:
+    raw = (value or "deterministic").strip().lower()
+    compact = "".join(ch for ch in raw if ch.isalnum())
+    ga_aliases = {
+        "ga",
+        "gaoptimizer",
+        "gaoptimiser",
+        "gaoptimization",
+        "gaoptimisation",
+        "genetic",
+        "geneticalgo",
+        "geneticalgorithm",
+        "evolutionary",
+    }
+    return "ga" if compact in ga_aliases else "deterministic"
+
+
 class Coordinate(BaseModel):
     lat: float
     lon: float
@@ -87,14 +104,13 @@ class GenerateFloorPlanRequest(BaseModel):
     ga_seed: Optional[int] = None
     ga_time_budget_ms: int = 2500
     layout_mode: str = "default"  # default | fit_boundary
+    max_iterations: Optional[int] = 12
+    target_eco_score: Optional[float] = 92.0
 
     @field_validator("generation_method")
     @classmethod
     def validate_generation_method(cls, v: str) -> str:
-        method = (v or "deterministic").strip().lower()
-        if method not in {"deterministic", "ga"}:
-            return "deterministic"
-        return method
+        return _normalize_generation_method(v)
 
     @field_validator("ga_time_budget_ms")
     @classmethod
@@ -108,6 +124,20 @@ class GenerateFloorPlanRequest(BaseModel):
         if mode not in {"default", "fit_boundary"}:
             return "default"
         return mode
+
+    @field_validator("max_iterations")
+    @classmethod
+    def validate_max_iterations(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return 12
+        return max(1, min(int(v), 20))
+
+    @field_validator("target_eco_score")
+    @classmethod
+    def validate_target_eco_score(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return 92.0
+        return max(50.0, min(float(v), 100.0))
 
 
 class Room(BaseModel):
@@ -160,19 +190,112 @@ class Window(BaseModel):
     head_height: float = 2.1
 
 
+class CriterionResultSchema(BaseModel):
+    criterion_id: int
+    criterion_name: str
+    score: float
+    weight: float
+    weighted_score: float
+    passed: bool
+    pass_threshold: float
+    sub_scores: dict
+    findings: List[str]
+    penalties_applied: List[str]
+    bonuses_applied: List[str]
+    recommendations: List[str]
+    data_sources: List[str]
+    standard_ref: str
+
+
+class EcoAuditReportSchema(BaseModel):
+    variant_id: int
+    algorithm: str
+    timestamp: str
+    criteria: List[CriterionResultSchema]
+    composite_eco_score: float
+    grade: str
+    overall_passed: bool
+    n_criteria_passed: int
+    n_criteria_failed: int
+    critical_failures: List[str]
+    top_strengths: List[str]
+    top_weaknesses: List[str]
+    priority_fixes: List[str]
+    climate_context: str
+    site_risk_level: str
+    compliance_citations: List[str]
+    data_quality: dict
+
+
+class RoomMutationSchema(BaseModel):
+    room_id: str
+    mutation_type: str
+    old_value: dict
+    new_value: dict
+    criterion_id: int
+    reason: str
+    confidence: float
+
+
+class CorrectionResultSchema(BaseModel):
+    iteration: int
+    mutations_applied: List[RoomMutationSchema]
+    n_mutations: int
+    criteria_targeted: List[int]
+    eco_score_before: float
+    eco_score_after: float
+    score_delta: float
+    improvement: bool
+
+
+class IterationSnapshotSchema(BaseModel):
+    iteration: int
+    eco_score: float
+    n_criteria_passed: int
+    n_criteria_failed: int
+    correction: Optional[CorrectionResultSchema] = None
+    cumulative_fixes: List[str]
+    audit: EcoAuditReportSchema
+    rooms: List[Room] = Field(default_factory=list)
+    windows: List[Window] = Field(default_factory=list)
+    walls: List[Wall] = Field(default_factory=list)
+    variant_index: Optional[int] = None
+
+
+class IterationHistorySchema(BaseModel):
+    total_iterations: int
+    converged: bool
+    convergence_reason: str
+    initial_eco_score: float
+    final_eco_score: float
+    total_improvement: float
+    eco_score_curve: List[float]
+    snapshots: List[IterationSnapshotSchema]
+    corrections_applied: List[str]
+
+
 class FloorPlanVariant(BaseModel):
     id: int
+    algorithm: str = "Deterministic"
     style: str
     layout: List[Room]
-    total_area: float
-    solar_score: float
-    ventilation_score: float
-    fitness_score: float
-    eco_score: float
-    is_best: bool
     walls: Optional[List[Wall]] = None
     doors: Optional[List[Door]] = None
     windows: Optional[List[Window]] = None
+    total_area: float
+    eco_score: float
+    solar_score: float
+    ventilation_score: float
+    structural_score: float = 0.0
+    flood_score: float = 0.0
+    tree_score: float = 0.0
+    is_best: bool
+    fitness_score: float
+    convergence_curve: Optional[List[float]] = None
+    generations_run: Optional[int] = None
+    converged_early: Optional[bool] = None
+    runtime_ms: Optional[int] = None
+    eco_audit: Optional[EcoAuditReportSchema] = None
 
 
 class FloorPlanResponse(BaseModel):
@@ -184,13 +307,20 @@ class FloorPlanResponse(BaseModel):
     total_area: float
     fitness_score: float
     eco_score: float
+    solar_score: Optional[float] = None
     generation_count: int
     sunlight_score: float
     ventilation_score: float
+    structural_score: float = 0.0
+    flood_score: float = 0.0
+    tree_score: float = 0.0
     tree_preserved_count: int
     orientation_degrees: float
     variants: Optional[List[FloorPlanVariant]] = None
     best_variant_index: Optional[int] = None
+    algorithms_used: Optional[List[str]] = None
+    convergence_data: Optional[dict[str, Any]] = None
+    iteration_history: Optional[IterationHistorySchema] = None
     generation_method: str = "deterministic"
 
 

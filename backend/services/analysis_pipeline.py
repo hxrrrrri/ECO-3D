@@ -4,7 +4,6 @@ Every layer has synthetic fallback — the endpoint will NEVER return 500.
 """
 import logging
 import asyncio
-import random
 import math
 import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,10 +20,9 @@ logger = logging.getLogger(__name__)
 
 # ── Synthetic fallbacks (always available) ────────────────────────────────────
 def _synthetic_seg(lat: float, lon: float) -> SegmentationResult:
-    rng = random.Random(f"{lat:.4f}{lon:.4f}")
-    v = rng.uniform(0.25, 0.55); w = rng.uniform(0.02, 0.10)
-    u = rng.uniform(0.05, 0.20); b = rng.uniform(0.03, 0.15)
-    r = max(0.0, 1.0 - v - w - u - b); t = v + w + u + b + r
+    # Use a neutral non-random fallback to avoid synthetic noise.
+    v, w, u, b, r = 0.0, 0.0, 0.0, 0.0, 0.0
+    t = 1.0
     return SegmentationResult(
         vegetation=round(v/t, 3), water=round(w/t, 3),
         urban=round(u/t, 3), bare_soil=round(b/t, 3), road=round(r/t, 3),
@@ -32,37 +30,33 @@ def _synthetic_seg(lat: float, lon: float) -> SegmentationResult:
 
 
 def _synthetic_trees(lat: float, lon: float) -> list:
-    rng = random.Random(f"trees{lat:.4f}{lon:.4f}")
-    return [
-        TreeCoordinate(
-            lat=round(lat + rng.uniform(-0.0008, 0.0008), 6),
-            lon=round(lon + rng.uniform(-0.0008, 0.0008), 6),
-            confidence=round(rng.uniform(0.72, 0.97), 2),
-        ) for _ in range(rng.randint(2, 6))
-    ]
+    # If tree detection is unavailable, return no trees instead of fabricated points.
+    return []
 
 
 def _synthetic_env(lat: float, lon: float) -> dict:
-    rng = random.Random(f"env{lat:.4f}{lon:.4f}")
     doy = datetime.date.today().timetuple().tm_yday
     decl = 23.45 * math.sin(math.radians((360 / 365) * (doy - 81)))
     cos_ha = max(-1.0, min(1.0, -math.tan(math.radians(lat)) * math.tan(math.radians(decl))))
     sun_h = round(2 * math.degrees(math.acos(cos_ha)) / 15, 2)
-    elev = round(rng.uniform(10, 400), 1)
-    slope = round(rng.uniform(1, 20), 2)
-    ndvi = round((0.55 if abs(lat) < 23.5 else 0.38 if abs(lat) < 45 else 0.22) + rng.uniform(-0.1, 0.1), 3)
-    rain = round((1600 if abs(lat) < 10 else 800 if abs(lat) < 30 else 500) + rng.uniform(-200, 200), 1)
+    elev = round(max(5.0, 180.0 - abs(lat) * 1.4), 1)
+    slope = round(max(1.0, min(18.0, abs(lat) * 0.25 + 3.5)), 2)
+    ndvi = round(0.55 if abs(lat) < 23.5 else 0.38 if abs(lat) < 45 else 0.22, 3)
+    rain = round(1600.0 if abs(lat) < 10 else 800.0 if abs(lat) < 30 else 500.0, 1)
     flood = round(min(0.95, max(0.02, 0.38*(1-elev/80) + 0.18*(1-slope/15) + 0.14*min(1, rain/2000))), 3)
     build = round(min(99, max(2, 100 - flood*38 - slope*0.9 + ndvi*8 + sun_h*1.2)), 1)
+    wind_direction = "NE" if lat >= 0 else "SE"
     return {
         "elevation": elev, "slope": slope,
-        "wind_ms": round(rng.uniform(2, 8), 1),
-        "wind_direction": rng.choice(["N", "NE", "E", "SE", "S", "SW", "W", "NW"]),
+        "wind_ms": 4.2,
+        "wind_direction": wind_direction,
         "rainfall_mm": rain,
-        "soil_type": rng.choice(["Sandy Loam", "Loam", "Clay Loam"]),
+        "soil_type": "Loam",
         "soil_buildable": True, "clay_fraction": 0.25,
         "ndvi": ndvi, "sun_exposure_hours": sun_h,
         "flood_probability": flood, "buildability_score": build,
+        "soil_source": "Estimated (real providers unavailable)",
+        "flood_source": "Estimated (real providers unavailable)",
     }
 
 
@@ -170,18 +164,31 @@ async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> An
 
     loop = asyncio.get_running_loop()
 
-    # Run all layers concurrently — each has its own internal try/except
-    try:
-        seg, trees, env_data = await asyncio.gather(
-            loop.run_in_executor(None, run_segmentation, lat, lon),
-            loop.run_in_executor(None, run_tree_detection, lat, lon),
-            _fetch_env_data(lat, lon),
-        )
-    except Exception as e:
-        logger.error(f"Gather failed entirely ({e}), using all-synthetic data")
+    # Keep real-data layers intact when a single subsystem fails.
+    seg_res, trees_res, env_res = await asyncio.gather(
+        loop.run_in_executor(None, run_segmentation, lat, lon),
+        loop.run_in_executor(None, run_tree_detection, lat, lon),
+        _fetch_env_data(lat, lon),
+        return_exceptions=True,
+    )
+
+    if isinstance(seg_res, Exception):
+        logger.warning(f"Segmentation task failed ({seg_res}), using neutral fallback")
         seg = _synthetic_seg(lat, lon)
+    else:
+        seg = seg_res
+
+    if isinstance(trees_res, Exception):
+        logger.warning(f"Tree detection task failed ({trees_res}), using empty tree set")
         trees = _synthetic_trees(lat, lon)
+    else:
+        trees = trees_res
+
+    if isinstance(env_res, Exception):
+        logger.error(f"Environmental data task failed ({env_res}), using deterministic estimate")
         env_data = _synthetic_env(lat, lon)
+    else:
+        env_data = env_res
 
     flood = run_flood_model(env_data)
     build = run_buildability_model(env_data, flood)

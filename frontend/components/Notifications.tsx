@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { API_BASE_URL } from "@/lib/api";
 
 interface Notification {
     id: string;
@@ -26,8 +27,7 @@ export function Notifications() {
 
     const fetchNotifications = async () => {
         try {
-            const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-            const res = await fetch(`${apiBase}/notifications`);
+            const res = await fetch(`${API_BASE_URL}/notifications`);
             if (res.ok) {
                 const data = await res.json();
                 setNotifications(data);
@@ -40,8 +40,7 @@ export function Notifications() {
     const markAsRead = async (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
         try {
-            const _apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-            await fetch(`${_apiBase}/notifications/${id}/read`, {
+            await fetch(`${API_BASE_URL}/notifications/${id}/read`, {
                 method: "POST"
             });
             setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));

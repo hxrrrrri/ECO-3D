@@ -4778,8 +4778,8 @@ export default function Model3DPage() {
                 ))}
 
                 {/* Sky & environment overlays */}
-                {graphicsStylePreset !== "default" && effectiveShowSun && <SunSphere sunAzimuthDeg={visualSunAzimuthDeg} sunElevationDeg={visualSunElevationDeg} sunriseRaysIntensity={effectiveSunriseRays} />}
-                {graphicsStylePreset !== "default" && <SunRayBeams active={effectiveShowSun} sunAzimuthDeg={visualSunAzimuthDeg} sunElevationDeg={visualSunElevationDeg} strength={effectiveSunriseRays} />}
+                {effectiveShowSun && <SunSphere sunAzimuthDeg={visualSunAzimuthDeg} sunElevationDeg={visualSunElevationDeg} sunriseRaysIntensity={effectiveSunriseRays} />}
+                <SunRayBeams active={effectiveShowSun} sunAzimuthDeg={visualSunAzimuthDeg} sunElevationDeg={visualSunElevationDeg} strength={effectiveSunriseRays} />
                 {showWind && isLiveEnvReady && <WindSwirl windDirectionDeg={windDirectionDeg} modelW={modelBounds.w} modelD={modelBounds.d} />}
                 {showRain && <Rain />}
                 {showSnow && <Snow />}
