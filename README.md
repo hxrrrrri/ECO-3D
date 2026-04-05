@@ -1,6 +1,6 @@
 # ECO-3D Studio — AI-Generative Sustainable Architecture Platform
 
-> **End-to-end sustainable land development intelligence** — from a single map click to a fully rendered, interactive 3D floor plan, powered by real-time satellite and public-API environmental data and a five-layer AI pipeline.
+> **End-to-end sustainable land development intelligence** — from a single map click to a fully rendered, interactive 3D floor plan, powered by real-time satellite and public-API environmental data and a five-layer AI pipeline..
 
 ---
 
