@@ -1,12 +1,26 @@
 import axios from "axios";
 
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
-export const API_BASE_URL = (configuredApiUrl && configuredApiUrl.length > 0
-  ? configuredApiUrl
-  : "http://127.0.0.1:8011").replace(/\/+$/, "");
+const normalizedConfiguredApiUrl = configuredApiUrl ? configuredApiUrl.replace(/\/+$/, "") : "";
+const browserHostname = typeof window !== "undefined" ? window.location.hostname : "";
+const runningOnLocalhost = browserHostname === "localhost" || browserHostname === "127.0.0.1";
+const fallbackLocalApiUrl = "http://127.0.0.1:8000";
+
+export const API_BASE_URL = normalizedConfiguredApiUrl ||
+  ((runningOnLocalhost || process.env.NODE_ENV !== "production") ? fallbackLocalApiUrl : "");
+
+export const API_BASE_URL_CONFIG_ERROR =
+  "Backend API URL is not configured for this deployment. Set NEXT_PUBLIC_API_URL to your deployed backend URL.";
+
+export function ensureApiBaseUrlConfigured(): string {
+  if (API_BASE_URL.length > 0) {
+    return API_BASE_URL;
+  }
+  throw new Error(API_BASE_URL_CONFIG_ERROR);
+}
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: API_BASE_URL || undefined,
   timeout: 60000,
   headers: { "Content-Type": "application/json" },
 });
@@ -304,6 +318,7 @@ export interface FloorPlanResponse {
 }
 
 export const analyzePlot = async (req: AnalyzePlotRequest): Promise<AnalysisResponse> => {
+  ensureApiBaseUrlConfigured();
   const { data } = await api.post("/analyze-plot", req);
   return data;
 };
@@ -311,6 +326,7 @@ export const analyzePlot = async (req: AnalyzePlotRequest): Promise<AnalysisResp
 export const generateFloorPlan = async (
   req: GenerateFloorPlanRequest
 ): Promise<FloorPlanResponse> => {
+  ensureApiBaseUrlConfigured();
   const normalizedReq: GenerateFloorPlanRequest = { ...req };
   if (typeof req.generation_method === "string") {
     normalizedReq.generation_method = normalizeGenerationMethod(req.generation_method);
@@ -320,16 +336,19 @@ export const generateFloorPlan = async (
 };
 
 export const getReport = async (plotId: string) => {
+  ensureApiBaseUrlConfigured();
   const { data } = await api.get(`/report/${plotId}`);
   return data;
 };
 
 export const getPlots = async () => {
+  ensureApiBaseUrlConfigured();
   const { data } = await api.get("/plots");
   return data;
 };
 
 export const healthCheck = async () => {
+  ensureApiBaseUrlConfigured();
   const { data } = await api.get("/health");
   return data;
 };

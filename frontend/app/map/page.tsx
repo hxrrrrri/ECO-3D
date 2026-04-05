@@ -3,7 +3,7 @@ import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
-import { API_BASE_URL, analyzePlot, generateFloorPlan } from "@/lib/api";
+import { API_BASE_URL_CONFIG_ERROR, analyzePlot, ensureApiBaseUrlConfigured, generateFloorPlan } from "@/lib/api";
 import dynamic from "next/dynamic";
 
 const MapComponent = dynamic(() => import("@/components/MapComponent"), {
@@ -52,6 +52,60 @@ const BHU_NAKSHA_STATES = new Set([
   "maharashtra", "odisha", "rajasthan", "uttar_pradesh", "uttarakhand",
 ]);
 
+function normalizeBoundaryLonLat(
+  boundary: unknown,
+  anchor?: { lat: number; lon: number },
+): number[][] | null {
+  if (!Array.isArray(boundary)) return null;
+
+  const raw = boundary
+    .filter((item): item is number[] => Array.isArray(item) && item.length >= 2)
+    .map((pair) => [Number(pair[0]), Number(pair[1])]);
+
+  if (raw.length < 3) return null;
+
+  const candidateFromOrder = (lonIdx: 0 | 1, latIdx: 0 | 1) => {
+    const points: number[][] = [];
+    for (const pair of raw) {
+      const lon = Number(pair[lonIdx]);
+      const lat = Number(pair[latIdx]);
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+      if (lon < -180 || lon > 180 || lat < -90 || lat > 90) return null;
+      points.push([lon, lat]);
+    }
+
+    if (points.length < 3) return null;
+
+    const closed = [...points];
+    const first = closed[0];
+    const last = closed[closed.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) {
+      closed.push([first[0], first[1]]);
+    }
+
+    const open = closed.slice(0, -1);
+    const centroidLon = open.reduce((acc, p) => acc + p[0], 0) / Math.max(open.length, 1);
+    const centroidLat = open.reduce((acc, p) => acc + p[1], 0) / Math.max(open.length, 1);
+
+    let score = 0;
+    if (anchor) {
+      score += Math.abs(centroidLat - anchor.lat) + Math.abs(centroidLon - anchor.lon);
+    } else {
+      // Bias toward India bounds when no anchor exists (land-record-first lookup flow).
+      if (centroidLat < 5 || centroidLat > 38) score += 1000;
+      if (centroidLon < 67 || centroidLon > 98) score += 1000;
+    }
+
+    return { points: closed, score };
+  };
+
+  const candidates = [candidateFromOrder(0, 1), candidateFromOrder(1, 0)]
+    .filter((c): c is { points: number[][]; score: number } => c !== null)
+    .sort((a, b) => a.score - b.score);
+
+  return candidates.length > 0 ? candidates[0].points : null;
+}
+
 export default function MapPage() {
   const router = useRouter();
   const {
@@ -84,24 +138,35 @@ export default function MapPage() {
     setError(null);
 
     try {
-      const resp = await fetch(`${API_BASE_URL}/plot-boundary?lat=${lat}&lon=${lon}`);
+      const apiBaseUrl = ensureApiBaseUrlConfigured();
+      const resp = await fetch(`${apiBaseUrl}/plot-boundary?lat=${lat}&lon=${lon}`);
       if (resp.ok) {
         const data = await resp.json();
-        setPlotBoundary(data.boundary ?? null);
+        const normalizedBoundary = normalizeBoundaryLonLat(data.boundary, { lat, lon });
+        setPlotBoundary(normalizedBoundary);
         setBuildability({ ok: !!data.is_buildable, reason: data.reason ?? "" });
-        if (data.area_sqm) {
+        if (normalizedBoundary && data.area_sqm) {
           const area = Math.round(data.area_sqm);
           setPlotArea(area);
           setSelectedPlotArea(area);
         } else {
+          if (!normalizedBoundary) {
+            setBuildability({ ok: false, reason: "Boundary source returned invalid coordinates. Please try land-record lookup or another point." });
+          }
           setSelectedPlotArea(null);
         }
       } else {
         setBuildability({ ok: true, reason: "Boundary check unavailable — proceeding." });
         setSelectedPlotArea(null);
       }
-    } catch {
-      setBuildability({ ok: true, reason: "Boundary check unavailable — proceeding." });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Boundary check unavailable — proceeding.";
+      if (msg.includes("NEXT_PUBLIC_API_URL") || msg.includes(API_BASE_URL_CONFIG_ERROR)) {
+        setError(msg);
+        setBuildability({ ok: false, reason: msg });
+      } else {
+        setBuildability({ ok: true, reason: "Boundary check unavailable — proceeding." });
+      }
       setSelectedPlotArea(null);
     }
 
@@ -114,6 +179,7 @@ export default function MapPage() {
     setLrError("");
     setLrResult(null);
     try {
+      const apiBaseUrl = ensureApiBaseUrlConfigured();
       const params = new URLSearchParams({
         state: lrState,
         district: lrDistrict,
@@ -121,7 +187,7 @@ export default function MapPage() {
         ...(selectedLat ? { lat: String(selectedLat) } : {}),
         ...(selectedLon ? { lon: String(selectedLon) } : {}),
       });
-      const resp = await fetch(`${API_BASE_URL}/land-record/lookup?${params}`);
+      const resp = await fetch(`${apiBaseUrl}/land-record/lookup?${params}`);
       const data = await resp.json();
       if (data.error) {
         setLrError(data.error);
@@ -129,10 +195,14 @@ export default function MapPage() {
         setLrResult(data);
         // If we got a boundary back, use it as the plot boundary
         if (data.boundary && data.boundary.length >= 3) {
-          // Keep canonical [lon,lat] ordering end-to-end.
-          const normalizedBoundary = data.boundary
-            .filter((c: unknown) => Array.isArray(c) && c.length >= 2)
-            .map((c: number[]) => [Number(c[0]), Number(c[1])]);
+          const normalizedBoundary = normalizeBoundaryLonLat(
+            data.boundary,
+            selectedLat && selectedLon ? { lat: selectedLat, lon: selectedLon } : undefined,
+          );
+          if (!normalizedBoundary) {
+            setLrError("Boundary payload is invalid for this lookup. Please try a nearby location.");
+            return;
+          }
           setPlotBoundary(normalizedBoundary);
           if (data.area_sqm) {
             setPlotArea(data.area_sqm);
@@ -146,7 +216,7 @@ export default function MapPage() {
         }
       }
     } catch (e) {
-      setLrError("Could not reach backend. Make sure the server is running.");
+      setLrError(e instanceof Error ? e.message : "Could not reach backend. Make sure the server is running.");
     } finally {
       setLrLoading(false);
     }

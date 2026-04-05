@@ -6,7 +6,7 @@ Strategy order:
 3. OSM obstacle ray-cast (buildings/roads define empty space)
 4. Synthetic rectangle (deterministic fallback)
 """
-import math, logging, asyncio
+import math, logging, asyncio, random
 from typing import Optional, Tuple, List
 import httpx
 
@@ -46,6 +46,65 @@ def _point_in_poly(lat,lon,poly):
             inside=not inside
         j=i
     return inside
+
+
+def _normalize_polygon_lonlat(raw_coords, anchor_lat: Optional[float] = None, anchor_lon: Optional[float] = None):
+    """Normalize polygon coordinates to [lon,lat] and choose best ordering when ambiguous."""
+    if not isinstance(raw_coords, list):
+        return None
+
+    pts: List[List[float]] = []
+    for item in raw_coords:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        try:
+            pts.append([float(item[0]), float(item[1])])
+        except (TypeError, ValueError):
+            continue
+
+    if len(pts) < 3:
+        return None
+
+    candidates = []
+    for lon_idx, lat_idx in ((0, 1), (1, 0)):
+        converted: List[List[float]] = []
+        valid = True
+        for pair in pts:
+            lon_v = pair[lon_idx]
+            lat_v = pair[lat_idx]
+            if not (-180.0 <= lon_v <= 180.0 and -90.0 <= lat_v <= 90.0):
+                valid = False
+                break
+            converted.append([lon_v, lat_v])
+
+        if not valid:
+            continue
+
+        if converted[0] != converted[-1]:
+            converted.append(converted[0])
+
+        area = _polygon_area_m2(converted)
+        if area < MIN_AREA_M2 * 0.5:
+            continue
+
+        centroid_lat = sum(c[1] for c in converted[:-1]) / max(len(converted) - 1, 1)
+        centroid_lon = sum(c[0] for c in converted[:-1]) / max(len(converted) - 1, 1)
+
+        contains_anchor = False
+        centroid_dist = 0.0
+        if anchor_lat is not None and anchor_lon is not None:
+            contains_anchor = _point_in_poly(anchor_lat, anchor_lon, converted)
+            centroid_dist = _haversine_m(anchor_lat, anchor_lon, centroid_lat, centroid_lon)
+
+        # Prefer polygons containing anchor point, then nearest centroid.
+        score = (0.0 if contains_anchor else 1_000_000.0) + centroid_dist
+        candidates.append((score, abs(area), converted))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
 
 
 async def _try_satellite_segmentation(lat,lon):
@@ -174,17 +233,32 @@ def _synthetic_plot(lat,lon):
 
 
 async def get_plot_boundary(lat,lon):
-    polygon=None
-    polygon=await _try_satellite_segmentation(lat,lon)
-    if polygon is None: polygon=await _try_osm_parcel(lat,lon)
-    if polygon is None:
-        logger.warning("[Boundary] No real boundary source resolved for (%s, %s)", lat, lon)
-        return [], 0.0
-    area=round(_polygon_area_m2(polygon),1)
-    if area<10:
-        logger.warning("[Boundary] Rejected real boundary with implausible area %.1f", area)
-        return [], 0.0
-    return polygon,area
+    source_attempts = [
+        ("satellite", await _try_satellite_segmentation(lat, lon)),
+        ("osm_parcel", await _try_osm_parcel(lat, lon)),
+        ("osm_raycast", await _try_obstacle_raycast(lat, lon)),
+        ("synthetic", _synthetic_plot(lat, lon)),
+    ]
+
+    for source, raw_polygon in source_attempts:
+        if not raw_polygon:
+            continue
+
+        polygon = _normalize_polygon_lonlat(raw_polygon, anchor_lat=lat, anchor_lon=lon)
+        if not polygon:
+            logger.warning("[Boundary] %s polygon normalization failed", source)
+            continue
+
+        area = round(_polygon_area_m2(polygon), 1)
+        if area < MIN_AREA_M2 or area > MAX_AREA_M2:
+            logger.warning("[Boundary] %s rejected by area gate %.1f m²", source, area)
+            continue
+
+        logger.info("[Boundary] source=%s accepted: %d pts, %.1f m²", source, len(polygon), area)
+        return polygon, area
+
+    logger.warning("[Boundary] No boundary source resolved for (%s, %s)", lat, lon)
+    return [], 0.0
 
 
 async def check_point_buildability(lat,lon):

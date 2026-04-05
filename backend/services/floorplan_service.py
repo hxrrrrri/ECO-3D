@@ -1187,6 +1187,7 @@ def _build_response_from_correction_history(
         rows.sort()
         return tuple(rows)
 
+    minimum_algorithm_area = max(45.0, float(req.plot_area_sqm or 150.0) * 0.72)
     algorithm_variants: List[FloorPlanVariant] = []
     for idx, chrom in enumerate(chromosomes):
         payload = chromosome_to_response(chrom, idx, env_data)
@@ -1209,7 +1210,27 @@ def _build_response_from_correction_history(
         payload["flood_score"] = round(_criterion_score_from_audit_payload(audit_payload, 5, payload.get("flood_score", 0.0)) / 100.0, 3)
         payload["tree_score"] = round(_criterion_score_from_audit_payload(audit_payload, 7, payload.get("tree_score", 0.0)) / 100.0, 3)
         payload["is_best"] = False
-        algorithm_variants.append(FloorPlanVariant(**payload))
+
+        candidate_variant = FloorPlanVariant(**payload)
+        candidate_area = float(sum(room.width * room.height for room in list(candidate_variant.layout or [])))
+        candidate_overlap = _room_overlap_ratio(list(candidate_variant.layout or []))
+        if candidate_area < minimum_algorithm_area:
+            logger.warning(
+                "correction-history skipped algorithm variant %s: area %.1f < %.1f",
+                candidate_variant.algorithm,
+                candidate_area,
+                minimum_algorithm_area,
+            )
+            continue
+        if candidate_overlap > 0.03:
+            logger.warning(
+                "correction-history skipped algorithm variant %s: overlap %.4f > 0.0300",
+                candidate_variant.algorithm,
+                candidate_overlap,
+            )
+            continue
+
+        algorithm_variants.append(candidate_variant)
 
     final_payload = chromosome_to_response(history.final_chromosome, 0, env_data)
     final_audit_payload = asdict(history.final_audit)
@@ -1355,6 +1376,22 @@ async def generate_floor_plan(req:GenerateFloorPlanRequest,db:AsyncSession)->Flo
                     history=history,
                     env_data=correction_env,
                 )
+
+                # If correction-loop outputs collapse to undersized variants, fall back
+                # to the robust GA synthesis pipeline below.
+                minimum_quality_area = max(45.0, total * 0.72)
+                response_variants = list(response.variants or [])
+                quality_variants = [
+                    variant for variant in response_variants
+                    if sum(room.width * room.height for room in list(variant.layout or [])) >= minimum_quality_area
+                ]
+                best_area = float(sum(room.width * room.height for room in list(response.layout or [])))
+                if best_area < minimum_quality_area or len(quality_variants) < 3:
+                    raise ValueError(
+                        f"correction-loop quality gate failed (best_area={best_area:.1f}, "
+                        f"quality_variants={len(quality_variants)})"
+                    )
+
                 await _persist_floorplan_response(req, db, response)
                 return response
         except Exception as e:
