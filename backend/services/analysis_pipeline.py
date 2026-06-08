@@ -112,40 +112,63 @@ async def _fetch_env_data(lat: float, lon: float) -> dict:
         return _synthetic_env(lat, lon)
 
 
-# ── Layer 4: Flood model ──────────────────────────────────────────────────────
+# ── Layer 3: Flood risk ───────────────────────────────────────────────────────
 def run_flood_model(env: dict) -> float:
+    """Return flood probability.
+
+    The real-data path (real_env_data.compute_flood_risk) blends topographic
+    physics with live GloFAS discharge — this is the documented, real-data-driven
+    value and is preferred. The XGBoost model (trained on synthetic data) is only
+    a fallback for when no real value is available.
+    """
+    real = env.get("flood_probability")
+    if real is not None:
+        try:
+            return round(float(real), 4)
+        except (TypeError, ValueError):
+            pass
     try:
         from ai.flood.model import predict_flood_probability
-        prob = predict_flood_probability({
-            "elevation":         env["elevation"],
-            "slope":             env["slope"],
-            "ndvi":              env["ndvi"],
-            "rainfall_mm":       env["rainfall_mm"],
-            "soil_type":         env["soil_type"],
-            "distance_to_water": 500.0,
-        })
-        return float(prob)
+        return float(predict_flood_probability({
+            "elevation":         env.get("elevation", 100.0),
+            "slope":             env.get("slope", 5.0),
+            "ndvi":              env.get("ndvi", 0.5),
+            "rainfall_mm":       env.get("rainfall_mm", 800.0),
+            "soil_type":         env.get("soil_type", "loam"),
+            "distance_to_water": env.get("distance_to_water_m", 500.0),
+        }))
     except Exception as e:
-        logger.warning(f"Flood model failed ({e}), using physics formula")
-        return float(env.get("flood_probability", 0.3))
+        logger.warning(f"Flood ML fallback failed ({e})")
+        return 0.3
 
 
-# ── Layer 5: Buildability model ───────────────────────────────────────────────
+# ── Layer 4: Buildability ─────────────────────────────────────────────────────
 def run_buildability_model(env: dict, flood: float) -> float:
+    """Return buildability score [1, 99].
+
+    Prefers the real-data physics score (real_env_data.compute_buildability,
+    which integrates the full SoilGrids profile, NDVI, wind, solar and elevation).
+    The sklearn MLP (trained on synthetic data) is only a fallback.
+    """
+    real = env.get("buildability_score")
+    if real is not None:
+        try:
+            return round(float(real), 2)
+        except (TypeError, ValueError):
+            pass
     try:
         from ai.buildability.model import predict_buildability_score
-        score = predict_buildability_score({
+        return float(predict_buildability_score({
             "flood_probability":  flood,
-            "slope":              env["slope"],
+            "slope":              env.get("slope", 5.0),
             "soil_stability":     1.0 - env.get("clay_fraction", 0.25),
-            "vegetation_density": env["ndvi"],
+            "vegetation_density": env.get("ndvi", 0.5),
             "wind_exposure":      min(1.0, env.get("wind_ms", 3.0) / 15.0),
-            "sun_exposure":       env["sun_exposure_hours"],
-        })
-        return float(score)
+            "sun_exposure":       env.get("sun_exposure_hours", 6.0),
+        }))
     except Exception as e:
-        logger.warning(f"Buildability model failed ({e}), using physics formula")
-        return float(env.get("buildability_score", 65.0))
+        logger.warning(f"Buildability ML fallback failed ({e})")
+        return 65.0
 
 
 def _safe_json(v):
@@ -226,8 +249,16 @@ async def run_full_analysis(request: AnalyzePlotRequest, db: AsyncSession) -> An
         except Exception:
             pass
 
-    soil_ok = bool(env_data.get("soil_buildable", True))
-    if not soil_ok or build < 30:
+    # Status is derived from the composite buildability score, which already
+    # incorporates soil, flood, slope and elevation penalties (see
+    # real_env_data.compute_buildability). We only hard-fail to NOT BUILDABLE on
+    # the soil flag when the soil data is REAL — an estimated/fallback soil
+    # profile must not contradict an otherwise good score.
+    soil_source = str(env_data.get("soil_source", "")).lower()
+    soil_is_real = bool(soil_source) and not soil_source.startswith("estimated")
+    soil_unbuildable = soil_is_real and env_data.get("soil_buildable") is False
+
+    if build < 30 or (soil_unbuildable and build < 40):
         status = "NOT BUILDABLE"
     elif build >= 80:
         status = "EXCELLENT"

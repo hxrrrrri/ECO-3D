@@ -17,6 +17,18 @@ frontend/.next/
 
 # Env
 .env
+.env.local
+.env.*.local
+*.env
+
+# Databases (local dev data — should not be committed)
+*.db
+*.sqlite
+*.sqlite3
+
+# Build artifacts
+tsconfig.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
 
 # OS
 .DS_Store

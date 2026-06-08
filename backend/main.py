@@ -13,6 +13,12 @@ from routes import analysis, floorplan, plots, report, boundary, auth, notificat
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# CORS origins are configurable. Default "*" keeps local/dev and split
+# frontend/backend deployments working out of the box; set CORS_ORIGINS to a
+# comma-separated allowlist in production to lock it down.
+_cors_env = os.environ.get("CORS_ORIGINS", "*").strip()
+ALLOWED_ORIGINS = ["*"] if _cors_env in ("", "*") else [o.strip() for o in _cors_env.split(",") if o.strip()]
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
@@ -23,14 +29,16 @@ app = FastAPI(title="ECO-3D Spatial Intelligence API", version="2.0.0", lifespan
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=False,
+    allow_origins=ALLOWED_ORIGINS, allow_credentials=False,
     allow_methods=["*"], allow_headers=["*"],
 )
 
 @app.exception_handler(Exception)
 async def global_exc(request: Request, exc: Exception):
-    logger.error(f"Unhandled: {exc}", exc_info=True)
-    return JSONResponse(status_code=500, content={"detail": str(exc)},
+    # Log the full traceback server-side, but never leak internal error
+    # details (stack traces, messages) to the client.
+    logger.error(f"Unhandled error on {request.method} {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"},
                         headers={"Access-Control-Allow-Origin": "*"})
 
 app.include_router(analysis.router,  tags=["Analysis"])
