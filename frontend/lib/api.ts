@@ -25,6 +25,54 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+interface ApiErrorBody {
+  error?: boolean;
+  message?: string;
+  detail?: string;
+}
+
+function isApplicationErrorBody(data: unknown): data is ApiErrorBody {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as ApiErrorBody).error === true
+  );
+}
+
+function apiErrorMessage(data: ApiErrorBody, fallback: string): string {
+  return data.message || data.detail || fallback;
+}
+
+function unwrapApiData<T>(data: T | ApiErrorBody, fallback: string): T {
+  if (isApplicationErrorBody(data)) {
+    throw new Error(apiErrorMessage(data, fallback));
+  }
+  return data as T;
+}
+
+export function getRequestErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data;
+    if (isApplicationErrorBody(data)) {
+      return apiErrorMessage(data, fallback);
+    }
+    if (typeof data === "object" && data !== null) {
+      const detail = (data as { detail?: unknown }).detail;
+      if (typeof detail === "string" && detail.trim()) {
+        return detail;
+      }
+    }
+    if (error.code === "ECONNABORTED") {
+      return "Backend request timed out. Try again or check backend logs.";
+    }
+    if (error.response?.status) {
+      return `${fallback} (HTTP ${error.response.status})`;
+    }
+  }
+
+  return error instanceof Error ? error.message : fallback;
+}
+
 export type CanonicalGenerationMethod = "deterministic" | "ga";
 export type GenerationMethodAlias =
   | CanonicalGenerationMethod
@@ -59,6 +107,16 @@ export interface AnalyzePlotRequest {
   lat: number;
   lon: number;
   polygon?: number[][];
+}
+
+export interface PlotBoundaryResponse {
+  lat: number;
+  lon: number;
+  is_buildable: boolean;
+  reason: string;
+  land_use: string;
+  boundary: number[][];
+  area_sqm: number;
 }
 
 export interface AnalysisResponse {
@@ -319,8 +377,8 @@ export interface FloorPlanResponse {
 
 export const analyzePlot = async (req: AnalyzePlotRequest): Promise<AnalysisResponse> => {
   ensureApiBaseUrlConfigured();
-  const { data } = await api.post("/analyze-plot", req);
-  return data;
+  const { data } = await api.post<AnalysisResponse | ApiErrorBody>("/analyze-plot", req);
+  return unwrapApiData<AnalysisResponse>(data, "Analysis failed.");
 };
 
 export const generateFloorPlan = async (
@@ -331,26 +389,37 @@ export const generateFloorPlan = async (
   if (typeof req.generation_method === "string") {
     normalizedReq.generation_method = normalizeGenerationMethod(req.generation_method);
   }
-  const { data } = await api.post("/generate-floorplan", normalizedReq);
-  return data;
+  const { data } = await api.post<FloorPlanResponse | ApiErrorBody>("/generate-floorplan", normalizedReq);
+  return unwrapApiData<FloorPlanResponse>(data, "Floor plan generation failed.");
+};
+
+export const getPlotBoundary = async (
+  lat: number,
+  lon: number
+): Promise<PlotBoundaryResponse> => {
+  ensureApiBaseUrlConfigured();
+  const { data } = await api.get<PlotBoundaryResponse | ApiErrorBody>("/plot-boundary", {
+    params: { lat, lon },
+  });
+  return unwrapApiData<PlotBoundaryResponse>(data, "Boundary lookup failed.");
 };
 
 export const getReport = async (plotId: string) => {
   ensureApiBaseUrlConfigured();
   const { data } = await api.get(`/report/${plotId}`);
-  return data;
+  return unwrapApiData(data, "Report lookup failed.");
 };
 
 export const getPlots = async () => {
   ensureApiBaseUrlConfigured();
   const { data } = await api.get("/plots");
-  return data;
+  return unwrapApiData(data, "Plot lookup failed.");
 };
 
 export const healthCheck = async () => {
   ensureApiBaseUrlConfigured();
   const { data } = await api.get("/health");
-  return data;
+  return unwrapApiData(data, "Backend health check failed.");
 };
 
 export default api;

@@ -207,6 +207,7 @@ export default function ExportPage() {
           <nav style={{ display: "flex", gap: 4 }}>
             {[
               { l: "Blueprint Generator", h: `/analysis/${plotId}` },
+              { l: "Floor Plan",          h: `/floorplan/${plotId}` },
               { l: "Environmental Data",  h: `/environment/${plotId}` },
               { l: "3D Model",            h: `/model3d/${plotId}` },
               { l: "Export",              h: `/report/${plotId}`, a: true },
@@ -334,6 +335,7 @@ export default function ExportPage() {
               <div style={{ fontSize: 9, color: "rgba(13,242,242,0.4)", textTransform: "uppercase", letterSpacing: "0.16em", marginBottom: 10 }}>Quick Navigation</div>
               {[
                 { icon: "architecture", label: "Blueprint Generator", href: `/analysis/${plotId}` },
+                { icon: "floor_plan",   label: "Floor Plan",          href: `/floorplan/${plotId}` },
                 { icon: "view_in_ar",   label: "3D Model",            href: `/model3d/${plotId}` },
                 { icon: "map",          label: "Back to Map",         href: "/map" },
               ].map(item => (

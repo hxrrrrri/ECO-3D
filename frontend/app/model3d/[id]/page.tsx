@@ -4461,7 +4461,7 @@ export default function Model3DPage() {
           </div>
         </Link>
         <nav style={{ display: "flex", gap: 2 }}>
-          {[{ l: "Blueprint", h: `/analysis/${plotId}` }, { l: "Environment", h: `/environment/${plotId}` }, { l: "3D Model", h: `/model3d/${plotId}`, a: true }, { l: "Export", h: `/report/${plotId}` }].map(item => (
+          {[{ l: "Blueprint", h: `/analysis/${plotId}` }, { l: "Floor Plan", h: `/floorplan/${plotId}` }, { l: "Environment", h: `/environment/${plotId}` }, { l: "3D Model", h: `/model3d/${plotId}`, a: true }, { l: "Export", h: `/report/${plotId}` }].map(item => (
             <Link key={item.l} href={item.h} style={{ padding: "5px 14px", fontSize: 11, fontWeight: 500, textDecoration: "none", color: (item as any).a ? "#0df2f2" : "#64748b", borderBottom: (item as any).a ? "2px solid #0df2f2" : "2px solid transparent" }}>{item.l}</Link>
           ))}
         </nav>

@@ -3,7 +3,14 @@ import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEco3DStore } from "@/store/useEco3DStore";
-import { API_BASE_URL_CONFIG_ERROR, analyzePlot, ensureApiBaseUrlConfigured, generateFloorPlan } from "@/lib/api";
+import {
+  API_BASE_URL_CONFIG_ERROR,
+  analyzePlot,
+  ensureApiBaseUrlConfigured,
+  generateFloorPlan,
+  getPlotBoundary,
+  getRequestErrorMessage,
+} from "@/lib/api";
 import dynamic from "next/dynamic";
 
 const MapComponent = dynamic(() => import("@/components/MapComponent"), {
@@ -138,29 +145,22 @@ export default function MapPage() {
     setError(null);
 
     try {
-      const apiBaseUrl = ensureApiBaseUrlConfigured();
-      const resp = await fetch(`${apiBaseUrl}/plot-boundary?lat=${lat}&lon=${lon}`);
-      if (resp.ok) {
-        const data = await resp.json();
-        const normalizedBoundary = normalizeBoundaryLonLat(data.boundary, { lat, lon });
-        setPlotBoundary(normalizedBoundary);
-        setBuildability({ ok: !!data.is_buildable, reason: data.reason ?? "" });
-        if (normalizedBoundary && data.area_sqm) {
-          const area = Math.round(data.area_sqm);
-          setPlotArea(area);
-          setSelectedPlotArea(area);
-        } else {
-          if (!normalizedBoundary) {
-            setBuildability({ ok: false, reason: "Boundary source returned invalid coordinates. Please try land-record lookup or another point." });
-          }
-          setSelectedPlotArea(null);
-        }
+      const data = await getPlotBoundary(lat, lon);
+      const normalizedBoundary = normalizeBoundaryLonLat(data.boundary, { lat, lon });
+      setPlotBoundary(normalizedBoundary);
+      setBuildability({ ok: !!data.is_buildable, reason: data.reason ?? "" });
+      if (normalizedBoundary && data.area_sqm) {
+        const area = Math.round(data.area_sqm);
+        setPlotArea(area);
+        setSelectedPlotArea(area);
       } else {
-        setBuildability({ ok: true, reason: "Boundary check unavailable — proceeding." });
+        if (!normalizedBoundary) {
+          setBuildability({ ok: false, reason: "Boundary source returned invalid coordinates. Please try land-record lookup or another point." });
+        }
         setSelectedPlotArea(null);
       }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Boundary check unavailable — proceeding.";
+      const msg = getRequestErrorMessage(e, "Boundary check unavailable — proceeding.");
       if (msg.includes("NEXT_PUBLIC_API_URL") || msg.includes(API_BASE_URL_CONFIG_ERROR)) {
         setError(msg);
         setBuildability({ ok: false, reason: msg });
@@ -265,7 +265,7 @@ export default function MapPage() {
       await new Promise(r => setTimeout(r, 500));
       router.push(`/analysis/${currentPlotId}`);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Analysis failed — is backend running on the configured API URL?";
+      const msg = getRequestErrorMessage(e, "Analysis failed — is backend running on the configured API URL?");
       setError(msg);
       setStage("ready");
     } finally {
