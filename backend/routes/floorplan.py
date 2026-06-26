@@ -18,16 +18,14 @@ async def create_floor_plan(request: GenerateFloorPlanRequest, db: AsyncSession 
             content=result.model_dump(),
             headers={"Access-Control-Allow-Origin": "*"},
         )
-    except Exception as e:
-        tb = traceback.format_exc()
-        logger.error(f"[generate-floorplan] Uncaught: {tb}")
+    except Exception:
+        logger.error(f"[generate-floorplan] Uncaught: {traceback.format_exc()}")
         return JSONResponse(
             status_code=200,
             content={
                 "error": True,
                 "plot_id": request.plot_id,
-                "message": f"Floor plan error: {str(e)}",
-                "detail": tb.splitlines()[-1] if tb else str(e),
+                "message": "Floor plan generation failed. Please try again.",
             },
             headers={"Access-Control-Allow-Origin": "*"},
         )
