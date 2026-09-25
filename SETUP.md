@@ -510,6 +510,24 @@ pm2 start npm --name eco3d-frontend -- start -- -p 3000
 pm2 save && pm2 startup
 ```
 
+### Frontend — Vercel
+
+Set the Vercel project root to `frontend` and add this environment variable for
+Production (and Preview if needed):
+
+```env
+BACKEND_API_URL=https://your-deployed-backend.example.com
+```
+
+The frontend calls `/api/backend/*` on the Vercel domain. Next.js forwards
+those requests server-side to `BACKEND_API_URL`, so browser requests do not
+depend on localhost or backend CORS configuration. Redeploy after adding or
+changing the variable. Verify the backend first:
+
+```text
+https://your-deployed-backend.example.com/health
+```
+
 ### Nginx with SSE Support
 
 ```nginx

@@ -6,11 +6,12 @@ const browserHostname = typeof window !== "undefined" ? window.location.hostname
 const runningOnLocalhost = browserHostname === "localhost" || browserHostname === "127.0.0.1";
 const fallbackLocalApiUrl = "http://localhost:8000";
 
-export const API_BASE_URL = normalizedConfiguredApiUrl ||
-  ((runningOnLocalhost || process.env.NODE_ENV !== "production") ? fallbackLocalApiUrl : "");
+export const API_BASE_URL = runningOnLocalhost || process.env.NODE_ENV !== "production"
+  ? (normalizedConfiguredApiUrl || fallbackLocalApiUrl)
+  : "/api/backend";
 
 export const API_BASE_URL_CONFIG_ERROR =
-  "Backend API URL is not configured for this deployment. Set NEXT_PUBLIC_API_URL to your deployed backend URL.";
+  "Backend API URL is not configured for this deployment. Set BACKEND_API_URL in Vercel to your deployed backend URL.";
 
 export function ensureApiBaseUrlConfigured(): string {
   if (API_BASE_URL.length > 0) {
