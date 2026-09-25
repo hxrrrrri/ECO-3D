@@ -4,7 +4,7 @@ const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
 const normalizedConfiguredApiUrl = configuredApiUrl ? configuredApiUrl.replace(/\/+$/, "") : "";
 const browserHostname = typeof window !== "undefined" ? window.location.hostname : "";
 const runningOnLocalhost = browserHostname === "localhost" || browserHostname === "127.0.0.1";
-const fallbackLocalApiUrl = "http://127.0.0.1:8000";
+const fallbackLocalApiUrl = "http://localhost:8000";
 
 export const API_BASE_URL = normalizedConfiguredApiUrl ||
   ((runningOnLocalhost || process.env.NODE_ENV !== "production") ? fallbackLocalApiUrl : "");
@@ -21,7 +21,7 @@ export function ensureApiBaseUrlConfigured(): string {
 
 const api = axios.create({
   baseURL: API_BASE_URL || undefined,
-  timeout: 60000,
+  timeout: 25000,
   headers: { "Content-Type": "application/json" },
 });
 

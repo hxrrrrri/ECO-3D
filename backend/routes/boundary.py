@@ -13,10 +13,18 @@ logger = logging.getLogger(__name__)
 @router.get("/plot-boundary")
 async def plot_boundary(lat: float = Query(...), lon: float = Query(...)):
     """Returns actual plot boundary polygon, real area, and buildability check."""
-    buildability, (polygon, area_sqm) = await asyncio.gather(
-        check_point_buildability(lat, lon),
-        _get_boundary_with_area(lat, lon),
-    )
+    try:
+        async with asyncio.timeout(20.0):
+            buildability, (polygon, area_sqm) = await asyncio.gather(
+                check_point_buildability(lat, lon),
+                _get_boundary_with_area(lat, lon),
+            )
+    except asyncio.TimeoutError:
+        logger.warning("[Boundary] route timed out for lat=%s lon=%s; using synthetic fallback", lat, lon)
+        from services.plot_boundary import _final_synthetic_polygon, _polygon_area_m2
+        polygon = _final_synthetic_polygon(lat, lon)
+        area_sqm = round(_polygon_area_m2(polygon), 1)
+        buildability = {"is_buildable": True, "reason": "Boundary service timed out; synthetic fallback used.", "land_use": "vacant"}
     return {
         "lat": lat,
         "lon": lon,

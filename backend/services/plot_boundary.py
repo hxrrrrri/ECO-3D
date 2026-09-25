@@ -6,7 +6,7 @@ Strategy order:
 3. OSM obstacle ray-cast (buildings/roads define empty space)
 4. Synthetic rectangle (deterministic fallback)
 """
-import math, logging, asyncio, random
+import math, logging, asyncio, random, time
 from typing import Optional, Tuple, List
 import httpx
 
@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 MIN_AREA_M2  =     20
 MAX_AREA_M2  = 50_000
+BOUNDARY_TOTAL_TIMEOUT_SECONDS = 18.0
+SOURCE_TIMEOUT_SECONDS = {
+    "satellite": 7.5,
+    "osm_parcel": 6.0,
+    "osm_raycast": 5.0,
+}
 
 
 def _haversine_m(lat1,lon1,lat2,lon2):
@@ -232,33 +238,66 @@ def _synthetic_plot(lat,lon):
     return pts
 
 
+def _final_synthetic_polygon(lat: float, lon: float):
+    polygon = _synthetic_plot(lat, lon)
+    normalized = _normalize_polygon_lonlat(polygon, anchor_lat=lat, anchor_lon=lon)
+    if normalized and len(normalized) >= 4:
+        return normalized
+
+    synthetic = [
+        [lon - 0.0015, lat - 0.0015],
+        [lon + 0.0015, lat - 0.0015],
+        [lon + 0.0015, lat + 0.0015],
+        [lon - 0.0015, lat + 0.0015],
+        [lon - 0.0015, lat - 0.0015],
+    ]
+    return synthetic
+
+
 async def get_plot_boundary(lat,lon):
-    source_attempts = [
-        ("satellite", await _try_satellite_segmentation(lat, lon)),
-        ("osm_parcel", await _try_osm_parcel(lat, lon)),
-        ("osm_raycast", await _try_obstacle_raycast(lat, lon)),
-        ("synthetic", _synthetic_plot(lat, lon)),
+    start = time.monotonic()
+    sources = [
+        ("satellite", _try_satellite_segmentation),
+        ("osm_parcel", _try_osm_parcel),
+        ("osm_raycast", _try_obstacle_raycast),
     ]
 
-    for source, raw_polygon in source_attempts:
-        if not raw_polygon:
-            continue
+    for source, strategy in sources:
+        remaining = max(0.0, BOUNDARY_TOTAL_TIMEOUT_SECONDS - (time.monotonic() - start))
+        if remaining <= 0:
+            break
 
-        polygon = _normalize_polygon_lonlat(raw_polygon, anchor_lat=lat, anchor_lon=lon)
-        if not polygon:
-            logger.warning("[Boundary] %s polygon normalization failed", source)
-            continue
+        logger.info("[Boundary] trying %s (%.1fs remaining)", source, remaining)
+        try:
+            polygon = await asyncio.wait_for(
+                strategy(lat, lon),
+                timeout=min(remaining, SOURCE_TIMEOUT_SECONDS.get(source, 5.0)),
+            )
+            if not polygon:
+                logger.warning("[Boundary] %s returned no polygon", source)
+                continue
 
-        area = round(_polygon_area_m2(polygon), 1)
-        if area < MIN_AREA_M2 or area > MAX_AREA_M2:
-            logger.warning("[Boundary] %s rejected by area gate %.1f m²", source, area)
-            continue
+            normalized = _normalize_polygon_lonlat(polygon, anchor_lat=lat, anchor_lon=lon)
+            if not normalized:
+                logger.warning("[Boundary] %s polygon normalization failed", source)
+                continue
 
-        logger.info("[Boundary] source=%s accepted: %d pts, %.1f m²", source, len(polygon), area)
-        return polygon, area
+            area = round(_polygon_area_m2(normalized), 1)
+            if area < MIN_AREA_M2 or area > MAX_AREA_M2:
+                logger.warning("[Boundary] %s rejected by area gate %.1f m²", source, area)
+                continue
 
-    logger.warning("[Boundary] No boundary source resolved for (%s, %s)", lat, lon)
-    return [], 0.0
+            logger.info("[Boundary] source=%s accepted: %d pts, %.1f m²", source, len(normalized), area)
+            return normalized, area
+        except asyncio.TimeoutError:
+            logger.warning("[Boundary] %s timed out; moving to next fallback", source)
+        except Exception as exc:
+            logger.warning("[Boundary] %s failed: %s", source, exc)
+
+    polygon = _final_synthetic_polygon(lat, lon)
+    area = round(_polygon_area_m2(polygon), 1)
+    logger.warning("[Boundary] using synthetic fallback for (%s, %s): %.1f m²", lat, lon, area)
+    return polygon, area
 
 
 async def check_point_buildability(lat,lon):

@@ -71,6 +71,44 @@ def valid_lon_lat_ring(boundary: Any) -> bool:
     return first[0] == last[0] and first[1] == last[1]
 
 
+def assert_valid_boundary(boundary: Any, label: str = "boundary") -> None:
+    require(valid_lon_lat_ring(boundary), f"{label} must be a closed lon/lat ring")
+    require(float(boundary[0][0]) >= -180 and float(boundary[0][0]) <= 180, f"{label} has invalid longitude")
+    require(float(boundary[0][1]) >= -90 and float(boundary[0][1]) <= 90, f"{label} has invalid latitude")
+    require(boundary[0] == boundary[-1], f"{label} must be closed")
+    require(len(boundary) >= 4, f"{label} must have at least 4 points")
+
+
+def run_boundary_fallback_checks() -> dict[str, Any]:
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import backend.services.plot_boundary as pb
+
+    async def scenario() -> dict[str, Any]:
+        polygon, area = await pb.get_plot_boundary(12.9716, 77.5946)
+        assert_valid_boundary(polygon, "normal boundary")
+        require(float(area) > 0, "normal boundary area_sqm must be positive")
+
+        with patch.object(pb, "_try_satellite_segmentation", AsyncMock(return_value=None)), \
+             patch.object(pb, "_try_osm_parcel", AsyncMock(return_value=[[77.5940, 12.9712], [77.5948, 12.9712], [77.5948, 12.9720], [77.5940, 12.9720], [77.5940, 12.9712]])), \
+             patch.object(pb, "_try_obstacle_raycast", AsyncMock(return_value=None)):
+            fallback_polygon, fallback_area = await pb.get_plot_boundary(12.9716, 77.5946)
+            assert_valid_boundary(fallback_polygon, "fallback boundary")
+            require(float(fallback_area) > 0, "fallback boundary area_sqm must be positive")
+
+        with patch.object(pb, "_try_satellite_segmentation", AsyncMock(return_value=None)), \
+             patch.object(pb, "_try_osm_parcel", AsyncMock(return_value=None)), \
+             patch.object(pb, "_try_obstacle_raycast", AsyncMock(return_value=None)):
+            final_polygon, final_area = await pb.get_plot_boundary(12.9716, 77.5946)
+            assert_valid_boundary(final_polygon, "synthetic boundary")
+            require(float(final_area) > 0, "synthetic boundary area_sqm must be positive")
+
+        return {"normal_area": area, "fallback_area": fallback_area, "synthetic_area": final_area}
+
+    return asyncio.run(scenario())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -86,8 +124,11 @@ def main() -> int:
 
     query = urllib.parse.urlencode({"lat": args.lat, "lon": args.lon})
     boundary = request_json(args.base_url, "GET", f"/plot-boundary?{query}", timeout=60)
-    require(valid_lon_lat_ring(boundary.get("boundary")), "boundary must be a closed lon/lat ring")
+    assert_valid_boundary(boundary.get("boundary"), "boundary")
     require(float(boundary.get("area_sqm", 0)) > 0, "boundary area_sqm must be positive")
+    require(boundary.get("boundary", [])[0] == boundary.get("boundary", [])[ -1], "boundary must be closed")
+
+    fallback_summary = run_boundary_fallback_checks()
 
     analysis_payload = {
         "plot_id": plot_id,
@@ -124,6 +165,7 @@ def main() -> int:
         "rooms": len(floorplan["layout"]),
         "variants": len(floorplan["variants"]),
         "elapsed_sec": round(elapsed, 2),
+        "fallback_checks": fallback_summary,
     }
     print(json.dumps(summary, indent=2))
     return 0

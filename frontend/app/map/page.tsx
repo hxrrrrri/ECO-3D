@@ -146,26 +146,44 @@ export default function MapPage() {
 
     try {
       const data = await getPlotBoundary(lat, lon);
+      if (!Array.isArray(data?.boundary) || data.boundary.length === 0) {
+        const msg = "Boundary endpoint returned an empty polygon.";
+        console.error("[Map] invalid boundary response", data);
+        setBuildability({ ok: false, reason: msg });
+        setSelectedPlotArea(null);
+        setStage("ready");
+        setStatusMsg("");
+        return;
+      }
+
       const normalizedBoundary = normalizeBoundaryLonLat(data.boundary, { lat, lon });
+      if (!normalizedBoundary) {
+        const msg = "Boundary response contained invalid coordinates.";
+        console.error("[Map] invalid boundary coordinates", data.boundary);
+        setBuildability({ ok: false, reason: msg });
+        setSelectedPlotArea(null);
+        setStage("ready");
+        setStatusMsg("");
+        return;
+      }
+
       setPlotBoundary(normalizedBoundary);
       setBuildability({ ok: !!data.is_buildable, reason: data.reason ?? "" });
-      if (normalizedBoundary && data.area_sqm) {
+      if (data.area_sqm) {
         const area = Math.round(data.area_sqm);
         setPlotArea(area);
         setSelectedPlotArea(area);
       } else {
-        if (!normalizedBoundary) {
-          setBuildability({ ok: false, reason: "Boundary source returned invalid coordinates. Please try land-record lookup or another point." });
-        }
         setSelectedPlotArea(null);
       }
     } catch (e: unknown) {
-      const msg = getRequestErrorMessage(e, "Boundary check unavailable — proceeding.");
+      const msg = getRequestErrorMessage(e, "Boundary check unavailable.");
+      console.error("[Map] boundary request failed", e);
       if (msg.includes("NEXT_PUBLIC_API_URL") || msg.includes(API_BASE_URL_CONFIG_ERROR)) {
         setError(msg);
         setBuildability({ ok: false, reason: msg });
       } else {
-        setBuildability({ ok: true, reason: "Boundary check unavailable — proceeding." });
+        setBuildability({ ok: false, reason: msg });
       }
       setSelectedPlotArea(null);
     }
